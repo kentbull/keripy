@@ -32,8 +32,11 @@ from ..help import helping
 from . import coring
 from .coring import (versify, Serials, Ilks, MtrDex, PreDex, DigDex,
                      NonTransDex, CtrDex, Counter,
-                     Number, Seqner, Siger, Cigar, Dater, Indexer, IdrDex,
+                     Number, Seqner, Cigar, Dater,
                      Verfer, Diger, Prefixer, Tholder, Saider)
+
+from . import indexing
+from .indexing import (IdrDex, Indexer, Siger)
 
 from . import serdering
 
@@ -6317,7 +6320,7 @@ def loadEvent(db, preb, dig):
     sigs = db.getSigs(key=dgkey)
     dsigs = []
     for s in sigs:
-        sig = coring.Siger(qb64b=bytes(s))
+        sig = indexing.Siger(qb64b=bytes(s))
         dsigs.append(dict(index=sig.index, signature=sig.qb64))
     event["signatures"] = dsigs
 
@@ -6329,7 +6332,7 @@ def loadEvent(db, preb, dig):
     dwigs = []
     if wigs := db.getWigs(key=dgkey):
         for w in wigs:
-            sig = coring.Siger(qb64b=bytes(w))
+            sig = indexing.Siger(qb64b=bytes(w))
             dwigs.append(dict(index=sig.index, signature=sig.qb64))
     event["witness_signatures"] = dwigs
 
@@ -6351,7 +6354,7 @@ def loadEvent(db, preb, dig):
                 prefix=coring.Prefixer(qb64b=raw, strip=True).qb64,
                 sequence=coring.Seqner(qb64b=raw, strip=True).qb64,
                 said=coring.Saider(qb64b=raw, strip=True).qb64,
-                signature=coring.Siger(qb64b=raw, strip=True).qb64,
+                signature=indexing.Siger(qb64b=raw, strip=True).qb64,
             ))
 
         receipts["transferable"] = trans
