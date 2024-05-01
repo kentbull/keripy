@@ -34,7 +34,15 @@ kli query --name multisigj1 --alias multisigj1 --prefix EKJ6tNVUGbdaiwx2nWDCFXG-
 
 PID_LIST=""
 
-kli multisig rotate --name multisigj1 --alias multisig --smids EKJ6tNVUGbdaiwx2nWDCFXG-_PY_AzESOcoKlm0kRNP3 --smids EFY7MixHb0so4WFFHw6btOPc5qeeWfPm7v5MJWcdcbyG --isith '["1/2", "1/2"]' --nsith '["1/2", "1/2"]' --rmids EKJ6tNVUGbdaiwx2nWDCFXG-_PY_AzESOcoKlm0kRNP3 --rmids EFY7MixHb0so4WFFHw6btOPc5qeeWfPm7v5MJWcdcbyG &
+read  -n 1 -r -p "Press any key to do multisig rotate for multisig1"
+kli multisig rotate --name multisigj1 \
+  --alias multisig \
+  --smids EKJ6tNVUGbdaiwx2nWDCFXG-_PY_AzESOcoKlm0kRNP3 \
+  --smids EFY7MixHb0so4WFFHw6btOPc5qeeWfPm7v5MJWcdcbyG \
+  --isith '["1/2", "1/2"]' \
+  --nsith '["1/2", "1/2"]' \
+  --rmids EKJ6tNVUGbdaiwx2nWDCFXG-_PY_AzESOcoKlm0kRNP3 \
+  --rmids EFY7MixHb0so4WFFHw6btOPc5qeeWfPm7v5MJWcdcbyG &
 pid=$!
 PID_LIST+=" $pid"
 
