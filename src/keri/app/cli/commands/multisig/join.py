@@ -182,8 +182,8 @@ class JoinDoer(doing.DoDoer):
         inits["isith"] = oicp.ked["kt"]
         inits["nsith"] = oicp.ked["nt"]
 
-        inits["estOnly"] = eventing.TraitCodex.EstOnly in oicp.ked["c"]
-        inits["DnD"] = eventing.TraitCodex.DoNotDelegate in oicp.ked["c"]
+        inits["estOnly"] = kering.TraitCodex.EstOnly in oicp.ked["c"]
+        inits["DnD"] = kering.TraitCodex.DoNotDelegate in oicp.ked["c"]
 
         inits["toad"] = oicp.ked["bt"]
         inits["wits"] = oicp.ked["b"]
@@ -416,7 +416,7 @@ class JoinDoer(doing.DoDoer):
                 ghab = self.hby.joinGroupHab(pre, group=group, mhab=mhab, smids=smids, rmids=rmids)
 
             try:
-                ghab.rotate(serder=orot)
+                ghab.rotate(serder=orot, smids=smids, rmids=rmids)
             except ValueError:
                 return False
 
