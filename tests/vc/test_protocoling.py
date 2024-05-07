@@ -21,6 +21,14 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
     wanSalt = coring.Salter(raw=b'wann-the-witness').qb64
     assert wanSalt == '0AB3YW5uLXRoZS13aXRuZXNz'
 
+    # sid = Disclosee
+    # red = Discloser
+    # TODO: add sad path cases:
+    #  offer pointing to a non-existent apply
+    #  agree pointing back to a non-existent offer
+    #  grant pointing back to a non-existent agree
+    #  admit pointing back to a non-existent grant
+    #  spurns to each type of non-existent message
     with (habbing.openHby(name="red", base="test") as redHby,
           habbing.openHby(name="sid", base="test", salt=sidSalt) as sidHby):
         seeder.seedSchema(redHby.db)
@@ -112,6 +120,7 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
 
         ipexhan = protocoling.IpexHandler(resource="/ipex/apply", hby=sidHby, notifier=notifier)
 
+        # Disclosee creating and sending Apply to Discloser
         apply0, apply0atc = protocoling.ipexApplyExn(sidHab, message="Please give me a credential", schema=schema,
                                                      recp=redPre, attrs={})
 
@@ -124,7 +133,10 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
         # No requirements for apply, except that its first, no `p`
         assert ipexhan.verify(serder=apply0) is True
 
-        offer0, offer0atc = protocoling.ipexOfferExn(sidHab, "How about this", acdc=creder.raw, apply=apply0)
+        # TODO add spurn of apply
+
+        # why is  this not the redHab (Discloser)
+        offer0, offer0atc = protocoling.ipexOfferExn(redHab, "How about this", acdc=creder.raw, apply=apply0)
         assert offer0.raw == (b'{"v":"KERI10JSON0002f0_","t":"exn","d":"EO_wiH5ZEikfLQb8rKBjPATnjiSOHGBvvN3m'
                               b'F0LDvaIC","i":"EIaGMMWJFPmtXznY1IIiKDIrg-vIyge6mBl2QV8dDjI3","p":"EI1MnUrT0a'
                               b'UprMN97FabgJdxVQtoCPqamVUp3iFgnDBE","dt":"2021-06-27T21:26:21.233257+00:00",'
@@ -159,6 +171,8 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
         serder = sidHby.db.exns.get(keys=(offer0.said,))
         assert serder.ked == offer0.ked
 
+
+        # Disclosee (sid) rejects the Discloser (red's) offer
         # Let's see if we can spurn a message we previously accepted.
         spurn0, spurn0atc = protocoling.ipexSpurnExn(sidHab, "I reject you", spurned=apply0)
         assert spurn0.raw == (b'{"v":"KERI10JSON00011d_","t":"exn","d":"EKvtmxPkOklgRNgWxLj-1ZW4Zb0MwZIUloWx'
@@ -169,6 +183,7 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
         # This will fail, we've already responded with an offer
         assert ipexhan.verify(spurn0) is False
 
+        # Discloser (red) offering to the Disclosee (sid) an unsolicited offer.
         # Now lets try an offer without a pointer back to a reply
         offer1, offer1atc = protocoling.ipexOfferExn(sidHab, "Here a credential offer", acdc=creder.raw)
         assert offer1.raw == (b'{"v":"KERI10JSON0002cd_","t":"exn","d":"EMEmoi4k9gxWu4uZyYuEK3MvFPn-5B0LHnNx'
@@ -191,6 +206,7 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
         serder = sidHby.db.exns.get(keys=(offer1.said,))
         assert serder.ked == offer1.ked
 
+        # Disclosee (sid) agreeing to Discloser's (red) offer
         agree, argeeAtc = protocoling.ipexAgreeExn(sidHab, "I'll accept that offer", offer=offer0)
         assert agree.raw == (b'{"v":"KERI10JSON000127_","t":"exn","d":"EGpJ9S0TqIVHkRmDsbgP59NC8ZLCaSUirslB'
                              b'KDeYKOR7","i":"EIaGMMWJFPmtXznY1IIiKDIrg-vIyge6mBl2QV8dDjI3","p":"EO_wiH5ZEi'
@@ -206,6 +222,9 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
         serder = sidHby.db.exns.get(keys=(agree.said,))
         assert serder.ked == agree.ked
 
+        # TODO spurn agree
+
+        # Discloser (red) preparing grant for Disclosee (sid) as an unsolicited grant.
         # First try a bare grant (no prior agree)
         anc = sidHab.makeOwnEvent(sn=2)
         grant0, grant0atc = protocoling.ipexGrantExn(sidHab, message="Here's a credential", recp=sidHab.pre,
@@ -250,6 +269,7 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
         serder = sidHby.db.exns.get(keys=(spurn1.said,))
         assert serder.ked == spurn1.ked  # This credential grant has been spurned and not accepted into database
 
+        # Discloser (red) preparing grant for Disclosee (sid) chained back to the agree.
         # Now we'll run a grant pointing back to the agree all the way to the database
         grant1, grant1atc = protocoling.ipexGrantExn(sidHab, message="Here's a credential", acdc=msg, iss=iss.raw,
                                                      recp=sidHab.pre, anc=anc, agree=agree)
@@ -280,6 +300,7 @@ def test_ipex(seeder, mockCoringRandomNonce, mockHelpingNowIso8601, mockHelpingN
         serder = sidHby.db.exns.get(keys=(grant1.said,))
         assert serder.ked == grant1.ked
 
+        # Disclosee (red) acknowleding receipt of credential grant from the Discloser (red).
         # And now the last... admit the granted credential to complete the full flow
         admit0, admit0atc = protocoling.ipexAdmitExn(sidHab, "Thanks for the credential", grant=grant1)
         assert admit0.raw == (b'{"v":"KERI10JSON00012a_","t":"exn","d":"ELNz82kqV94vlbT7lJulVFWtf6_jhGRgH556'
