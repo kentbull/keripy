@@ -8,9 +8,9 @@ source "${KERI_SCRIPT_DIR}"/demo/basic/script-utils.sh
 # $ kli witness demo
 
 # create keystores and AIDs for larry, moe, and curly
-LARRY=EKZYoeLcSpoBn7DdD0Rugk3xGy6in8zJvhJpMhZ23ETe
-MOE=EJ__4LOcMfGRU0V65ywo9GgczMkqTZtgjmCKWU06MDQR
-CURLY=EItXS2M_iaQvYRex9swUaCWLETsxFdQbQD0XZmbukKOV
+export LARRY=EKZYoeLcSpoBn7DdD0Rugk3xGy6in8zJvhJpMhZ23ETe
+export MOE=EJ__4LOcMfGRU0V65ywo9GgczMkqTZtgjmCKWU06MDQR
+export CURLY=EItXS2M_iaQvYRex9swUaCWLETsxFdQbQD0XZmbukKOV
 
 members_incept() {
   INCEPT_CONFIG_FILE=$1
@@ -75,8 +75,8 @@ members_oobi_resolve() {
   echo
 }
 
-# Multisig Inception
-multisig_incept() {
+# Multisig Inception with three AIDs
+multisig_incept_three() {
   MULTISIG_ALIAS=${1:-"default alias"}
   MULTISIG_ICP_CONFIG_FILE=$2
   echo
@@ -108,7 +108,37 @@ multisig_incept() {
   wait $PID_LIST
 }
 
-multisig_incept_join() {
+multisig_incept_two() {
+  MULTISIG_ALIAS=${1:-"default alias"}
+  MULTISIG_ICP_CONFIG_FILE=$2
+  echo
+  print_yellow "Multisig Inception for alias: ${MULTISIG_ALIAS} with Larry and Moe"
+  print_yellow "Multisig Inception with file: ${MULTISIG_ICP_CONFIG_FILE}"
+
+  # Follow commands run in parallel
+  print_yellow "Multisig Inception for Larry"
+  kli multisig incept --name larry --alias larry \
+    --passcode "DoB26Fj4x9LboAFWJra17O" \
+    --group "${MULTISIG_ALIAS}" \
+    --file "${MULTISIG_ICP_CONFIG_FILE}" &
+  pid=$!
+  PID_LIST+=" $pid"
+
+  print_yellow "Multisig Inception for Moe"
+  kli multisig incept --name moe --alias moe \
+    --passcode "DoB26Fj4x9LboAFWJra17O" \
+    --group "${MULTISIG_ALIAS}" \
+    --file "${MULTISIG_ICP_CONFIG_FILE}" &
+  pid=$!
+  PID_LIST+=" $pid"
+
+  echo
+  print_yellow "Multisig Inception - wait"
+  echo
+  wait $PID_LIST
+}
+
+multisig_incept_join_three() {
   MULTISIG_ALIAS=${1:-"default alias"}
   MULTISIG_ICP_CONFIG_FILE=$2
   echo
@@ -264,6 +294,44 @@ multisig_rotate_three() {
   wait $PID_LIST
 }
 
+# rotates two of the members and pulls in the third, curly
+multisig_rotate_two() {
+  MULTISIG_ALIAS=${1:-"default alias"}
+  echo
+  print_yellow "Multisig rotation with alias: ${MULTISIG_ALIAS}"
+
+  PID_LIST=""
+
+  print_yellow "Larry rotates - curly in"
+  kli multisig rotate --name larry --alias "${MULTISIG_ALIAS}" \
+    --passcode "DoB26Fj4x9LboAFWJra17O" \
+    --isith '["1/2", "1/2"]' \
+    --smids $LARRY \
+    --smids $MOE \
+    --nsith '["1/3", "1/3", "1/3"]' \
+    --rmids $LARRY \
+    --rmids $MOE \
+    --rmids $CURLY &
+  pid=$!
+  PID_LIST+=" $pid"
+  print_yellow "Moe rotates - curly in"
+  kli multisig rotate --name moe --alias "${MULTISIG_ALIAS}" \
+    --passcode "DoB26Fj4x9LboAFWJra17O" \
+    --isith '["1/2", "1/2"]' \
+    --smids $LARRY \
+    --smids $MOE \
+    --nsith '["1/3", "1/3", "1/3"]' \
+    --rmids $LARRY \
+    --rmids $MOE \
+    --rmids $CURLY &
+  pid=$!
+  PID_LIST+=" $pid"
+
+  echo
+  print_yellow "Multisig rotation ${ALIAS} - wait"
+  wait $PID_LIST
+}
+
 # Does a multisig rotate where one member prepares the rotation event and sends it to the others
 # to which they respond through multisig join
 multisig_rotate_join_three() {
@@ -315,7 +383,6 @@ multisig_rotate_join_two() {
     --rmids $MOE \
     --rmids $CURLY \
     --nsith '["1/3", "1/3", "1/3"]' &
-#    --nsith '["1/2", "1/2"]' &
   pid=$!
   PID_LIST+=" $pid"
 
@@ -323,9 +390,10 @@ multisig_rotate_join_two() {
   pid=$!
   PID_LIST+=" $pid"
 
-  kli multisig join --name curly --passcode "DoB26Fj4x9LboAFWJra17O" --auto &
-  pid=$!
-  PID_LIST+=" $pid"
+  # Third not needed due to prior signing threshold being met?
+#  kli multisig join --name curly --passcode "DoB26Fj4x9LboAFWJra17O" --auto &
+#  pid=$!
+#  PID_LIST+=" $pid"
 
   echo
   print_yellow "Multisig rotation - wait"
@@ -389,7 +457,60 @@ multisig_interact_join() {
   wait $PID_LIST
 }
 
-rotate_larry_out() {
+multisig_rotate_larry_out() {
+  MULTISIG_ALIAS=${1:-"default alias"}
+  echo
+  print_yellow "Multisig Rotate - Larry out - alias: ${MULTISIG_ALIAS}"
+
+  PID_LIST=""
+
+  kli multisig rotate --name larry --alias "${MULTISIG_ALIAS}" \
+    --passcode "DoB26Fj4x9LboAFWJra17O" \
+    --smids $LARRY \
+    --smids $MOE \
+    --smids $CURLY \
+    --isith '["1/3", "1/3", "1/3"]' \
+    --rmids $MOE \
+    --rmids $CURLY \
+    --nsith '["1/2", "1/2"]' &
+  pid=$!
+  PID_LIST+=" $pid"
+
+#  kli multisig join --name moe --passcode "DoB26Fj4x9LboAFWJra17O" --auto &
+  kli multisig rotate --name moe --alias "${MULTISIG_ALIAS}" \
+    --passcode "DoB26Fj4x9LboAFWJra17O" \
+    --rmids $LARRY \
+    --smids $MOE \
+    --smids $CURLY \
+    --isith '["1/3", "1/3", "1/3"]' \
+    --rmids $MOE \
+    --rmids $CURLY \
+    --nsith '["1/2", "1/2"]' &
+  pid=$!
+  PID_LIST+=" $pid"
+
+#  kli multisig join --name curly --passcode "DoB26Fj4x9LboAFWJra17O" --auto &
+  kli multisig rotate --name curly --alias "${MULTISIG_ALIAS}" \
+    --passcode "DoB26Fj4x9LboAFWJra17O" \
+    --rmids $LARRY \
+    --smids $MOE \
+    --smids $CURLY \
+    --isith '["1/3", "1/3", "1/3"]' \
+    --rmids $MOE \
+    --rmids $CURLY \
+    --nsith '["1/2", "1/2"]' &
+  pid=$!
+  PID_LIST+=" $pid"
+
+  echo
+  print_yellow "Multisig rotation - Larry out - alias: ${MULTISIG_ALIAS} - wait"
+  wait $PID_LIST
+}
+
+multisig_join_rotate_larry_out() {
+  #
+  # Run all of these commands one by one
+  #
   MULTISIG_ALIAS=${1:-"default alias"}
   echo
   print_yellow "Multisig Rotate - Larry out - alias: ${MULTISIG_ALIAS}"
@@ -439,7 +560,7 @@ main_three_stooges() {
 
   # Setup multisig
   # multisig_incept "${MULTISIG_ALIAS}" "${KERI_DEMO_SCRIPT_DIR}/data/multisig-three-stooges.json"
-  multisig_incept_join "${MULTISIG_ALIAS}" "${KERI_DEMO_SCRIPT_DIR}/data/multisig-three-stooges.json"
+  multisig_incept_join_three "${MULTISIG_ALIAS}" "${KERI_DEMO_SCRIPT_DIR}/data/multisig-three-stooges.json"
   multisig_status larry "${MULTISIG_ALIAS}"
 
   # Prepare individual AIDs for multisig rotation
@@ -466,7 +587,7 @@ main_three_stooges() {
   print_lcyan "Multisig rotate three stooges - done."
 }
 
-main_two_stooges_rotate_in_and_out() {
+main_two_stooges_rotate_in_and_out_join() {
   print_yellow "Multisig rotation via join with three AIDs, two to start, one joins later"
   MULTISIG_ALIAS="multisig"
   # Setup members
@@ -483,9 +604,6 @@ main_two_stooges_rotate_in_and_out() {
   rotate_individual_keys
   query_individual_keystate
 
-  print_green "Exiting early"
-  exit 0
-
   # Rotate Multisig with join
   multisig_rotate_join_two "${MULTISIG_ALIAS}"
   multisig_status larry "${MULTISIG_ALIAS}"
@@ -498,12 +616,59 @@ main_two_stooges_rotate_in_and_out() {
   rotate_individual_keys
   query_individual_keystate
 
-  rotate_larry_out ${MULTISIG_ALIAS}
+  print_green "Exiting early"
+  exit 0
+
+  multisig_join_rotate_larry_out ${MULTISIG_ALIAS}
   multisig_status larry "${MULTISIG_ALIAS}"
   multisig_status moe "test alias"
 
   print_green "Ready for citadel rotation"
   print_lcyan "Multisig rotate three stooges - done."
 }
+
+main_two_stooges_rotate_in_and_out() {
+  print_yellow "Multisig rotation with three AIDs, two to start, one rotated later"
+  echo
+
+  MULTISIG_ALIAS="multisig"
+  # Setup members
+  members_incept "${KERI_DEMO_SCRIPT_DIR}/data/multisig-stooge.json"
+  members_oobi_resolve
+
+  # Setup multisig
+  multisig_incept_two \
+    "${MULTISIG_ALIAS}" \
+    "${KERI_DEMO_SCRIPT_DIR}/data/multisig-two-stooges.json"
+  multisig_status larry "${MULTISIG_ALIAS}"
+
+  # Prepare individual AIDs for multisig rotation
+  rotate_individual_keys
+  query_individual_keystate
+
+  # Rotate Multisig with join
+  multisig_rotate_two "${MULTISIG_ALIAS}"
+  multisig_status larry "${MULTISIG_ALIAS}"
+
+  # Interact with multisig
+#  multisig_interact_join "${MULTISIG_ALIAS}" "{\"tagline\":\"three lost souls\"}"
+#  multisig_status larry "${MULTISIG_ALIAS}"
+
+#  rotate individual keys again, query keystate, prep for rotation
+  rotate_individual_keys
+  query_individual_keystate
+
+  print_green "Exiting early"
+  exit 0
+
+  multisig_rotate_larry_out ${MULTISIG_ALIAS}
+  multisig_status larry "${MULTISIG_ALIAS}"
+  multisig_status moe "test alias"
+
+  print_green "Ready for citadel rotation"
+  print_lcyan "Multisig rotate three stooges - done."
+}
+
 #main_three_stooges
+#main_two_stooges_rotate_in_and_out_join
 main_two_stooges_rotate_in_and_out
