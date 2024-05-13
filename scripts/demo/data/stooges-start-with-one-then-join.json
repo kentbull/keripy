@@ -1,8 +1,6 @@
 {
   "aids": [
-    "EFY7MixHb0so4WFFHw6btOPc5qeeWfPm7v5MJWcdcbyG",
-    "EKJ6tNVUGbdaiwx2nWDCFXG-_PY_AzESOcoKlm0kRNP3",
-    "EKxxKVNmC3M_u3eDF6Nw6MjRlRx1s_9Y-DV234UtkqAF"
+    "EA5g3RMwkjcr_M4fI3k2ShCYlQMpgk3HD9mHhx7ZJs4U"
   ],
   "transferable": true,
   "wits": [
@@ -10,7 +8,7 @@
     "BLskRTInXnMxWaGqcpSyMgo0nYbalW99cGZESrz3zapM",
     "BIKKuvBwpmDVA4Ds-EpL5bt9OqPzWPja2LigFYZN2YfX"
   ],
-  "toad": 2,
-  "isith": "3",
-  "nsith": "3"
+  "toad": 3,
+  "isith": "1",
+  "nsith": "1"
 }
