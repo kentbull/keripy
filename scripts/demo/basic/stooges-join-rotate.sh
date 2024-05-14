@@ -670,5 +670,5 @@ main_two_stooges_rotate_in_and_out() {
 }
 
 #main_three_stooges
-#main_two_stooges_rotate_in_and_out_join
-main_two_stooges_rotate_in_and_out
+main_two_stooges_rotate_in_and_out_join
+#main_two_stooges_rotate_in_and_out
