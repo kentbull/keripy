@@ -3,13 +3,15 @@
 # WITNESSES
 # To run the following scripts, open another console window and run:
 # $ kli witness demo
-
+MS1=EKYLUMmNPZeEs77Zvclf0bSN5IN-mLfLpx2ySb-HDlk4
 kli init --name multisig1 --salt 0ACDEyMzQ1Njc4OWxtbm9aBc --nopasscode --config-dir "${KERI_SCRIPT_DIR}" --config-file demo-witness-oobis
 kli incept --name multisig1 --alias multisig1 --file ${KERI_DEMO_SCRIPT_DIR}/data/multisig-1-sample.json
 
+MS2=EJccSRTfXYF6wrUVuenAIHzwcx3hJugeiJsEKmndi5q1
 kli init --name multisig2 --salt 0ACDEyMzQ1Njc4OWdoaWpsaw --nopasscode --config-dir "${KERI_SCRIPT_DIR}" --config-file demo-witness-oobis
 kli incept --name multisig2 --alias multisig2 --file ${KERI_DEMO_SCRIPT_DIR}/data/multisig-2-sample.json
 
+MS3=ENkjt7khEI5edCMw5qugagbJw1QvGnQEtcewxb0FnU9U
 kli init --name multisig3 --salt 0ACDEyMzQ1Njc4OWdoaWpsaw --nopasscode --config-dir "${KERI_SCRIPT_DIR}" --config-file demo-witness-oobis
 kli incept --name multisig3 --alias multisig3 --file ${KERI_DEMO_SCRIPT_DIR}/data/multisig-3-sample.json
 
@@ -29,6 +31,17 @@ PID_LIST+=" $pid"
 wait $PID_LIST
 
 kli status --name multisig1 --alias multisig
+
+kli rotate --name multisig1 --alias multisig1
+kli rotate --name multisig2 --alias multisig2
+kli rotate --name multisig3 --alias multisig3
+
+kli query --name multisig1 --alias multisig1 --prefix $MS2
+kli query --name multisig1 --alias multisig1 --prefix $MS3
+kli query --name multisig2 --alias multisig2 --prefix $MS1
+kli query --name multisig2 --alias multisig2 --prefix $MS3
+kli query --name multisig3 --alias multisig3 --prefix $MS1
+kli query --name multisig3 --alias multisig3 --prefix $MS2
 
 PID_LIST=""
 
