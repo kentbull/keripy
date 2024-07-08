@@ -17,24 +17,26 @@ from keri import help
 
 parser = argparse.ArgumentParser(description="Run a demo collection of witnesses")
 parser.set_defaults(handler=lambda args: demo(args))
+parser.add_argument("--config-dir", "-c", dest="configDir", help="directory override for configuration data")
 
 
 help.ogler.level = logging.INFO
 logger = help.ogler.getLogger()
 
 
-def demo(_):
+def demo(args):
     """
     Run set of three witnesses for demo
 
     """
+    configDir = args.configDir if args.configDir is not None else "scripts"
 
-    wancf = configing.Configer(name="wan", headDirPath="scripts", temp=False, reopen=True, clear=False)
-    wilcf = configing.Configer(name="wil", headDirPath="scripts", temp=False, reopen=True, clear=False)
-    wescf = configing.Configer(name="wes", headDirPath="scripts", temp=False, reopen=True, clear=False)
-    witcf = configing.Configer(name="wit", headDirPath="scripts", temp=False, reopen=True, clear=False)
-    wubcf = configing.Configer(name="wub", headDirPath="scripts", temp=False, reopen=True, clear=False)
-    wyzcf = configing.Configer(name="wyz", headDirPath="scripts", temp=False, reopen=True, clear=False)
+    wancf = configing.Configer(name="wan", headDirPath=configDir, temp=False, reopen=True, clear=False)
+    wilcf = configing.Configer(name="wil", headDirPath=configDir, temp=False, reopen=True, clear=False)
+    wescf = configing.Configer(name="wes", headDirPath=configDir, temp=False, reopen=True, clear=False)
+    witcf = configing.Configer(name="wit", headDirPath=configDir, temp=False, reopen=True, clear=False)
+    wubcf = configing.Configer(name="wub", headDirPath=configDir, temp=False, reopen=True, clear=False)
+    wyzcf = configing.Configer(name="wyz", headDirPath=configDir, temp=False, reopen=True, clear=False)
 
     wanHby = habbing.Habery(name="wan", salt=Salter(raw=b'wann-the-witness').qb64, temp=False, cf=wancf)
     wilHby = habbing.Habery(name="wil", salt=Salter(raw=b'will-the-witness').qb64, temp=False, cf=wilcf)
