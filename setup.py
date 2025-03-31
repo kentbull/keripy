@@ -33,14 +33,22 @@ https://caremad.io/posts/2013/07/setup-vs-requirement/
 from glob import glob
 from os.path import basename
 from os.path import splitext
+from pathlib import Path
 
 from setuptools import find_packages, setup
+
+this_directory = Path(__file__).parent
+if (this_directory / "README.md").exists():  # If building inside a container, like in the `images/keria.dockerfile`, this file won't exist and fails the build
+    long_description = (this_directory / "README.md").read_text()
+else:
+    long_description = "KERI Decentralized Key Management Infrastructure"
+
 setup(
     name='keri',
-    version='1.2.4',  # also change in src/keri/__init__.py
+    version='1.2.4-rc2',  # also change in src/keri/__init__.py
     license='Apache Software License 2.0',
     description='Key Event Receipt Infrastructure',
-    long_description="KERI Decentralized Key Management Infrastructure",
+    long_description=long_description,
     author='Samuel M. Smith',
     author_email='smith.samuel.m@gmail.com',
     url='https://github.com/WebOfTrust/keripy',
@@ -76,33 +84,33 @@ setup(
     ],
     python_requires='>=3.12.2',
     install_requires=[
-                        'lmdb>=1.4.1',
-                        'pysodium>=0.7.17',
-                        'blake3>=0.4.1',
-                        'msgpack>=1.0.8',
-                        'cbor2>=5.6.2',
-                        'multidict>=6.0.5',
-                        'ordered-set>=4.1.0',
-                        'hio>=0.6.14',
-                        'multicommand>=1.0.0',
-                        'jsonschema>=4.21.1',
-                        'falcon>=3.1.3',
-                        'hjson>=3.1.0',
-                        'PyYaml>=6.0.1',
-                        'apispec>=6.6.0',
-                        'mnemonic>=0.21',
-                        'PrettyTable>=3.10.0',
-                        'http_sfv>=0.9.9',
-                        'cryptography>=42.0.5',
-                        'semver>=3.0.2',
-                        'qrcode>=7.4.2'
+                        'lmdb==1.4.1',
+                        'pysodium==0.7.17',
+                        'blake3==0.4.1',
+                        'msgpack==1.0.8',
+                        'cbor2==5.6.2',
+                        'multidict==6.0.5',
+                        'ordered-set==4.1.0',
+                        'hio==0.6.14',
+                        'multicommand==1.0.0',
+                        'jsonschema==4.21.1',
+                        'falcon==3.1.3',
+                        'hjson==3.1.0',
+                        'PyYaml==6.0.1',
+                        'apispec==6.6.0',
+                        'mnemonic==0.21',
+                        'PrettyTable==3.10.0',
+                        'http_sfv==0.9.9',
+                        'cryptography==42.0.5',
+                        'semver==3.0.2',
+                        'qrcode==7.4.2'
     ],
     extras_require={
     },
     tests_require=[
-                    'coverage>=7.4.4',
-                    'pytest>=8.1.1',
-                    'pytest-shell>=0.3.2'
+                    'coverage==7.4.4',
+                    'pytest==8.1.1',
+                    'pytest-shell==0.3.2'
                   ],
     setup_requires=[
     ],
