@@ -998,7 +998,7 @@ class Baser(dbing.LMDBer):
 
         """
         super(Baser, self).reopen(**kwa)
-        logger.debug("[%s] Baser map size set to %s", self.name, self.mapSize)
+        logger.info("[%s] Baser map size set to %s", self.name, self.mapSize)
 
         # Create by opening first time named sub DBs within main DB instance
         # Names end with "." as sub DB name must include a non Base64 character
@@ -1367,7 +1367,7 @@ class Baser(dbing.LMDBer):
                 mod = importlib.import_module(modName)
                 try:
                     print(f"running migration {modName}")
-                    mod.migrate(self)
+                    mod.migrate(self, self.cf)
                 except Exception as e:
                     print(f"\nAbandoning migration {migration} at version {version} with error: {e}")
                     return

@@ -382,7 +382,7 @@ class Notifier:
         """
         self.hby = hby
         self.signaler = signaler if signaler is not None else signaling.Signaler()
-        self.noter = noter if noter is not None else Noter(name=hby.name, temp=hby.temp)
+        self.noter = noter if noter is not None else Noter(name=hby.name, temp=hby.temp, cf=hby.cf)
 
     def add(self, attrs):
         """  Add unread notice to the end of the current list of notices
