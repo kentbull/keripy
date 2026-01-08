@@ -1,11 +1,15 @@
 
 .PHONY: build-keri build-witness-demo publish-keri-witness-demo publish-keri
 
+<<<<<<< Updated upstream
 VERSION=1.2.10
 REGISTRY=gleif
 IMAGE=keri
 LATEST_TAG=$(REGISTRY)/$(IMAGE):latest
 VERSIONED_TAG=$(REGISTRY)/$(IMAGE):$(VERSION)
+=======
+VERSION=1.1.40
+>>>>>>> Stashed changes
 
 define DOCKER_WARNING
 In order to use the multi-platform build enable the containerd image store
