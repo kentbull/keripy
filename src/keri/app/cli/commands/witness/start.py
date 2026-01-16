@@ -51,6 +51,9 @@ parser.add_argument("--loglevel", action="store", required=False, default="CRITI
                     help="Set log level to DEBUG | INFO | WARNING | ERROR | CRITICAL. Default is CRITICAL")
 parser.add_argument("--logfile", action="store", required=False, default=None,
                     help="path of the log file. If not defined, logs will not be written to the file.")
+parser.add_argument("--keystore-dir", dest="keystoreDir", action="store", required=False, default=None,
+                    help="Directory prefix for all KERI databases (keystore, KEL db, config). "
+                         "Defaults to ~/.keri or /usr/local/var/keri")
 
 
 def launch(args):
@@ -71,6 +74,7 @@ def launch(args):
                http=int(args.http),
                configDir=args.configDir,
                configFile=args.configFile,
+               keystoreDir=args.keystoreDir,
                keypath=args.keypath,
                certpath=args.certpath,
                cafilepath=args.cafilepath)
@@ -80,28 +84,35 @@ def launch(args):
 
 
 def runWitness(name="witness", base="", alias="witness", bran="", tcp=5631, http=5632, expire=0.0,
-               configDir="", configFile="", keypath=None, certpath=None, cafilepath=None):
+               configDir="", configFile="", keystoreDir=None, keypath=None, certpath=None, cafilepath=None):
     """
     Setup and run one witness
+    
+    Parameters:
+        keystoreDir (str): optional head directory path override for all KERI databases.
+                          If provided, overrides the default ~/.keri or /usr/local/var/keri paths.
     """
 
     ks = keeping.Keeper(name=name,
                         base=base,
                         temp=False,
-                        reopen=True)
+                        reopen=True,
+                        headDirPath=keystoreDir)
 
     aeid = ks.gbls.get('aeid')
 
     cf = None
     if configFile is not None:
-        cf = configing.Configer(name=configFile, headDirPath=configDir, temp=False, reopen=True, clear=False)
+        # Use keystoreDir for config if configDir not explicitly set
+        cfHeadDir = configDir if configDir else keystoreDir
+        cf = configing.Configer(name=configFile, headDirPath=cfHeadDir, temp=False, reopen=True, clear=False)
     
     aids  = cf.get("aids", default=None) if cf is not None else None
 
     if aeid is None:
-        hby = habbing.Habery(name=name, base=base, bran=bran, cf=cf)
+        hby = habbing.Habery(name=name, base=base, bran=bran, cf=cf, headDirPath=keystoreDir)
     else:
-        hby = existing.setupHby(name=name, base=base, bran=bran, cf=cf)
+        hby = existing.setupHby(name=name, base=base, bran=bran, cf=cf, headDirPath=keystoreDir)
 
     hbyDoer = habbing.HaberyDoer(habery=hby)  # setup doer
     doers = [hbyDoer]

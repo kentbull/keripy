@@ -12,7 +12,7 @@ from keri import kering
 from keri.app import habbing, keeping
 
 
-def setupHby(name, base="", bran=None, cf=None, temp=False):
+def setupHby(name, base="", bran=None, cf=None, temp=False, headDirPath=None):
     """ Create Habery off of existing directory
 
     Parameters:
@@ -21,6 +21,7 @@ def setupHby(name, base="", bran=None, cf=None, temp=False):
         bran(str): optional passcode if the Habery was created encrypted
         cf (Configer): optional configuration for loading reference data
         temp (bool): True means create database in /tmp
+        headDirPath (str): optional head directory path override for all KERI databases
 
     Returns:
           Habery:  the configured habery
@@ -30,7 +31,8 @@ def setupHby(name, base="", bran=None, cf=None, temp=False):
                         base=base,
                         temp=temp,
                         cf=cf,
-                        reopen=True)
+                        reopen=True,
+                        headDirPath=headDirPath)
     aeid = ks.gbls.get('aeid')
     if aeid is None:
         print("Keystore must already exist, exiting")
@@ -45,7 +47,8 @@ def setupHby(name, base="", bran=None, cf=None, temp=False):
                 bran = bran.replace("-", "")
 
             retries += 1
-            hby = habbing.Habery(name=name, base=base, bran=bran, cf=cf, free=True)
+            hby = habbing.Habery(name=name, base=base, bran=bran, cf=cf, free=True,
+                                 headDirPath=headDirPath)
             break
         except (kering.AuthError, ValueError) as e:
             print(e)
@@ -57,7 +60,7 @@ def setupHby(name, base="", bran=None, cf=None, temp=False):
 
 
 @contextmanager
-def existingHby(name, base="", bran=None):
+def existingHby(name, base="", bran=None, headDirPath=None):
     """
     Context manager wrapper for existing Habitat instance.
     Will raise exception if Habitat and database has not already been created.
@@ -67,10 +70,11 @@ def existingHby(name, base="", bran=None):
         name(str): name of habitat to create
         base(str): optional base directory prefix
         bran(str): optional passcode if the Habery was created encrypted
+        headDirPath (str): optional head directory path override for all KERI databases
     """
     hby = None
     try:
-        hby = setupHby(name=name, base=base, bran=bran)
+        hby = setupHby(name=name, base=base, bran=bran, headDirPath=headDirPath)
         yield hby
 
     finally:
@@ -79,7 +83,7 @@ def existingHby(name, base="", bran=None):
 
 
 @contextmanager
-def existingHab(name, alias, base="", bran=None):
+def existingHab(name, alias, base="", bran=None, headDirPath=None):
     """
     Context manager wrapper for existing Habitat instance.
     Will raise exception if Habitat and database has not already been created.
@@ -90,8 +94,9 @@ def existingHab(name, alias, base="", bran=None):
         alias(str): alias for the identifier required
         base(str): optional base directory prefix
         bran(str): optional passcode if the Habery was created encrypted
+        headDirPath (str): optional head directory path override for all KERI databases
     """
-    with existingHby(name, base, bran) as hby:
+    with existingHby(name, base, bran, headDirPath=headDirPath) as hby:
         hab = hby.habByName(name=alias)
         yield hby, hab
 
