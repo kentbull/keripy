@@ -6396,26 +6396,15 @@ class Kevery:
                 wigs = self.db.getWigs(dgKey(pre, bytes(edig)))  # list of wigs
                 wigers = [Siger(qb64b=bytes(wig)) for wig in wigs]
 
-                # get delgate seal
+                # get delegate seal from AES (Authorizer Event Seal) database.
+                # AES is set by the delegation approval process (e.g. kli delegate confirm)
+                # before calling processEscrowDelegables.
                 couple = self.db.getAes(dgkey)
-                seqner = saider = None
-                if couple is not None:  # Only try to parse the event if we have the del seal
-                    raw = bytearray(couple)
-                    seqner = coring.Seqner(qb64b=raw, strip=True)
-                    saider = coring.Saider(qb64b=raw)
-                elif eserder.delpre in self.prefixes:
-                    # Only triggered for delegator when processing the delegate's KEL.
-                    # Seal will not be found in delegator's AES database until after appearing in the
-                    # delegator's the KEL. Then it can be looked up and sent through event processing
-                    # so that logEvent can save the seal in the AES DB.
-                    seal = dict(i=eserder.pre, s=eserder.snh, d=eserder.said)
-                    dserder = self.db.fetchLastSealingEventByEventSeal(pre=eserder.delpre,
-                                                                       seal=seal)
-                    if dserder is not None:
-                        seqner = coring.Seqner(sn=dserder.sn)
-                        saider = coring.Saider(qb64=dserder.said)
-                if seqner is None or saider is None:
-                    raise MissingDelegableApprovalError("No delegation seal found for event.")
+                if couple is None:
+                    raise MissingDelegableApprovalError("No delegation seal found in AES for event.")
+                raw = bytearray(couple)
+                seqner = coring.Seqner(qb64b=raw, strip=True)
+                saider = coring.Saider(qb64b=raw)
 
                 # process event
                 self.processEvent(serder=eserder, sigers=sigers, wigers=wigers, delseqner=seqner,
