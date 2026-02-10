@@ -6396,18 +6396,19 @@ class Kevery:
                 wigs = self.db.getWigs(dgKey(pre, bytes(edig)))  # list of wigs
                 wigers = [Siger(qb64b=bytes(wig)) for wig in wigs]
 
-                # get delgate seal
+                # get delegate seal from AES (Authorizer Event Seal) database.
+                # AES is set by the delegation approval process (e.g. kli delegate confirm)
+                # before calling processEscrowDelegables.
                 couple = self.db.getAes(dgkey)
-                if couple is not None:  # Only try to parse the event if we have the del seal
-                    raw = bytearray(couple)
-                    seqner = coring.Seqner(qb64b=raw, strip=True)
-                    saider = coring.Saider(qb64b=raw)
+                if couple is None:
+                    raise MissingDelegableApprovalError("No delegation seal found in AES for event.")
+                raw = bytearray(couple)
+                seqner = coring.Seqner(qb64b=raw, strip=True)
+                saider = coring.Saider(qb64b=raw)
 
-                    # process event
-                    self.processEvent(serder=eserder, sigers=sigers, wigers=wigers, delseqner=seqner,
-                                      delsaider=saider, local=esr.local)
-                else:
-                    raise MissingDelegableApprovalError("No delegation seal found for event.")
+                # process event
+                self.processEvent(serder=eserder, sigers=sigers, wigers=wigers, delseqner=seqner,
+                                  delsaider=saider, local=esr.local)
 
             except MissingDelegableApprovalError as ex:
                 # still waiting on missing delegation approval
