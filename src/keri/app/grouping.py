@@ -508,6 +508,135 @@ def multisigExn(ghab, exn):
     return wexn, atc
 
 
+def multisigRegistrySyncRequestExn(hab, gid):
+    """Create a peer-to-peer message requesting registry sync for one group.
+
+    Parameters:
+        hab (Hab): local member habitat endorsing the request
+        gid (str): qb64 group identifier prefix whose registries should be synced
+
+    Returns:
+        tuple: (Serder, bytes): Serder of exn message and CESR attachments
+    """
+
+    exn, end = exchanging.exchange(
+        route="/multisig/registry/sync",
+        payload={"gid": gid},
+        sender=hab.pre,
+    )
+    ims = hab.endorse(serder=exn, last=False, pipelined=False)
+    del ims[:exn.size]
+    ims.extend(end)
+
+    return exn, ims
+
+
+def multisigRegistrySyncResponseExn(hab, gid, registries, dig, history=None, messages=None):
+    """Create a peer-to-peer message responding to a registry sync request.
+
+    Parameters:
+        hab (Hab): local member habitat endorsing the response
+        gid (str): qb64 group identifier prefix whose registries are being synced
+        registries (list[dict]): catalog entries containing registry sync material
+        dig (str): qb64 SAID of the request exn this response satisfies
+
+    Returns:
+        history (bytes | None): optional CESR stream with issuer KEL and registry TEL history
+        messages (list[bytes] | None): optional discrete VCP CESR messages
+        tuple: (Serder, bytes): Serder of exn message and CESR attachments
+    """
+
+    if messages is not None:
+        embeds = {
+            f"vcpmsg{idx:04d}": bytes(message)
+            for idx, message in enumerate(messages)
+        }
+    else:
+        embeds = {"history": history} if history is not None else None
+    exn, end = exchanging.exchange(
+        route="/multisig/registry/sync/response",
+        payload={"gid": gid, "registries": registries},
+        sender=hab.pre,
+        dig=dig,
+        embeds=embeds,
+    )
+    ims = hab.endorse(serder=exn, last=False, pipelined=False)
+    del ims[:exn.size]
+    ims.extend(end)
+
+    return exn, ims
+
+
+def multisigCredentialSyncRequestExn(hab, gid, saids, mid=None):
+    """Create a peer-to-peer message requesting credential-history sync.
+
+    Parameters:
+        hab (Hab): local habitat endorsing the request
+        gid (str): qb64 group identifier prefix whose credentials should be synced
+        saids (list[str]): credential SAIDs to hydrate locally
+        mid (str | None): optional member AID associated with the requesting agent
+
+    Returns:
+        tuple: (Serder, bytes): Serder of exn message and CESR attachments
+    """
+
+    payload = {"gid": gid, "saids": saids}
+    if mid is not None:
+        payload["mid"] = mid
+
+    exn, end = exchanging.exchange(
+        route="/multisig/credential/sync",
+        payload=payload,
+        sender=hab.pre,
+    )
+    ims = hab.endorse(serder=exn, last=False, pipelined=False)
+    del ims[:exn.size]
+    ims.extend(end)
+
+    return exn, ims
+
+
+def multisigCredentialSyncResponseExn(hab, gid, said, credential, dig, error=None):
+    """Create a peer-to-peer message responding to credential-history sync.
+
+    Parameters:
+        hab (Hab): local habitat endorsing the response
+        gid (str): qb64 group identifier prefix whose credentials are being synced
+        said (str): credential SAID represented by this response
+        credential (bytes | None): CESR stream bundle for the requested credential
+        dig (str): qb64 SAID of the request exn this response satisfies
+        error (dict | None): optional structured error when the credential cannot be exported
+
+    Returns:
+        tuple: (Serder, bytes): Serder of exn message and CESR attachments
+    """
+
+    payload = {"gid": gid, "said": said}
+    if error is not None:
+        payload["error"] = error
+
+    embeds = None
+    if isinstance(credential, list):
+        embeds = {
+            f"credmsg{idx:04d}": bytes(message)
+            for idx, message in enumerate(credential)
+        }
+    elif credential is not None:
+        embeds = {"cred": credential}
+    exn, end = exchanging.exchange(
+        route="/multisig/credential/sync/response",
+        payload=payload,
+        sender=hab.pre,
+        dig=dig,
+        embeds=embeds,
+    )
+    ims = hab.endorse(serder=exn, last=False, pipelined=False)
+    del ims[:exn.size]
+    ims.extend(end)
+
+    return exn, ims
+
+
 def getEscrowedEvent(db, pre, sn):
     key = snKey(pre, sn)
     dig = db.getPseLast(key)
@@ -696,4 +825,3 @@ class Multiplexor:
             ))
 
         return exns
-

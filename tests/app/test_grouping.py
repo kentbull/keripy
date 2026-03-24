@@ -808,6 +808,99 @@ def test_multisig_registry_incept(mockHelpingNowUTC, mockCoringRandomNonce):
         assert "anc" in exn.ked["e"]
 
 
+def test_multisig_registry_sync_request_exn():
+    with habbing.openHab(name="test", temp=True, salt=b"0123456789abcdef") as (_, hab):
+        exn, atc = grouping.multisigRegistrySyncRequestExn(
+            hab=hab,
+            gid="EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkaba",
+        )
+
+        assert exn.ked["r"] == "/multisig/registry/sync"
+        assert exn.ked["a"] == {"gid": "EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkaba"}
+        assert exn.ked["p"] == ""
+        assert atc
+
+
+def test_multisig_registry_sync_response_exn():
+    with habbing.openHab(name="test", temp=True, salt=b"0123456789abcdef") as (_, hab):
+        registries = [
+            {
+                "name": "reg1",
+                "regk": "EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkabc",
+                "vcp": {"v": "KERI10JSON000000_", "t": "vcp", "d": "EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkabc",
+                         "i": "EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkabc", "ii": hab.pre, "s": "0",
+                         "c": [], "bt": "0", "b": [], "n": "A"},
+                "sn": 3,
+            }
+        ]
+        messages = [hab.makeOwnEvent(sn=0)]
+
+        exn, atc = grouping.multisigRegistrySyncResponseExn(
+            hab=hab,
+            gid="EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkaba",
+            registries=registries,
+            dig="EF1hPDU5g3wpcA2dgVYJXg9P4YxF6kMT1kA04xG9nfqN",
+            messages=messages,
+        )
+
+        assert exn.ked["r"] == "/multisig/registry/sync/response"
+        assert exn.ked["a"] == {
+            "gid": "EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkaba",
+            "registries": registries,
+        }
+        assert exn.ked["p"] == "EF1hPDU5g3wpcA2dgVYJXg9P4YxF6kMT1kA04xG9nfqN"
+        assert "vcpmsg0000" in exn.ked["e"]
+        assert atc
+
+
+def test_multisig_credential_sync_request_exn():
+    with habbing.openHab(name="test", temp=True, salt=b"0123456789abcdef") as (_, hab):
+        exn, atc = grouping.multisigCredentialSyncRequestExn(
+            hab=hab,
+            gid="EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkaba",
+            saids=[
+                "EAcredSync0000000000000000000000000000000000000",
+                "EBcredSync0000000000000000000000000000000000000",
+            ],
+            mid="EMember000000000000000000000000000000000000000",
+        )
+
+        assert exn.ked["r"] == "/multisig/credential/sync"
+        assert exn.ked["a"] == {
+            "gid": "EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkaba",
+            "saids": [
+                "EAcredSync0000000000000000000000000000000000000",
+                "EBcredSync0000000000000000000000000000000000000",
+            ],
+            "mid": "EMember000000000000000000000000000000000000000",
+        }
+        assert exn.ked["p"] == ""
+        assert atc
+
+
+def test_multisig_credential_sync_response_exn():
+    with habbing.openHab(name="test", temp=True, salt=b"0123456789abcdef") as (_, hab):
+        bundle = [hab.makeOwnEvent(sn=0), hab.makeOwnEvent(sn=0)]
+
+        exn, atc = grouping.multisigCredentialSyncResponseExn(
+            hab=hab,
+            gid="EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkaba",
+            said="EAcredSync0000000000000000000000000000000000000",
+            credential=bundle,
+            dig="EF1hPDU5g3wpcA2dgVYJXg9P4YxF6kMT1kA04xG9nfqN",
+        )
+
+        assert exn.ked["r"] == "/multisig/credential/sync/response"
+        assert exn.ked["a"] == {
+            "gid": "EH__mobl7NDyyQCB1DoLK-OPSueraPtZAlWEjfOYkaba",
+            "said": "EAcredSync0000000000000000000000000000000000000",
+        }
+        assert exn.ked["p"] == "EF1hPDU5g3wpcA2dgVYJXg9P4YxF6kMT1kA04xG9nfqN"
+        assert "credmsg0000" in exn.ked["e"]
+        assert "credmsg0001" in exn.ked["e"]
+        assert atc
+
+
 def test_multisig_incept_handler(mockHelpingNowUTC):
     with habbing.openHab(name="test0", temp=True, salt=b'0123456789abcdef') as (hby, hab):
         aids = [hab.pre, "EfrzbTSWjccrTdNRsFUUfwaJ2dpYxu9_5jI2PJ-TRri0"]
@@ -968,4 +1061,3 @@ def test_multisig_join(mockHelpingNowUTC):
             assert ghab4.pre == ghab1.pre
             assert ghab4.mhab.pre == hab4.pre
             assert ghab4.name == "test_group_4"
-

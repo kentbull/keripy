@@ -101,6 +101,31 @@ class Regery:
 
         return reg
 
+    def materializeSignifyRegistry(self, name, prefix, regk):
+        hab = self.hby.habs[prefix]
+        if hab is None:
+            raise kering.ConfigurationError(f"Unknown prefix {prefix} for creating Registry {name}")
+
+        reg = SignifyRegistry(
+            hab=hab,
+            name=name,
+            reger=self.reger,
+            tvy=self.tvy,
+            psr=self.psr,
+            cues=self.cues,
+            regk=regk,
+        )
+        reg.inited = True
+
+        self.reger.regs.put(
+            keys=name,
+            val=viring.RegistryRecord(registryKey=regk, prefix=prefix),
+        )
+        self.reger.registries.add(regk)
+        self.regs[regk] = reg
+
+        return reg
+
     def registryByName(self, name):
         if regrec := self.reger.regs.get(name):
             return self.regs[regrec.registryKey] if regrec.registryKey in self.regs else None
