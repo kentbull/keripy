@@ -5,6 +5,7 @@ keri.app.cli.commands Package
 """
 
 from .aid import status
+from .annotate import annotate
 from .clean import CleanDoer
 from .decrypt import decrypt
 from .event import event
