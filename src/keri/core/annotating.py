@@ -5,6 +5,7 @@ keri.core.annotating module
 Provides support for annotating CESR streams.
 """
 import json
+import re
 from base64 import urlsafe_b64encode as encodeB64
 from dataclasses import dataclass
 
@@ -30,6 +31,36 @@ class AnnotCodex:
     FrameStarts: frozenset
     NonNativeBodyGroups: frozenset
     GenusVersion: str
+
+
+@dataclass(frozen=True)
+class AnnotLine:
+    """One semantically classified annotation output line."""
+    value: str
+    comment: str | None = None
+    indent: int = 0
+    kind: str = "primitive"
+
+
+_ANSI_RESET = "\033[0m"
+
+_DEFAULT_THEME = {
+    "group": "\033[36m",
+    "body": "\033[32m",
+    "signature": "\033[33m",
+    "opaque": "\033[91m",
+    "primitive": "",
+    "comment": "\033[90m",
+    "said": "\033[94m",
+    "json_key": "\033[94m",
+    "json_string": "\033[32m",
+    "json_number": "\033[33m",
+    "json_literal": "\033[96m",
+    "json_punct": "\033[90m",
+}
+
+_JSON_NUMBER_RE = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?")
+_SAID_RE = re.compile(r"(said=)(\S+)")
 
 
 _FRAME_GROUP_CODENS = (
@@ -183,6 +214,127 @@ def denot(ams):
     return bytes(dms)
 
 
+def _ansi(value, code):
+    """Wrap ``value`` in ANSI color ``code`` when configured."""
+    if not value or not code:
+        return value
+    return f"{code}{value}{_ANSI_RESET}"
+
+
+def _plain_line(line):
+    """Render one annotation line without display color."""
+    prefix = "  " * line.indent
+    if line.comment:
+        return f"{prefix}{line.value} # {line.comment}"
+    return f"{prefix}{line.value}"
+
+
+def _colored_line(line, theme):
+    """Render one annotation line with semantic display color."""
+    prefix = "  " * line.indent
+    value = _colored_value(line.value, line.kind, theme)
+    if line.comment:
+        return f"{prefix}{value} # {_colored_comment(line.comment, theme)}"
+    return f"{prefix}{value}"
+
+
+def _colored_value(value, kind, theme):
+    """Color an annotation value according to its semantic line kind."""
+    if kind == "json":
+        return _colored_json(value, theme)
+    return _ansi(value, theme.get(kind, ""))
+
+
+def _colored_comment(comment, theme):
+    """Color annotation comments, giving SAIDs a stronger accent."""
+    parts = []
+    start = 0
+    for match in _SAID_RE.finditer(comment):
+        parts.append(_ansi(comment[start:match.start()], theme["comment"]))
+        parts.append(_ansi(match.group(1), theme["comment"]))
+        parts.append(_ansi(match.group(2), theme["said"]))
+        start = match.end()
+    parts.append(_ansi(comment[start:], theme["comment"]))
+    return "".join(parts)
+
+
+def _colored_json(value, theme):
+    """Token-color one pretty JSON line without changing its text content."""
+    out = []
+    i = 0
+    while i < len(value):
+        char = value[i]
+        if char == '"':
+            end = _json_string_end(value, i)
+            token = value[i:end]
+            look = end
+            while look < len(value) and value[look].isspace():
+                look += 1
+            key = look < len(value) and value[look] == ":"
+            out.append(_ansi(token, theme["json_key" if key else "json_string"]))
+            i = end
+            continue
+
+        if char == "-" or char.isdigit():
+            match = _JSON_NUMBER_RE.match(value, i)
+            if match is not None:
+                out.append(_ansi(match.group(0), theme["json_number"]))
+                i = match.end()
+                continue
+
+        matched = False
+        for literal in ("true", "false", "null"):
+            if value.startswith(literal, i):
+                out.append(_ansi(literal, theme["json_literal"]))
+                i += len(literal)
+                matched = True
+                break
+        if matched:
+            continue
+
+        if char in "{}[]:,":
+            out.append(_ansi(char, theme["json_punct"]))
+        else:
+            out.append(char)
+        i += 1
+
+    return "".join(out)
+
+
+def _json_string_end(value, start):
+    """Return the exclusive end offset of a JSON string token."""
+    i = start + 1
+    escaped = False
+    while i < len(value):
+        char = value[i]
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == '"':
+            return i + 1
+        i += 1
+    return len(value)
+
+
+def _infer_kind(comment):
+    """Infer a semantic line kind from existing annotation comments."""
+    if not comment:
+        return "primitive"
+
+    lowered = comment.lower()
+    if "opaque" in lowered:
+        return "opaque"
+    if ("signature" in lowered or "siger" in lowered or
+            "cigar" in lowered or "_sig" in lowered):
+        return "signature"
+    if comment.startswith("Counter "):
+        return "group"
+    if comment.startswith("SERDER "):
+        return "body"
+    return "primitive"
+
+
 class Annotator:
     """Small annotation-only CESR stream parser.
 
@@ -196,10 +348,17 @@ class Annotator:
         self.genus = GenDex.KERI
         self.serdery = Serdery(version=Version)
 
-    def annotate(self, ims):
+    def annotate(self, ims, *, colored=False, theme=None):
         """Render annotated text for ``ims`` while consuming the input stream."""
         self.parse_stream(ims=ims, indent=0, version=Vrsn_2_0)
-        return "\n".join(self.lines)
+        return self.render(colored=colored, theme=theme)
+
+    def render(self, *, colored=False, theme=None):
+        """Render parsed annotation lines as plain or colored display text."""
+        if colored:
+            theme = {**_DEFAULT_THEME, **(theme or {})}
+            return "\n".join(_colored_line(line, theme) for line in self.lines)
+        return "\n".join(_plain_line(line) for line in self.lines)
 
     def parse_stream(self, ims, indent=0, version=Vrsn_2_0):
         """Parse one complete stream or one already-bounded wrapper payload."""
@@ -292,9 +451,10 @@ class Annotator:
             lines = pretty.splitlines()
             for i, line in enumerate(lines):
                 self.emit(line, comment if i == len(lines) - 1 else None,
-                          indent)
+                          indent, kind="json")
         else:
-            self.emit(raw.decode("utf-8", "replace"), comment, indent)
+            self.emit(raw.decode("utf-8", "replace"), comment, indent,
+                      kind="body")
 
         return self.version_from_serder(serder=serder, current=version)
 
@@ -358,7 +518,8 @@ class Annotator:
                                        svrsn=version, verify=False)
             self.emit(texter.qb64, f"Texter {texter.name}", indent)
             self.emit(serder.raw.decode("utf-8", "replace"),
-                      self.serder_comment(serder=serder), indent + 1)
+                      self.serder_comment(serder=serder), indent + 1,
+                      kind="body")
             return
         except (DeserializeError, InvalidVersionError, ProtocolError):
             raise
@@ -846,15 +1007,13 @@ class Annotator:
             value = encodeB64(payload).decode("utf-8")
         else:
             value = payload.decode("utf-8", "replace")
-        self.emit(value, comment, indent)
+        self.emit(value, comment, indent, kind="opaque")
 
-    def emit(self, value, comment, indent):
+    def emit(self, value, comment, indent, kind=None):
         """Append one annotated output line."""
-        prefix = "  " * indent
-        if comment:
-            self.lines.append(f"{prefix}{value} # {comment}")
-        else:
-            self.lines.append(f"{prefix}{value}")
+        self.lines.append(AnnotLine(value=value, comment=comment,
+                                    indent=indent,
+                                    kind=kind or _infer_kind(comment)))
 
     @staticmethod
     def counter_comment(ctr, cold):

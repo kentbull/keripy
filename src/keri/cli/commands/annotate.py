@@ -5,7 +5,7 @@ keri.cli.commands.annotate module
 import argparse
 import sys
 
-from keri.core.annotating import annot
+from keri.core.annotating import Annotator, annot
 
 
 parser = argparse.ArgumentParser(description="Annotate a CESR stream")
@@ -18,6 +18,8 @@ parser.add_argument("--qb2", action="store_true",
                     help="Read input as binary-domain qb2 CESR.")
 parser.add_argument("--pretty", action="store_true",
                     help="Pretty-print field-map message bodies when possible.")
+parser.add_argument("--colored", action="store_true",
+                    help="Colorize annotation output on stdout.")
 
 
 def annotate(args):
@@ -28,12 +30,14 @@ def annotate(args):
     else:
         ims = sys.stdin.buffer.read()
 
-    ams = annot(ims, pretty=args.pretty)
     if args.outpath:
+        ams = annot(ims, pretty=args.pretty)
         with open(args.outpath, "w", encoding="utf-8") as outfile:
             outfile.write(ams)
             outfile.write("\n")
     else:
+        ams = Annotator(pretty=args.pretty).annotate(
+            bytearray(ims), colored=args.colored)
         sys.stdout.write(ams)
         sys.stdout.write("\n")
 

@@ -3,6 +3,7 @@
 tests.core.test_annotating module
 
 """
+import re
 from binascii import unhexlify
 import pytest
 
@@ -11,7 +12,7 @@ from keri.kering import (Kinds, InvalidVersionError, Versionage, Vrsn_1_0,
 from keri.core import dumps, annot, denot
 from keri.core.coring import decodeB64
 from keri.core.counting import Counter, Codens
-from keri.core.annotating import _annot_codex
+from keri.core.annotating import Annotator, _annot_codex
 
 
 KERIPY_NATIVE_V2_ICP_FIX_BODY = (
@@ -22,6 +23,12 @@ KERIPY_NATIVE_V2_ICP_FIX_BODY = (
 
 SIGER = b'A' * 88
 JSON_RPY = b'{"v":"KERI10JSON00002e_","t":"rpy","d":"Eabc"}'
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(value):
+    """Remove ANSI SGR escapes from a rendered annotation."""
+    return ANSI_RE.sub("", value)
 
 
 def test_annot():
@@ -296,6 +303,36 @@ def test_annot_pretty_json():
     assert "SERDER KERI JSON" in ams
     assert '\n  "v":' in ams
     assert ams.splitlines()[-1].startswith("} # SERDER KERI JSON")
+
+
+def test_annot_colored_comments_and_opaque_lines():
+    """Test semantic color rendering keeps plain annotation recoverable."""
+    plain = annot(bytearray(JSON_RPY))
+    colored = Annotator().annotate(bytearray(JSON_RPY), colored=True)
+
+    assert "\x1b[90mSERDER KERI JSON ilk=rpy " in colored
+    assert "\x1b[94mEabc\x1b[0m" in colored
+    assert strip_ansi(colored) == plain
+
+    opaque = Counter.enclose(qb64=b"MAAA", code=Codens.NonNativeBodyGroup,
+                             version=Vrsn_2_0)
+    plain = annot(bytearray(opaque))
+    colored = Annotator().annotate(bytearray(opaque), colored=True)
+
+    assert "\x1b[91mMAAA\x1b[0m" in colored
+    assert strip_ansi(colored) == plain
+
+
+def test_annot_colored_pretty_json_preserves_text():
+    """Test jq-like pretty JSON token coloring is display-only."""
+    plain = annot(bytearray(JSON_RPY), pretty=True)
+    colored = Annotator(pretty=True).annotate(bytearray(JSON_RPY),
+                                              colored=True)
+
+    assert '\x1b[94m"v"\x1b[0m' in colored
+    assert '\x1b[32m"KERI10JSON00002e_"\x1b[0m' in colored
+    assert '\x1b[90mSERDER KERI JSON ilk=rpy ' in colored
+    assert strip_ansi(colored) == plain
 
 
 def test_annot_codex_uses_counter_codes():
