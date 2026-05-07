@@ -61,6 +61,7 @@ _DEFAULT_THEME = {
 
 _JSON_NUMBER_RE = re.compile(r"-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?")
 _SAID_RE = re.compile(r"(said=)(\S+)")
+_DENOT_WHITESPACE = " \t\r\n\v\f"
 
 
 _FRAME_GROUP_CODENS = (
@@ -200,16 +201,52 @@ def denot(ams):
         dms (bytes): deannotation of input annotated CESR message stream
 
     Parameters:
-        ams (str): CESR annotated message stream text
+        ams (str | bytes | bytearray | memoryview): CESR annotated message
+           stream text
     """
-    dms = bytearray()  # deannotated message stream
-    lines = ams.splitlines()
-    for line in lines:
-        line = line.strip()
-        front, sep, back = line.partition('#')  # find comment if any
-        front = front.strip()  # non-commented portion strip white space
-        if front:
-            dms.extend(front.encode())
+    if isinstance(ams, str):
+        text = ams
+    elif isinstance(ams, memoryview):
+        text = ams.tobytes().decode("utf-8")
+    elif isinstance(ams, (bytes, bytearray)):
+        text = bytes(ams).decode("utf-8")
+    else:
+        raise TypeError(f"Invalid annotated stream type={type(ams)}.")
+
+    dms = bytearray()
+    in_string = False
+    escaped = False
+    in_comment = False
+
+    for char in text:
+        if in_comment:
+            if char in "\r\n":
+                in_comment = False
+            continue
+
+        if in_string:
+            dms.extend(char.encode("utf-8"))
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+
+        if char == "#":
+            in_comment = True
+            continue
+
+        if char == '"':
+            in_string = True
+            dms.extend(b'"')
+            continue
+
+        if char in _DENOT_WHITESPACE:
+            continue
+
+        dms.extend(char.encode("utf-8"))
 
     return bytes(dms)
 

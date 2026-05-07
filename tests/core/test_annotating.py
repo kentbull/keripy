@@ -303,6 +303,36 @@ def test_annot_pretty_json():
     assert "SERDER KERI JSON" in ams
     assert '\n  "v":' in ams
     assert ams.splitlines()[-1].startswith("} # SERDER KERI JSON")
+    assert denot(ams) == JSON_RPY
+
+
+def test_denot_accepts_byte_inputs():
+    """Test deannotation accepts text and bytes-like annotated streams."""
+    ams = annot(bytearray(JSON_RPY))
+    encoded = ams.encode("utf-8")
+
+    assert denot(ams) == JSON_RPY
+    assert denot(encoded) == JSON_RPY
+    assert denot(bytearray(encoded)) == JSON_RPY
+    assert denot(memoryview(encoded)) == JSON_RPY
+
+
+def test_denot_strips_comments_and_whitespace_outside_json_strings():
+    """Test deannotation preserves JSON string data while stripping markup."""
+    ams = r'''
+    # full-line comment
+    {
+      "x": "a # b",
+      "y": " spaced value ",
+      "z": "escaped \" quote and \\ slash"
+    } # inline comment
+    '''
+    expected = (
+        br'{"x":"a # b","y":" spaced value ",'
+        br'"z":"escaped \" quote and \\ slash"}'
+    )
+
+    assert denot(ams) == expected
 
 
 def test_annot_colored_comments_and_opaque_lines():
