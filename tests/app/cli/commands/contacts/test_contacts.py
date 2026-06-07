@@ -5,10 +5,13 @@ tests.app.cli.commands.contacts.test_contacts module
 Tests for KLI contacts commands: get, add, rename, delete
 """
 
+import inspect
+
 import multicommand
 
 from keri.app import Organizer, openHby
 from keri.cli import commands
+from keri.cli.commands.contacts.add import ContactAddDoer
 
 
 def test_contacts_get_by_aid(capsys):
@@ -96,6 +99,12 @@ def test_contacts_add_new():
         assert args.oobi == "http://127.0.0.1:5642/oobi/" + ken
         assert args.alias == "ken"
         assert args.fields == ["company=GLEIF", "city=Frankfurt"]
+
+
+def test_contacts_add_doer_accepts_hio_temp_kwarg():
+    """Contact add doer stays compatible with hio injected kwargs."""
+    params = inspect.signature(ContactAddDoer.add).parameters
+    assert any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
 
 
 def test_contacts_add_update():
