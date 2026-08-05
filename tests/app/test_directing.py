@@ -6,17 +6,19 @@ tests.db.dbing module
 
 import logging
 import os
+import socket
 
 from hio.base import doing
 from hio.core.tcp import clienting, serving
 
 from keri import help  # logger support
-from keri import core
-from keri.core import eventing, coring
+from keri import core, kering
+from keri.core import eventing, coring, serdering
 
 from keri.app import habbing, directing
 
 from keri.demo import demoing
+from tests.app import recurUntil
 
 
 def test_directing_basic():
@@ -158,6 +160,272 @@ def test_directing_basic():
 
     help.ogler.resetLevel(level=help.ogler.level)
     """End Test"""
+
+
+def test_reactant_drains_complete_messages_after_cutoff(unused_tcp_port_factory):
+    with habbing.openHby(name="alice-drain", temp=True) as aliceHby, \
+            habbing.openHby(name="bob-drain", temp=True) as bobHby:
+        alice = aliceHby.makeHab(name="alice-drain")
+        bob = bobHby.makeHab(name="bob-drain")
+        serverPort = unused_tcp_port_factory()
+        clientPort = unused_tcp_port_factory()
+
+        first = alice.makeOwnEvent(sn=0)  # get the icp event
+        alice.interact()
+        second = alice.makeOwnEvent(sn=1)  # get the ixn event
+
+        # buffer two complete CESR messages before EOF
+        remoter = serving.Remoter(
+            ha=("127.0.0.1", serverPort),
+            ca=("127.0.0.1", clientPort),
+            cs=None,
+        )
+        remoter.rxbs.extend(first + second)
+        remoter.cutoff = True
+        reactant = directing.Reactant(hab=bob, remoter=remoter)
+        assert not reactant.msgInProgress
+
+        dog = reactant.msgDo(tymth=lambda: 0.0, tock=0.0)
+        assert next(dog) == 0.0  # primes reactant msgDo generator fn
+
+        # one recurrence completes one message so its successor prevents drain
+        assert next(dog) == 0.0  # runs reactant msgDo generator fn
+        assert not reactant.msgInProgress
+        assert not reactant.rxDrained
+        assert reactant.kevery.kevers[alice.pre].sn == 0
+
+        # next recurrence completes the successor and reaches drain
+        assert next(dog) == 0.0
+        assert not reactant.msgInProgress
+        assert reactant.rxDrained
+        assert not reactant.rxFailed
+        assert reactant.kevery.kevers[alice.pre].sn == 1
+        dog.close()
+
+
+def test_reactant_rejects_incomplete_message_at_cutoff(unused_tcp_port_factory):
+    with habbing.openHby(name="alice-short", temp=True) as aliceHby, \
+            habbing.openHby(name="bob-short", temp=True) as bobHby:
+        alice = aliceHby.makeHab(name="alice-short")
+        bob = bobHby.makeHab(name="bob-short")
+        serverPort = unused_tcp_port_factory()
+        clientPort = unused_tcp_port_factory()
+
+        message = alice.makeOwnEvent(sn=0)
+        bodySize = serdering.SerderKERI(raw=message).size
+
+        # exercise shortage in the body, at its boundary, and in attachments
+        for cut in (10, bodySize, len(message) - 1):
+            remoter = serving.Remoter(
+                ha=("127.0.0.1", serverPort),
+                ca=("127.0.0.1", clientPort),
+                cs=None,
+            )
+            remoter.rxbs.extend(message[:cut])
+            remoter.cutoff = True
+            reactant = directing.Reactant(hab=bob, remoter=remoter)
+            assert not reactant.msgInProgress
+
+            dog = reactant.msgDo(tymth=lambda: 0.0, tock=0.0)
+            assert next(dog) == 0.0  # primes reactant msgDo generator fn
+            assert next(dog) == 0.0  # runs reactant msgDo generator fn
+
+            # EOF turns the incomplete final message into deterministic failure
+            assert not reactant.msgInProgress
+            assert not reactant.rxDrained
+            assert reactant.rxFailed
+            assert isinstance(reactant.rxError, kering.ShortageError)
+            assert not remoter.rxbs
+            dog.close()
+
+
+def test_reactant_finishes_message_split_before_cutoff(unused_tcp_port_factory):
+    with habbing.openHby(name="alice-split", temp=True) as aliceHby, \
+            habbing.openHby(name="bob-split", temp=True) as bobHby:
+        alice = aliceHby.makeHab(name="alice-split")
+        bob = bobHby.makeHab(name="bob-split")
+        message = alice.makeOwnEvent(sn=0)
+        split = len(message) // 2
+        serverPort = unused_tcp_port_factory()
+        clientPort = unused_tcp_port_factory()
+
+        # feed only the first half while the connection remains open
+        remoter = serving.Remoter(
+            ha=("127.0.0.1", serverPort),
+            ca=("127.0.0.1", clientPort),
+            cs=None,
+        )
+        remoter.rxbs.extend(message[:split])
+        reactant = directing.Reactant(hab=bob, remoter=remoter)
+        dog = reactant.msgDo(tymth=lambda: 0.0, tock=0.0)
+
+        assert next(dog) == 0.0  # primes reactant msgDo generator fn
+        assert next(dog) == 0.0  # runs reactant msgDo generator fn
+        # parser remains in progress while waiting for the remaining bytes
+        assert reactant.msgInProgress
+        assert not reactant.rxDrained
+        assert not reactant.rxFailed
+
+        # receiving of final bytes plus EOF let the active message reach its boundary
+        remoter.rxbs.extend(message[split:])
+        remoter.cutoff = True
+        assert next(dog) == 0.0
+        # complete boundary is drained instead of failed
+        assert not reactant.msgInProgress
+        assert reactant.rxDrained
+        assert not reactant.rxFailed
+        assert alice.pre in reactant.kevery.kevers
+        dog.close()
+
+
+def test_reactant_close_resets_message_in_progress(unused_tcp_port_factory):
+    with habbing.openHby(name="alice-close-message", temp=True) as aliceHby, \
+            habbing.openHby(name="bob-close-message", temp=True) as bobHby:
+        alice = aliceHby.makeHab(name="alice-close-message")
+        bob = bobHby.makeHab(name="bob-close-message")
+        message = alice.makeOwnEvent(sn=0)
+        serverPort = unused_tcp_port_factory()
+        clientPort = unused_tcp_port_factory()
+
+        remoter = serving.Remoter(
+            ha=("127.0.0.1", serverPort),
+            ca=("127.0.0.1", clientPort),
+            cs=None,
+        )
+        remoter.rxbs.extend(message[:len(message) // 2])
+        reactant = directing.Reactant(hab=bob, remoter=remoter)
+        dog = reactant.msgDo(tymth=lambda: 0.0, tock=0.0)
+
+        # start parsing an incomplete message
+        assert next(dog) == 0.0
+        assert next(dog) == 0.0
+        assert reactant.msgInProgress
+
+        # forced parser teardown clears progress in finally
+        dog.close()
+        assert not reactant.msgInProgress
+
+
+def test_directant_retains_buffered_input_after_cutoff(unused_tcp_port_factory):
+    with habbing.openHby(name="alice-close", temp=True) as aliceHby, \
+            habbing.openHby(name="bob-close", temp=True) as bobHby:
+        alice = aliceHby.makeHab(name="alice-close")
+        bob = bobHby.makeHab(name="bob-close")
+        serverPort = unused_tcp_port_factory()
+        clientPort = unused_tcp_port_factory()
+
+        remoter = serving.Remoter(
+            ha=("127.0.0.1", serverPort),
+            ca=("127.0.0.1", clientPort),
+            cs=None,
+        )
+        remoter.rxbs.extend(alice.makeOwnEvent(sn=0))
+        remoter.cutoff = True
+        ca = ("127.0.0.1", clientPort)
+
+        server = serving.Server()
+        server.ixes[ca] = remoter
+        directant = directing.Directant(hab=bob, server=server)
+        doist = doing.Doist(tock=0.03125, limit=1.0,
+                            doers=[directant])
+        doist.enter()
+
+        try:
+            # cutoff with buffered input creates and retains a Reactant
+            doist.recur()
+            assert ca in server.ixes
+            assert ca in directant.rants
+            rant = directant.rants[ca]
+            assert not rant.rxDrained
+
+            # recur until parser drain allows connection teardown
+            recurUntil(
+                doist,
+                condition=lambda: (ca not in server.ixes and
+                                   ca not in directant.rants),
+                message="cutoff connection did not drain",
+            )
+
+            # teardown occurs only after successful message processing
+            assert ca not in directant.rants
+            assert rant.rxDrained
+            assert not rant.rxFailed
+            assert alice.pre in rant.kevery.kevers
+        finally:
+            doist.exit()
+            server.close()
+
+
+def test_directant_closes_cutoff_without_buffered_input(unused_tcp_port_factory):
+    with habbing.openHby(name="bob-empty-close", temp=True) as bobHby:
+        bob = bobHby.makeHab(name="bob-empty-close")
+        serverPort = unused_tcp_port_factory()
+        clientPort = unused_tcp_port_factory()
+
+        remoter = serving.Remoter(
+            ha=("127.0.0.1", serverPort),
+            ca=("127.0.0.1", clientPort),
+            cs=None,
+        )
+        remoter.cutoff = True
+        ca = ("127.0.0.1", clientPort)
+
+        server = serving.Server()
+        server.ixes[ca] = remoter
+        directant = directing.Directant(hab=bob, server=server)
+        directant.wind(lambda: 0.0)
+        dog = directant.serviceDo(tymth=lambda: 0.0, tock=0.0)
+
+        # cutoff without buffered input needs no Reactant
+        assert next(dog) is None
+        assert next(dog) is None
+        # service closes both the remoter and lifecycle entry immediately
+        assert ca not in server.ixes
+        assert ca not in directant.rants
+
+        dog.close()
+        server.close()
+
+
+def test_directant_timeout_preserves_buffered_input_for_drain(unused_tcp_port_factory):
+    with habbing.openHby(name="alice-timeout", temp=True) as aliceHby, \
+            habbing.openHby(name="bob-timeout", temp=True) as bobHby:
+        alice = aliceHby.makeHab(name="alice-timeout")
+        bob = bobHby.makeHab(name="bob-timeout")
+        serverPort = unused_tcp_port_factory()
+        clientPort = unused_tcp_port_factory()
+
+        ca = ("127.0.0.1", clientPort)
+        # peerSocket keeps the far end of the socket open so cutoff comes from timeout instead of EOF
+        remoterSocket, peerSocket = socket.socketpair()
+        remoter = serving.Remoter(
+            ha=("127.0.0.1", serverPort),
+            ca=ca,
+            cs=remoterSocket,
+            tymeout=1.0,
+        )
+        remoter.rxbs.extend(alice.makeOwnEvent(sn=0))
+        now = [0.0]
+
+        server = serving.Server()
+        server.ixes[ca] = remoter
+        directant = directing.Directant(hab=bob, server=server)
+        directant.wind(lambda: now[0])
+        # expire the timeout while received bytes still need parsing
+        now[0] = 2.0
+        dog = directant.serviceDo(tymth=lambda: now[0], tock=0.0)
+
+        assert next(dog) is None
+        assert next(dog) is None
+        # timeout becomes cutoff but does not bypass buffered-input drain
+        assert remoter.cutoff
+        assert ca in server.ixes
+        assert ca in directant.rants
+        assert not directant.rants[ca].rxDrained
+
+        dog.close()
+        server.close()
+        peerSocket.close()
 
 
 def test_runcontroller_demo():
