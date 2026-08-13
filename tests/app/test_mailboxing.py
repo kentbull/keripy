@@ -13,13 +13,13 @@ import pytest
 from hio.help import decking
 
 from keri.app import openHab, openHby
-from keri.app.forwarding import AuthorizedForwardHandler
+from keri.app.forwarding import AuthorizedForwardHandler, _exchangeVersion
 from keri.app.mailboxing import MailboxAddRemoveEnd, _mailboxAdminPath, setupMailbox
 from keri.app.configing import Configer
 from keri.app.storing import Mailboxer
 from keri.core import Kevery, Pather, Salter, exchange, parsing, routing, serdering
 from keri.kering import Kinds, Roles
-from keri.peer import specialExchange
+from keri.peer import Exchanger, specialExchange
 
 
 mailbox_start = importlib.import_module("keri.cli.commands.mailbox.start")
@@ -671,6 +671,146 @@ def test_authorized_forward_handler_gates_storage_on_recipient_authorization():
             forward()
             assert len(list(mbx.cloneTopicIter(topic=f"{recp.pre}/echo"))) == 1, (
                 "forwarded storage continued after the recipient cut the mailbox role"
+            )
+        finally:
+            mbx.close(clear=True)
+
+
+def _mailbox_host_runtime(hby, hab, mbx, aids=None):
+    """Build the ingress stack exactly as `setupMailbox` builds it.
+
+    Mirrors `setupMailbox`'s parser/exchanger/kevery wiring so these tests
+    exercise the composition the running host uses, without binding a socket.
+    """
+    forwarder = AuthorizedForwardHandler(hby=hby, mbx=mbx, mailboxAid=hab.pre)
+    exchanger = Exchanger(hby=hby, handlers=[forwarder])
+    cues = decking.Deck()
+    rvy = routing.Revery(db=hby.db, cues=cues)
+    kvy = Kevery(db=hby.db, lax=True, local=False, rvy=rvy, cues=cues)
+    kvy.registerReplyRoutes(router=rvy.rtr)
+    parser = parsing.Parser(framed=True, kvy=kvy, exc=exchanger, rvy=rvy,
+                            version=hby.version)
+    return parser, kvy, rvy
+
+
+def _forward_message(sender, recipient, topic="echo", version=None):
+    """Build one `/fwd` wire message the way `forwarding.Poster.forward` does."""
+    kwa, gvrsn = _exchangeVersion(version=version, kind=None)
+    inner = exchange(route="/echo", attributes=dict(msg="hello"), sender=sender.pre, **kwa)
+    innerAtc = sender.endorse(inner, last=False, framed=False, gvrsn=gvrsn)
+    del innerAtc[:inner.size]
+
+    evt = bytearray(inner.raw)
+    evt.extend(innerAtc)
+    fwd, atc = specialExchange(sender=sender.pre,
+                               route="/fwd",
+                               modifiers=dict(pre=recipient.pre, topic=topic),
+                               attributes={},
+                               embeds=dict(evt=evt),
+                               **kwa)
+    msg = bytearray(sender.endorse(serder=fwd, last=False, framed=True, gvrsn=gvrsn))
+    msg.extend(atc)
+    return msg
+
+
+def test_mailbox_host_ingress_delivers_a_forwarded_message_to_the_handler():
+    """A `/fwd` message must survive the host's own parser and reach mailbox storage.
+
+    `setupMailbox` pins the ingress parser genus to `hby.version` and takes no
+    version override, while `setupWitness` resolves
+    `parser_version = kwa.get("version", hby.version)` (`indirecting.py:88`) and
+    `kli mailbox start` has no `--version` flag.  At the v2 default the `/fwd`
+    envelope built by `forwarding.Poster` fails attachment extraction, so the
+    parser discards it and `AuthorizedForwardHandler` is never called -- the
+    host stores nothing.
+
+    Pinning this parser to `Vrsn_1_0`, the genus every other
+    `scripts/demo/basic/` script runs at, makes the same message store.
+    """
+    with openHby(name="mbx-host-ingress-provider",
+                 salt=Salter(raw=b"mailbox-ingress-prov").qb64) as providerHby, \
+            openHby(name="mbx-host-ingress-peers",
+                    salt=Salter(raw=b"mailbox-ingress-peer").qb64) as peerHby:
+        mailboxHab = providerHby.makeHab(name="mbx", transferable=False)
+        sender = peerHby.makeHab(name="sender", transferable=True)
+        recipient = peerHby.makeHab(name="recipient", transferable=True)
+
+        mbx = Mailboxer(temp=True)
+        try:
+            parser, kvy, rvy = _mailbox_host_runtime(providerHby, mailboxHab, mbx)
+
+            def ingest(raw):
+                parser.parse(ims=bytearray(raw), local=False)
+                kvy.processEscrows()
+                rvy.processEscrowReply()
+
+            ingest(sender.replay())
+            ingest(recipient.replay())
+            ingest(recipient.makeEndRole(mailboxHab.pre, Roles.mailbox, allow=True))
+            assert providerHby.db.ends.get(
+                keys=(recipient.pre, Roles.mailbox, mailboxHab.pre)).allowed
+
+            ingest(_forward_message(sender, recipient))
+
+            stored = list(mbx.cloneTopicIter(topic=f"{recipient.pre}/echo"))
+            assert len(stored) == 1, (
+                "the mailbox host discarded a well-formed /fwd before it reached "
+                "AuthorizedForwardHandler; setupMailbox pins the parser genus to "
+                f"hby.version ({providerHby.version}) with no way to select the "
+                "genus the /fwd path actually works at"
+            )
+        finally:
+            mbx.close(clear=True)
+
+
+def test_setup_mailbox_aids_restricts_which_recipients_get_forwarded_storage():
+    """`setupMailbox(aids=...)` must constrain the recipients the host stores for.
+
+    The parameter exists on `setupMailbox` but is handed only to `Respondant`
+    (`mailboxing.py:253`); `AuthorizedForwardHandler` never sees it.  The gate's
+    sole input is the `ends.` record, and that record is writable by any
+    unauthenticated peer through the host's own `/` CESR ingress -- the same
+    `Kevery(lax=True)` plus `Revery` this test drives -- with no visit to the
+    `/mailboxes` admin endpoint.  So the storage gate is self-service, and an
+    operator has no supported way to say which AIDs this host serves.
+    """
+    with openHby(name="mbx-aids-provider",
+                 salt=Salter(raw=b"mailbox-aids-provider").qb64) as providerHby, \
+            openHby(name="mbx-aids-peers",
+                    salt=Salter(raw=b"mailbox-aids-peer0").qb64) as peerHby:
+        mailboxHab = providerHby.makeHab(name="mbx", transferable=False)
+        customer = peerHby.makeHab(name="customer", transferable=True)
+        stranger = peerHby.makeHab(name="stranger", transferable=True)
+
+        mbx = Mailboxer(temp=True)
+        try:
+            # The operator intends to serve `customer` only.
+            forwarder = AuthorizedForwardHandler(hby=providerHby, mbx=mbx,
+                                                 mailboxAid=mailboxHab.pre)
+            exchanger = Exchanger(hby=providerHby, handlers=[forwarder])
+            cues = decking.Deck()
+            rvy = routing.Revery(db=providerHby.db, cues=cues)
+            kvy = Kevery(db=providerHby.db, lax=True, local=False, rvy=rvy, cues=cues)
+            kvy.registerReplyRoutes(router=rvy.rtr)
+            parser = parsing.Parser(framed=True, kvy=kvy, exc=exchanger, rvy=rvy,
+                                    version=providerHby.version)
+
+            def ingest(raw):
+                parser.parse(ims=bytearray(raw), local=False)
+                kvy.processEscrows()
+                rvy.processEscrowReply()
+
+            # `stranger` never touches /mailboxes.  It pushes its own KEL and a
+            # self-signed /end/role/add straight into the public CESR ingress.
+            ingest(stranger.replay())
+            ingest(stranger.makeEndRole(mailboxHab.pre, Roles.mailbox, allow=True))
+
+            end = providerHby.db.ends.get(
+                keys=(stranger.pre, Roles.mailbox, mailboxHab.pre))
+            assert end is None or not end.allowed, (
+                "an AID outside the operator's aids list wrote itself an allowed "
+                "mailbox end role through the host's unauthenticated / ingress; "
+                "setupMailbox(aids=...) never reaches AuthorizedForwardHandler"
             )
         finally:
             mbx.close(clear=True)
