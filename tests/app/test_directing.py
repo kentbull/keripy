@@ -6,6 +6,7 @@ tests.db.dbing module
 
 import logging
 import os
+import socket
 
 import pytest
 
@@ -41,6 +42,21 @@ def make_remoter(ims=b"", *, cutoff=False, cs=None, tymeout=None):
     remoter.rxbs.extend(ims)
     remoter.cutoff = cutoff
     return remoter
+
+
+def drain_socket(sock):
+    """Return all currently readable bytes without blocking."""
+    sock.setblocking(False)
+    received = bytearray()
+    while True:
+        try:
+            data = sock.recv(4096)
+        except BlockingIOError:
+            break
+        if not data:
+            break
+        received.extend(data)
+    return bytes(received)
 
 
 def test_directing_basic():
@@ -346,6 +362,127 @@ def test_directant_closes_cutoff_without_buffered_input(direct_habs):
 
     dog.close()
     server.close()
+
+
+def test_directant_timeout_preserves_buffered_input_for_drain(direct_habs):
+    alice, bob = direct_habs
+    message = alice.makeOwnEvent(sn=0)
+    split = len(message) // 2
+
+    # start parsing before the remaining bytes reach the Remoter
+    remoterSocket, peerSocket = socket.socketpair()
+    remoter = make_remoter(message[:split],
+                           cs=remoterSocket, tymeout=0.03125)
+    ca = remoter.ca
+
+    server = serving.Server(host="127.0.0.1", port=0)
+    directant = directing.Directant(hab=bob, server=server)
+    doist = doing.Doist(tock=0.03125, limit=1.0,
+                        doers=[directant, serving.ServerDoer(server=server)])
+    doist.enter()
+    remoter.wind(doist.tymen())
+    server.ixes[ca] = remoter
+
+    try:
+        # create the Reactant before the inactivity timeout expires
+        doist.recur()
+        assert ca in directant.rants
+        rant = directant.rants[ca]
+
+        # final receive finds bytes and refreshes rather than closing the input
+        peerSocket.sendall(message[split:])
+        doist.recur()
+        assert ca not in directant.closeReq
+        assert ca in server.ixes
+        assert ca in directant.rants
+        assert rant.messageInProgress
+        assert remoter.rxbs
+
+        # the next timeout closes after parsing and response output both drain
+        recurUntil(
+            doist,
+            condition=lambda: ca not in server.ixes,
+            message="timed-out connection did not finish draining",
+        )
+
+        # accepted input reaches a complete CESR boundary before teardown
+        assert alice.pre in rant.kevery.kevers
+        assert rant.rxDrained
+        assert b'"t":"rct"' in drain_socket(peerSocket)
+        assert ca not in directant.rants
+    finally:
+        doist.exit()
+        server.close()
+        peerSocket.close()
+
+
+def test_directant_timeout_drains_queued_output(direct_habs):
+    _, bob = direct_habs
+
+    remoterSocket, peerSocket = socket.socketpair()
+    remoter = make_remoter(cs=remoterSocket, tymeout=0.03125)
+    response = b"queued outbound bytes"
+    remoter.tx(response)
+    ca = remoter.ca
+
+    server = serving.Server(host="127.0.0.1", port=0)
+    directant = directing.Directant(hab=bob, server=server)
+    doist = doing.Doist(tock=0.03125, limit=1.0,
+                        doers=[directant, serving.ServerDoer(server=server)])
+    doist.enter()
+    remoter.wind(doist.tymen())
+    server.ixes[ca] = remoter
+
+    try:
+        # make the first service recurrence observe an expired connection
+        doist.tick()
+        recurUntil(
+            doist,
+            condition=lambda: ca not in server.ixes,
+            message="timed-out connection did not drain queued output",
+        )
+
+        assert drain_socket(peerSocket) == response
+        assert not remoter.txbs
+        assert ca not in directant.rants
+    finally:
+        doist.exit()
+        peerSocket.close()
+
+
+def test_directant_timeout_delivers_receipt_for_buffered_input(direct_habs):
+    alice, bob = direct_habs
+
+    remoterSocket, peerSocket = socket.socketpair()
+    remoter = make_remoter(alice.makeOwnEvent(sn=0), cs=remoterSocket,
+                           tymeout=0.03125)
+    ca = remoter.ca
+
+    server = serving.Server(host="127.0.0.1", port=0)
+    directant = directing.Directant(hab=bob, server=server)
+    doist = doing.Doist(tock=0.03125, limit=1.0,
+                        doers=[directant, serving.ServerDoer(server=server)])
+    doist.enter()
+    remoter.wind(doist.tymen())
+    server.ixes[ca] = remoter
+
+    try:
+        # timeout precedes Reactant construction but does not discard its response
+        doist.tick()
+        recurUntil(
+            doist,
+            condition=lambda: ca not in server.ixes,
+            message="timed-out connection did not deliver its receipt",
+        )
+        received = drain_socket(peerSocket)
+
+        assert alice.pre in bob.kevers
+        assert b'"t":"rct"' in received
+        assert not remoter.txbs
+        assert ca not in directant.rants
+    finally:
+        doist.exit()
+        peerSocket.close()
 
 
 def test_runcontroller_demo():

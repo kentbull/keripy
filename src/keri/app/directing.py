@@ -312,7 +312,8 @@ class Directant(doing.DoDoer):
     not a parsing completion signal for already accepted bytes from the socket.
     When buffered input exists, ``serviceDo`` preserves or creates the Reactant
     and waits for ``rxDrained`` or ``rxFailed`` before removing the connection.
-    A close request with no buffered input and no Reactant may close immediately.
+    Local timeout also preserves ordinary HIO send service until queued output
+    drains; peer cutoff remains terminal for output on this HIO version.
 
     Doer generator methods:
         .serviceDo
@@ -321,7 +322,7 @@ class Directant(doing.DoDoer):
         hab: Local habitat whose database and routing context process messages.
         server: TCP server containing active Remoters in ``server.ixes``.
         rants: Reactants indexed by their Remoter connection addresses.
-        closeReq: Connection addresses whose receive side is closed.
+        closeReq: Connections whose owner-level receive lifecycle is closed.
     """
 
     def __init__(self, hab, server, verifier=None, exchanger=None, doers=None, **kwa):
@@ -368,8 +369,9 @@ class Directant(doing.DoDoer):
 
         Close-requested connections remain scheduled until their Reactant
         reports either a successful empty message boundary through ``rxDrained``
-        or terminal incomplete input through ``rxFailed``. Peer EOF is reported
-        by ``cutoff``; local timeout uses separate receive-closed state.
+        or terminal incomplete input through ``rxFailed``. Local timeout does
+        not set HIO ``cutoff``, so the normal ServerDoer may drain response cues
+        and ``txbs`` before removal. Peer EOF remains the terminal ``cutoff`` path.
 
         Yields:
             Once per connection-supervision recurrence.
@@ -389,13 +391,14 @@ class Directant(doing.DoDoer):
                     if ix.cutoff:
                         self.closeReq.add(ca)
                     elif ix.tymer.expired:
-                        ix.shutdownReceive()
+                        # Legacy shutdownReceive makes HIO cutoff suppress sends.
                         self.closeReq.add(ca)
 
                 # Create - add Reactants for new connections
                 if ca not in self.rants:  # create Reactant when input needs parsing
                     if ca in self.closeReq and not ix.rxbs:
-                        self.closeConnection(ca)
+                        if ix.cutoff or not ix.txbs:
+                            self.closeConnection(ca)
                         continue
 
                     rant = Reactant(tymth=self.tymth, hab=self.hab, verifier=self.verifier,
@@ -408,7 +411,9 @@ class Directant(doing.DoDoer):
                 if ca in self.closeReq:
                     rant = self.rants[ca]
                     rant.rxClosed = True
-                    if rant.rxDrained or rant.rxFailed:
+                    rxDone = rant.rxDrained or rant.rxFailed
+                    outputDrained = not rant.kevery.cues and not ix.txbs
+                    if rxDone and (outputDrained or ix.cutoff):
                         self.closeConnection(ca)  # also removes rant
 
             yield tock
@@ -417,7 +422,8 @@ class Directant(doing.DoDoer):
         """Remove a terminal Remoter and its Reactant from the scheduler.
 
         ``serviceDo`` calls this only when no buffered input requires a parser,
-        or after the Reactant has reported ``rxDrained`` or ``rxFailed``.
+        or after the Reactant has reported ``rxDrained`` or ``rxFailed``. A
+        local-timeout close also requires empty response cues and ``txbs``.
 
         Parameters:
             ca: Connection address used as the key in ``server.ixes`` and
