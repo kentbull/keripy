@@ -350,6 +350,10 @@ class WitnessReceiptor(doing.DoDoer):
     waits for receipts to arrive in `hab.db` (via mailbox processing), then
     propagates the full receipt set across the witness group.
 
+    A receipt completion cue means the original receipts exist locally and the
+    subsequent fan-out to the other witnesses reached each messenger's local
+    transport-drain boundary. It does not mean remote witness processing completion.
+
     Could be enhanced to have a `once` method that runs once and cleans up
     and an `all` method that runs and waits for more messages to receipt.
     """
@@ -384,7 +388,7 @@ class WitnessReceiptor(doing.DoDoer):
         posts the event, waits for receipts to be stored in `hab.db`, then
         shares the full receipt set across witnesses. If `force` is false and
         all receipts already exist, it skips resubmission.
-        Pushes the original request to self.cues to signal completion
+        Terminal messenger errors are logged and suppress the completion cue.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -420,6 +424,7 @@ class WitnessReceiptor(doing.DoDoer):
                 # Check to see if we already have all the receipts we need for this event
                 wigs = hab.db.getWigs(dgkey)
                 completed = len(wigs) == len(wits)
+                failed = False
                 if len(wigs) != len(wits):  # We have all the receipts, skip
                     for idx, witer in enumerate(witers):
                         wit = wits[idx]
@@ -435,11 +440,23 @@ class WitnessReceiptor(doing.DoDoer):
                         witer.msgs.append(bytearray(msg))  # make a copy
                         _ = (yield tock)
 
-                    while True: # wait for all receipts to arrive
+                    while True:  # wait for all receipts to arrive
                         wigs = hab.db.getWigs(dgkey)
                         if len(wigs) == len(wits):
                             break
+
+                        failure = next((witer for witer in witers
+                                        if witer.error is not None), None)
+                        if failure is not None:
+                            logger.error(f"Witness delivery to {failure.wit} failed: "
+                                         f"{failure.error}")
+                            failed = True
+                            break
                         _ = yield tock
+
+                if failed:
+                    self.remove(witers)
+                    continue
 
                 # If we started with all our receipts, exit unless told to force resubmit of all receipts
                 if completed and not self.force:
@@ -480,18 +497,24 @@ class WitnessReceiptor(doing.DoDoer):
                     _ = (yield tock)
 
                 while True:
-                    done = True
-                    for witer in witers:
-                        if not witer.idle:
-                            yield self.idleTock
-                            done = False
-                            break
-                    if done:
+                    failure = next((witer for witer in witers
+                                    if witer.error is not None), None)
+                    if failure is not None:
+                        logger.error(f"Witness delivery to {failure.wit} failed: "
+                                     f"{failure.error}")
+                        failed = True
                         break
+                    if all(witer.idle for witer in witers):
+                        break
+                    yield self.idleTock
 
                 self.remove(witers)
 
+                if failed:
+                    continue
+
                 self.cues.push(evt)
+
                 yield tock
 
             yield tock
@@ -536,6 +559,7 @@ class WitnessInquisitor(doing.DoDoer):
         For all msgs, select a random witness from Habitat's current set of witnesses
         send the msg and process all responses (KEL replays, RCTs, etc)
         Pushes the raw sent message to self.sent to signal completion.
+        Terminal delivery failure removes the Messenger without reporting sent.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -597,8 +621,14 @@ class WitnessInquisitor(doing.DoDoer):
 
             witer.msgs.append(bytearray(msg))
 
-            while not witer.sent:
+            while not witer.sent and witer.error is None:
                 yield tock
+
+            if witer.error is not None:
+                logger.error(f"Witness query delivery to {witer.wit} failed: "
+                             f"{witer.error}")
+                self.remove([witer])
+                continue
 
             self.sent.append(witer.sent.popleft())
 
@@ -663,7 +693,8 @@ class WitnessPublisher(doing.DoDoer):
     def sendDo(self, tymth=None, tock=0.0, **opts):
         """Doer loop that sends queued messages to each witness.
 
-        Pushes the original request to self.cues to signal completion
+        Pushes the request to `cues` only when every Messenger becomes idle.
+        Terminal delivery failure removes all children without reporting success.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -690,12 +721,21 @@ class WitnessPublisher(doing.DoDoer):
 
                     _ = (yield tock)
 
-                while witers:
-                    witer = witers.pop()
-                    while not witer.idle:
+                failed = False
+                for witer in witers:
+                    while not witer.idle and witer.error is None:
                         _ = (yield tock)
 
+                    if witer.error is not None:
+                        logger.error(f"Witness publication to {witer.wit} failed: "
+                                     f"{witer.error}")
+                        failed = True
+
                 self.remove(witers)
+
+                if failed:
+                    continue
+
                 self.cues.push(evt)
 
                 yield tock

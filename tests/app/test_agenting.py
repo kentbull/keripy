@@ -53,6 +53,133 @@ def test_receiptor_tocks_are_generator_local():
         query.close()
 
 
+def test_witness_receiptor_releases_failed_messenger():
+    with habbing.openHby(name="receiptor-failure", temp=True) as hby:
+        wit = hby.makeHab(name="offline-witness", transferable=False)
+        hab = hby.makeHab(name="controller", transferable=True,
+                          wits=[wit.pre],
+                          data=[{"payload": "x" * (1024 * 1024)}])
+
+        server, doist = open_tcp_server_doist(limit=2.0)
+
+        url = f"tcp://127.0.0.1:{server.ha[1]}"
+        hby.db.ends.pin(keys=(wit.pre, kering.Roles.controller, wit.pre),
+                        val=basing.EndpointRecord(allowed=True))
+        hby.db.locs.pin(keys=(wit.pre, kering.Schemes.tcp),
+                       val=basing.LocationRecord(url=url))
+
+        receiptor = agenting.WitnessReceiptor(hby=hby)
+        receiptor.msgs.append(dict(pre=hab.pre))
+        closed = []
+        beats = []
+
+        @doing.doize(tock=0.03125)
+        def closePeer(tymth=None, tock=0.0, **kwa):
+            while not server.ixes or not any(
+                    isinstance(doer, agenting.TCPMessenger) and
+                    doer.client is not None and doer.client.cs is not None
+                    for doer in receiptor.doers):
+                yield tock
+
+            # close the real peer before its receipt can complete the operation
+            messenger = next(doer for doer in receiptor.doers
+                             if isinstance(doer, agenting.TCPMessenger))
+            messenger.client.cs.setsockopt(socket.SOL_SOCKET,
+                                           socket.SO_SNDBUF, 4096)
+            server.removeIx(next(iter(server.ixes)))
+            closed.append(True)
+            while True:
+                yield tock
+
+        @doing.doize(tock=0.03125)
+        def heartbeat(tymth=None, tock=0.0, **kwa):
+            while True:
+                beats.append(tymth())
+                yield tock
+
+        doist.extend([closePeer, heartbeat, receiptor])
+
+        try:
+            # terminal delivery releases the child without claiming completion
+            recurUntil(
+                doist,
+                condition=lambda: closed and not any(
+                    isinstance(doer, agenting.TCPMessenger)
+                    for doer in receiptor.doers),
+                message="Receiptor did not release the failed messenger",
+            )
+            assert not receiptor.cues
+            before = len(beats)
+            doist.recur()
+            assert len(beats) > before
+        finally:
+            doist.exit()
+
+
+def test_witness_inquisitor_contains_failed_messenger(monkeypatch):
+    with habbing.openHby(name="inquisitor-failure", temp=True) as hby:
+        wit = hby.makeHab(name="offline-witness", transferable=False)
+        hab = hby.makeHab(name="controller", transferable=True,
+                          wits=[wit.pre])
+        messenger = agenting.TCPMessenger(
+            hab=hab,
+            wit=wit.pre,
+            url="tcp://127.0.0.1:1",
+        )
+        messenger.error = kering.ClosedError("connection closed")
+        monkeypatch.setattr(agenting, "messenger",
+                            lambda hab, pre: messenger)
+
+        inquisitor = agenting.WitnessInquisitor(hby=hby)
+        inquisitor.query(pre=hab.pre, src=hab.pre, wits=[wit.pre])
+        doist = doing.Doist(tock=0.03125, limit=1.0,
+                            doers=[inquisitor])
+        doist.enter()
+
+        try:
+            # terminal failure consumes the request without claiming it was sent
+            doist.recur()
+
+            assert not inquisitor.msgs
+            assert not inquisitor.sent
+            assert messenger not in inquisitor.doers
+        finally:
+            doist.exit()
+
+
+def test_witness_publisher_contains_failed_messenger(monkeypatch):
+    with habbing.openHby(name="publisher-failure", temp=True) as hby:
+        wit = hby.makeHab(name="offline-witness", transferable=False)
+        hab = hby.makeHab(name="controller", transferable=True,
+                          wits=[wit.pre])
+        messenger = agenting.TCPMessenger(
+            hab=hab,
+            wit=wit.pre,
+            url="tcp://127.0.0.1:1",
+        )
+        messenger.error = kering.ClosedError("connection closed")
+        monkeypatch.setattr(agenting, "messenger",
+                            lambda hab, pre: messenger)
+
+        publisher = agenting.WitnessPublisher(hby=hby)
+        publisher.msgs.append(dict(pre=hab.pre,
+                                   msg=hab.makeOwnInception()))
+        doist = doing.Doist(tock=0.03125, limit=1.0,
+                            doers=[publisher])
+        doist.enter()
+
+        try:
+            # terminal failure removes every child and suppresses completion
+            doist.recur()
+            doist.recur()
+
+            assert not publisher.msgs
+            assert not publisher.cues
+            assert messenger not in publisher.doers
+        finally:
+            doist.exit()
+
+
 def test_witness_receiptor(seeder):
     with habbing.openHby(name="wan", salt=core.Salter(raw=b'wann-the-witness').qb64) as wanHby, \
             habbing.openHby(name="wil", salt=core.Salter(raw=b'will-the-witness').qb64) as wilHby, \

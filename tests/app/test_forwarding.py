@@ -8,10 +8,10 @@ import time
 
 from hio.base import doing, tyming
 
-from keri import core
+from keri import core, kering
 from keri.core import coring, eventing, parsing, serdering
 
-from keri.app import forwarding, habbing, indirecting, storing
+from keri.app import agenting, forwarding, habbing, indirecting, storing
 
 from keri.peer import exchanging
 
@@ -76,6 +76,47 @@ def test_postman(seeder):
         assert serder.ked["t"] == coring.Ilks.exn
         assert serder.ked["r"] == "/echo"
         assert serder.ked["a"] == dict(msg="test")
+
+
+def test_poster_contains_failed_messenger(monkeypatch):
+    with habbing.openHby(name="poster-failure", temp=True) as hby:
+        hab = hby.makeHab(name="sender", transferable=True)
+        recp = hby.makeHab(name="recipient", transferable=True)
+        messenger = agenting.TCPMessenger(
+            hab=hab,
+            wit=recp.pre,
+            url="tcp://127.0.0.1:1",
+        )
+        messenger.error = kering.ClosedError("connection closed")
+        monkeypatch.setattr(agenting, "messengerFrom",
+                            lambda hab, pre, urls: messenger)
+        monkeypatch.setattr(
+            hab,
+            "endsFor",
+            lambda pre: {
+                kering.Roles.controller: {
+                    recp.pre: {
+                        kering.Schemes.tcp: "tcp://127.0.0.1:1",
+                    },
+                },
+            },
+        )
+
+        poster = forwarding.Poster(hby=hby)
+        poster.send(hab=hab, dest=recp.pre, topic="test",
+                    serder=hab.kever.serder)
+        doist = doing.Doist(tock=0.03125, limit=1.0, doers=[poster])
+        doist.enter()
+
+        try:
+            # terminal failure cleans up the child without reporting delivery
+            doist.recur()
+
+            assert not poster.evts
+            assert not poster.cues
+            assert messenger not in poster.doers
+        finally:
+            doist.exit()
 
 
 def test_forward_handler():
