@@ -721,7 +721,14 @@ class WitnessPublisher(doing.DoDoer):
 
 
 class TCPMessenger(doing.DoDoer):
-    """Send outbound CESR messages to a witness via TCP and parse inbound receipts."""
+    """Serially send CESR messages to a witness and parse inbound receipts.
+
+    Only one message is removed from ``msgs`` at a time. That message remains
+    ``messageInProgress`` until its bytes drain from the local TCP send buffer
+    or a terminal transport failure is recorded. The next message is not
+    dequeued before that terminal outcome. Local drain does not prove remote
+    receipt or processing.
+    """
 
     def __init__(self, hab, wit, url, msgs=None, sent=None, doers=None, **kwa):
         """Initialize TCP messenger with queues and parser wiring.
@@ -731,14 +738,20 @@ class TCPMessenger(doing.DoDoer):
             wit (str): qb64 witness identifier.
             url (str): tcp endpoint URL for the witness.
             msgs (Deck | None): outbound message queue.
-            sent (Deck | None): sent message queue.
+            sent (Deck | None): consumable successful-drain notification queue.
+
+        Attributes:
+            messageInProgress (bool): True while the sole dequeued message is
+                awaiting successful local transport drain.
         """
         self.hab = hab
         self.wit = wit
         self.url = url
-        self.posted = 0
+        self.messageInProgress = False
         self.msgs = msgs if msgs is not None else decking.Deck()
         self.sent = sent if sent is not None else decking.Deck()
+        self.client = None
+        self.error = None
         self.parser = None
         doers = doers if doers is not None else []
         doers.extend([doing.doify(self.receiptDo)])
@@ -749,7 +762,18 @@ class TCPMessenger(doing.DoDoer):
         super(TCPMessenger, self).__init__(doers=doers)
 
     def receiptDo(self, tymth=None, tock=0.0, **kwa):
-        """Doer loop that sends queued messages over TCP."""
+        """Send queued messages one at a time to local transport completion.
+
+        A message becomes in progress when dequeued and remains so while HIO's
+        local ``txbs`` buffer contains any of its bytes. Successful drain adds
+        a notification to ``sent`` before admitting the next message. Cutoff
+        with unsent bytes records a terminal error instead of reporting idle.
+
+        ``ClientDoer`` reads from the socket and drains outbound ``client.txbs``.
+
+        Yields:
+            The configured ``tock`` while idle or awaiting transport drain.
+        """
         self.wind(tymth)
         _ = (yield tock)
 
@@ -757,12 +781,12 @@ class TCPMessenger(doing.DoDoer):
         if up.scheme != kering.Schemes.tcp:
             raise ValueError(f"invalid scheme {up.scheme} for TcpWitnesser")
 
-        client = clienting.Client(host=up.hostname, port=up.port)
-        self.parser = parsing.Parser(ims=client.rxbs,
+        self.client = clienting.Client(host=up.hostname, port=up.port)
+        self.parser = parsing.Parser(ims=self.client.rxbs,
                                      framed=True,
                                      kvy=self.kevery)
 
-        clientDoer = clienting.ClientDoer(client=client)
+        clientDoer = clienting.ClientDoer(client=self.client)
         self.extend([clientDoer, doing.doify(self.msgDo)])
 
         while True:
@@ -770,18 +794,31 @@ class TCPMessenger(doing.DoDoer):
                 yield tock
 
             msg = self.msgs.popleft()
-            self.posted += 1
+            self.messageInProgress = True
 
-            client.tx(msg)  # send to connected remote
+            self.client.tx(msg)  # send to connected remote
 
-            while client.txbs:
+            while self.client.txbs:
+                if self.client.cutoff:  # report error on client cutoff
+                    self.error = kering.ClosedError(
+                        f"TCP connection to {self.wit} closed with "
+                        f"{len(self.client.txbs)} unsent bytes"
+                    )
+                    self.messageInProgress = False
+                    return False
                 yield tock
 
             self.sent.append(msg)
+            self.messageInProgress = False
             yield tock
 
     def msgDo(self, tymth=None, tock=0.0, **opts):
-        """Doer loop that parses inbound TCP messages into the Kevery."""
+        """Continuously consume inbound CESR and dispatch it to the Kevery.
+
+        ``parser.ims`` aliases ``client.rxbs``. Advancing the parser removes
+        bytes from that shared receive buffer as it parses messages and
+        attachments, and yields when more input is needed.
+        """
         parser = self.parser.parsator(local=True)
         while True:
             try:
@@ -792,28 +829,49 @@ class TCPMessenger(doing.DoDoer):
 
     @property
     def idle(self):
-        return len(self.sent) == self.posted
+        """Whether no queued or in-progress message awaits local TCP drain."""
+        return (self.error is None and
+                not self.msgs and
+                not self.messageInProgress and
+                (self.client is None or not self.client.txbs))
 
 
 class TCPStreamMessenger(doing.DoDoer):
-    """Stream a CESR message to a witness via TCP and parse inbound receipts."""
+    """Send one CESR message over TCP and terminate at local completion.
 
-    def __init__(self, hab, wit, url, msgs=None, sent=None, doers=None, **kwa):
-        """Initialize TCP stream messenger with queues and parser wiring.
+    Successful local send-buffer drain is retained in ``sent``; cutoff with
+    unsent bytes is retained in ``error``. Either outcome completes this doer
+    and closes its transport and parser children. Local drain does not prove
+    remote receipt or processing.
+    """
+
+    def __init__(self, hab, wit, url, msg=None, msgs=None, sent=None,
+                 doers=None, **kwa):
+        """Initialize with the single message and parser wiring.
 
         Parameters:
             hab (Hab): habitat for KEL parsing and db access.
             wit (str): qb64 witness identifier.
             url (str): tcp endpoint URL for the witness.
-            msgs (Deck | None): outbound message queue.
-            sent (Deck | None): sent message queue.
+            msg (bytes | None): sole CESR message to admit immediately.
+            msgs (Deck | None): queue from which to admit one message.
+            sent (Deck | None): consumable successful-drain notification queue.
+
+        Attributes:
+            messageInProgress (bool): True while the sole dequeued message is
+                awaiting successful local transport drain.
         """
         self.hab = hab
         self.wit = wit
         self.url = url
-        self.posted = 0
+        self.messageInProgress = False
         self.msgs = msgs if msgs is not None else decking.Deck()
+        if msg is not None:
+            self.msgs.append(bytearray(msg))
         self.sent = sent if sent is not None else decking.Deck()
+        self.client = None
+        self.error = None
+        self._terminal = False
         self.parser = None
         doers = doers if doers is not None else []
         doers.extend([doing.doify(self.receiptDo)])
@@ -824,9 +882,17 @@ class TCPStreamMessenger(doing.DoDoer):
         super(TCPStreamMessenger, self).__init__(doers=doers)
 
     def receiptDo(self, tymth=None, tock=0.0, **kwa):
-        """Doer loop that sends queued messages over TCP.
+        """Send the message and stop after local drain or terminal cutoff.
 
-        Pushes the original request to self.sent to signal completion
+        The message remains in progress while HIO's local ``txbs`` contains
+        any of its bytes. Successful drain retains it in ``sent``; cutoff with
+        unsent bytes records ``error``. Neither outcome acknowledges remote
+        processing.
+
+        ``ClientDoer`` reads from the socket and drains outbound ``client.txbs``.
+
+        Yields:
+            The configured ``tock`` while idle or awaiting transport drain.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -835,31 +901,46 @@ class TCPStreamMessenger(doing.DoDoer):
         if up.scheme != kering.Schemes.tcp:
             raise ValueError(f"invalid scheme {up.scheme} for TcpWitnesser")
 
-        client = clienting.Client(host=up.hostname, port=up.port)
-        self.parser = parsing.Parser(ims=client.rxbs,
+        self.client = clienting.Client(host=up.hostname, port=up.port)
+        self.parser = parsing.Parser(ims=self.client.rxbs,
                                      framed=True,
                                      kvy=self.kevery)
 
-        clientDoer = clienting.ClientDoer(client=client)
+        clientDoer = clienting.ClientDoer(client=self.client)
         self.extend([clientDoer, doing.doify(self.msgDo)])
 
-        while True:
-            while not self.msgs:
-                yield tock
+        while not self.msgs:
+            yield tock
 
-            msg = self.msgs.popleft()
-            self.posted += 1
+        msg = self.msgs.popleft()
+        try:
+            self.messageInProgress = True
 
-            client.tx(msg)  # send to connected remote
+            self.client.tx(msg)  # send to connected remote
 
-            while client.txbs:
+            while self.client.txbs:
+                if self.client.cutoff:
+                    self.error = kering.ClosedError(
+                        f"TCP connection to {self.wit} closed with "
+                        f"{len(self.client.txbs)} unsent bytes"
+                    )
+                    self._terminal = True
+                    return False
                 yield tock
 
             self.sent.append(msg)
-            yield tock
+            self._terminal = True
+            return True
+        finally:
+            self.messageInProgress = False
 
     def msgDo(self, tymth=None, tock=0.0, **opts):
-        """Doer loop that parses inbound TCP messages into the Kevery."""
+        """Continuously consume inbound CESR and dispatch it to the Kevery.
+
+        ``parser.ims`` aliases ``client.rxbs``. Advancing the parser removes
+        bytes from that shared receive buffer as it parses messages and
+        attachments, and yields to waits when more input is needed.
+        """
         parser = self.parser.parsator(local=True)
         while True:
             try:
@@ -868,13 +949,27 @@ class TCPStreamMessenger(doing.DoDoer):
                 return ex.value
             yield tock
 
+    def recur(self, tyme, deeds=None):
+        """Advance children and finish once the one-shot outcome is retained."""
+        done = super(TCPStreamMessenger, self).recur(tyme, deeds)
+        return done or self._terminal
+
     @property
     def idle(self):
-        return len(self.sent) == self.posted
+        """Whether no queued or in-progress message awaits local TCP drain."""
+        return (self.error is None and
+                not self.msgs and
+                not self.messageInProgress and
+                (self.client is None or not self.client.txbs))
 
 
 class HTTPMessenger(doing.DoDoer):
-    """Send CESR messages to a witness over HTTP and capture responses."""
+    """Send CESR messages to a witness over HTTP and capture responses.
+
+    Each queued CESR stream may expand into multiple HIO requests. HIO keeps
+    those requests queued and services one active request at a time while this
+    messenger moves the resulting responses to ``sent``.
+    """
 
     def __init__(self, hab, wit, url, msgs=None, sent=None, doers=None, auth=None, **kwa):
         """Initialize HTTP messenger with queues and optional auth.
@@ -889,9 +984,9 @@ class HTTPMessenger(doing.DoDoer):
         """
         self.hab = hab
         self.wit = wit
-        self.posted = 0
         self.msgs = msgs if msgs is not None else decking.Deck()
         self.sent = sent if sent is not None else decking.Deck()
+        self.error = None
         self.parser = None
         self.auth = auth
         doers = doers if doers is not None else []
@@ -922,14 +1017,23 @@ class HTTPMessenger(doing.DoDoer):
             if self.auth is not None:
                 headers["Authorization"] = self.auth
 
-            self.posted += httping.streamCESRRequests(client=self.client, dest=self.wit, ims=msg, headers=headers)
+            httping.streamCESRRequests(client=self.client,
+                                       dest=self.wit,
+                                       ims=msg,
+                                       headers=headers)
             while self.client.requests:
                 yield tock
 
             yield tock
 
     def responseDo(self, tymth=None, tock=0.0, **kwa):
-        """Doer loop that processes HTTP responses from the client and adds them into `sent` cues."""
+        """Preserve terminal responses and detect cutoff with pending work.
+
+        Received HIO responses move unchanged to ``sent``; their transport and
+        status fields remain available to consumers. Cutoff while HIO is
+        waiting on an active response is deferred for its response-finalization
+        pass. Otherwise cutoff is terminal when queued or unsent work remains.
+        """
         self.wind(tymth)
         _ = (yield tock)
 
@@ -937,16 +1041,44 @@ class HTTPMessenger(doing.DoDoer):
             while self.client.responses:
                 rep = self.client.respond()
                 self.sent.append(rep)
-                yield
-            yield
+                yield tock
+
+            # report cutoff only after active-response finalization
+            if (self.error is None and
+                    self.client.connector.cutoff and
+                    not self.client.waited and
+                    (self.client.requests or
+                     self.client.connector.txbs)):
+                self.error = kering.ClosedError(
+                    f"HTTP connection to {self.wit} closed before all "
+                    f"responses arrived"
+                )
+            yield tock
 
     @property
     def idle(self):
-        return len(self.msgs) == 0 and self.posted == len(self.sent)
+        """Whether every admitted HTTP request reached a terminal response.
+
+        ``msgs`` empties before HIO transport completes, while ``sent`` is
+        consumable. Idle therefore follows HIO's queued, active, outbound, and
+        received-but-unhandled response state, not ``len(self.msgs)`` or a
+        posted count ``== len(self.sent)``. Consumers inspect the preserved
+        response outcome.
+        """
+        return (self.error is None and
+                not self.msgs and
+                not self.client.requests and
+                not self.client.waited and
+                not self.client.connector.txbs and
+                not self.client.responses)
 
 
 class HTTPStreamMessenger(doing.DoDoer):
-    """Send a single CESR message via HTTP PUT and capture the response."""
+    """Send one CESR message via HTTP PUT and terminate on its response.
+
+    The raw HIO response is retained in ``rep``. Connection cutoff before a
+    response arrives is terminal and recorded in ``error``.
+    """
 
     def __init__(self, hab, wit, url, msg=b'', headers=None, **kwa):
         """Initialize a single-request HTTP messenger.
@@ -961,6 +1093,7 @@ class HTTPStreamMessenger(doing.DoDoer):
         self.hab = hab
         self.wit = wit
         self.rep = None
+        self.error = None
         headers = headers if headers is not None else {}
 
         up = urlparse(url)
@@ -988,10 +1121,24 @@ class HTTPStreamMessenger(doing.DoDoer):
         super(HTTPStreamMessenger, self).__init__(doers=doers, **kwa)
 
     def recur(self, tyme, deeds=None):
-        """Poll for a response and stop once received."""
+        """Store the response or terminate on cutoff before one arrives.
+
+        HIO observes TCP cutoff one service pass before it finalizes a response
+        whose body is delimited by connection close. An active request therefore
+        gets that final pass before cutoff is classified as failure.
+        """
         if self.client.responses:
             self.rep = self.client.respond()
-            self.remove([self.client])
+            return True
+
+        if self.error is None and self.client.connector.cutoff:
+            if self.client.waited:
+                return super(HTTPStreamMessenger, self).recur(tyme, deeds)
+
+            self.error = kering.ClosedError(
+                f"HTTP connection to {self.wit} closed before its response "
+                f"arrived"
+            )
             return True
 
         return super(HTTPStreamMessenger, self).recur(tyme, deeds)
@@ -1070,7 +1217,7 @@ def streamMessengerFrom(hab, pre, urls, msg, headers=None):
         witer = HTTPStreamMessenger(hab=hab, wit=pre, url=url, msg=msg, headers=headers)
     elif kering.Schemes.tcp in urls:
         url = urls[kering.Schemes.tcp]
-        witer = TCPStreamMessenger(hab=hab, wit=pre, url=url)
+        witer = TCPStreamMessenger(hab=hab, wit=pre, url=url, msg=msg)
     else:
         raise kering.ConfigurationError(f"unable to find a valid endpoint for witness {pre}")
 
