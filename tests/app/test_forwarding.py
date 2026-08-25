@@ -8,7 +8,7 @@ import time
 
 from hio.base import doing, tyming
 
-from keri import core, kering
+from keri import core
 from keri.core import coring, eventing, parsing, serdering
 
 from keri.app import agenting, forwarding, habbing, indirecting, storing
@@ -79,6 +79,8 @@ def test_postman(seeder):
 
 
 def test_poster_contains_failed_messenger(monkeypatch):
+    from keri import kering
+
     with habbing.openHby(name="poster-failure", temp=True) as hby:
         hab = hby.makeHab(name="sender", transferable=True)
         recp = hby.makeHab(name="recipient", transferable=True)
