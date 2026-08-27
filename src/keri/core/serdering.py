@@ -1043,6 +1043,9 @@ class Serder:
         else:  # not passed in so smell raw
             proto, vrsn, kind, size, gvrsn = smell(raw)
 
+        if len(raw) < size:
+            raise ShortageError(f"Need more bytes to de-serialize Serder")
+
         sad = self.loads(raw=raw, size=size, kind=kind)
         # ._gvrsn may be set in loads when CESR native deserialization provides _gvrsn
 
@@ -2060,7 +2063,7 @@ class SerderACDC(Serder):
            issuee (str | None): qb64  of .sad["a"]["i"] issuee AID
         """
         try:
-            return self.attrib.get['i']
+            return self.attrib.get('i')
         except:
             return None
 
