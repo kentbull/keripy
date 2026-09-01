@@ -14,6 +14,7 @@ import sys
 import traceback
 from ordered_set import OrderedSet as oset
 
+from hio import hioing
 from hio.base import doing
 from hio.core import http, tcp
 from hio.core.tcp import serving
@@ -429,7 +430,8 @@ class Indirector(doing.DoDoer):
 
         while True:
             for msg in self.hab.processCuesIter(self.kevery.cues):
-                self.sendMessage(msg, label="chit or receipt")
+                if not self.sendMessage(msg, label="chit or receipt"):
+                    return False
                 yield tock  # throttle just do one cue at a time
             yield tock
 
@@ -459,11 +461,17 @@ class Indirector(doing.DoDoer):
             yield tock
 
     def sendMessage(self, msg, label=""):
-        """
-        Sends message msg and loggers label if any
-        """
-        self.client.tx(msg)  # send to remote
+        """Queue response bytes on the client transport."""
+        try:
+            self.client.tx(msg)  # send to remote
+        except hioing.TransmitClosedError as ex:
+            error = self.client.error if self.client.error is not None else ex
+            logger.error("Client %s could not queue %s after transmit cutoff; "
+                         "rejected=%d: %s",
+                         self.hab.pre, label, len(msg), error)
+            return False
         logger.debug("%s sent %s:\n%s\n\n", self.hab.pre, label, bytes(msg))
+        return True
 
 
 class MailboxDirector(doing.DoDoer):

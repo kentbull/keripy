@@ -11,7 +11,9 @@ from falcon import testing
 import hio
 import pytest
 
+from hio import hioing
 from hio.core import http
+from hio.core.tcp import clienting
 from hio.base import doing, tyming
 from hio.help import decking
 
@@ -20,6 +22,24 @@ from keri import core
 from keri.app import indirecting, storing, habbing, agenting
 from keri.metric import EscrowEnd
 from keri.vdr import viring
+
+
+def test_indirector_contains_rejected_transmit(monkeypatch):
+    with habbing.openHab(name="indirector-cutoff", temp=True) as (_, hab):
+        client = clienting.Client(host="127.0.0.1", port=5632)
+        client.txCutoff = True
+        indirector = indirecting.Indirector(hab=hab, client=client)
+        errors = []
+        monkeypatch.setattr(indirecting.logger, "error",
+                            lambda msg, *args: errors.append(msg % args))
+
+        msg = b"receipt"
+        assert indirector.sendMessage(msg, label="receipt") is False
+        assert isinstance(client.error, hioing.TransmitClosedError)
+        assert not client.txbs
+        assert len(errors) == 1
+        assert "after transmit cutoff" in errors[0]
+        assert f"rejected={len(msg)}" in errors[0]
 
 
 def test_witness_message_tock_continues_after_initial_entry():

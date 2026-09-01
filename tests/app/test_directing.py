@@ -10,6 +10,7 @@ import socket
 
 import pytest
 
+from hio import hioing
 from hio.base import doing
 from hio.core.tcp import clienting, serving
 
@@ -260,6 +261,40 @@ def test_reactant_rejects_incomplete_message_at_receive_cutoff(directHabs):
         dog.close()
 
 
+def test_direct_producers_contain_rejected_transmits(directHabs, monkeypatch):
+    alice, bob = directHabs
+    errors = []
+    monkeypatch.setattr(directing.logger, "error",
+                        lambda msg, *args: errors.append(msg % args))
+
+    directorClient = clienting.Client(host="127.0.0.1", port=5632)
+    directorClient.txCutoff = True
+    director = directing.Director(hab=alice, client=directorClient)
+    assert director.sendOwnEvent(sn=0) is False
+    assert isinstance(directorClient.error, hioing.TransmitClosedError)
+    assert not directorClient.txbs
+
+    reactorClient = clienting.Client(host="127.0.0.1", port=5632)
+    reactorClient.txCutoff = True
+    reactor = directing.Reactor(hab=alice, client=reactorClient)
+    response = b"receipt"
+    assert reactor.sendMessage(response, label="receipt") is False
+    assert isinstance(reactorClient.error, hioing.TransmitClosedError)
+    assert not reactorClient.txbs
+
+    remoter = makeRemoter()
+    remoter.txCutoff = True
+    reactant = directing.Reactant(hab=bob, remoter=remoter)
+    assert reactant.sendMessage(response, label="receipt") is False
+    assert isinstance(remoter.error, hioing.TransmitClosedError)
+    assert reactant.txPending == len(response)
+    assert not remoter.txbs
+
+    assert len(errors) == 3
+    assert all("after transmit cutoff" in error for error in errors)
+    assert all("rejected=" in error for error in errors)
+
+
 def test_directant_drains_response_after_peer_half_close(directHabs):
     alice, bob = directHabs
     remoterSocket, peerSocket = socket.socketpair()
@@ -473,9 +508,11 @@ def test_directant_tx_cutoff_accounts_for_unsent_response(
         )
 
         assert alice.pre in bob.kevers  # Final receive must still process the request.
-        assert remoter.txbs  # Receipt remains queued because send is terminal.
+        assert not remoter.txbs  # HIO rejects output once send is terminal.
+        assert remoter.error is not None
         assert any("after transmit cutoff" in error for error in errors)  # expose terminal reason
-        assert any(f"txbs={len(remoter.txbs)}" in error for error in errors)  # account for unsent bytes
+        assert any("txPending=" in error and "txPending=0" not in error
+                   for error in errors), errors  # account for rejected bytes
         assert ca not in directant.rants
     finally:
         doist.exit()
@@ -490,11 +527,14 @@ def test_directant_response_drain_stops_at_absolute_deadline(
     remoter = makeRemoter(alice.makeOwnEvent(sn=0), cutoff=True,
                           cs=remoterSocket, tymeout=1.0)
 
+    refreshes = []
+
     # Simulate one-byte writes that continually refresh HIO's idle timer.
     def serviceOneByteAndRefreshTimer():
         if remoter.txbs:
             del remoter.txbs[:1]
             remoter.refresh()
+            refreshes.append(remoter.tymer.elapsed)
 
     monkeypatch.setattr(remoter, "serviceSends",
                         serviceOneByteAndRefreshTimer)
@@ -514,15 +554,20 @@ def test_directant_response_drain_stops_at_absolute_deadline(
                         lambda msg, *args: errors.append(msg % args))
 
     try:
-        # First recurrence fixes Directant's non-refreshing drain deadline.
-        doist.recur()
+        # Enter draining and wait until the Reactant has queued its response.
+        recurUntil(
+            doist,
+            condition=lambda: bool(remoter.txbs),
+            message="response was not queued for drain",
+        )
         drainStop = directant.drainStops[ca]
-        transportRemaining = remoter.tymer.remaining
+        refreshCount = len(refreshes)
 
         # Second recurrence advances output and refreshes only HIO's timer.
         doist.recur()
         assert directant.drainStops[ca] == drainStop  # Partial sends cannot extend drain.
-        assert remoter.tymer.remaining > transportRemaining  # HIO timer did refresh.
+        assert len(refreshes) > refreshCount  # HIO timer did refresh.
+        assert refreshes[-1] == 0.0  # Refresh restarted from current time.
 
         recurUntil(
             doist,
@@ -539,6 +584,34 @@ def test_directant_response_drain_stops_at_absolute_deadline(
     finally:
         doist.exit()
         peerSocket.close()
+
+
+def test_directant_clean_cutoff_without_pending_output(directHabs, monkeypatch):
+    _, bob = directHabs
+    remoter = makeRemoter(cutoff=True)
+    remoter.txCutoff = True
+    ca = remoter.ca
+    server = serving.Server()
+    server.ixes[ca] = remoter
+    directant = directing.Directant(hab=bob, server=server)
+    doist = doing.Doist(tock=0.03125, limit=0.25, doers=[directant])
+    errors = []
+    monkeypatch.setattr(directing.logger, "error",
+                        lambda msg, *args: errors.append(msg % args))
+
+    try:
+        doist.enter()
+        recurUntil(
+            doist,
+            condition=lambda: ca not in server.ixes,
+            message="settled transmit cutoff did not close",
+        )
+
+        assert not errors
+        assert ca not in directant.rants
+    finally:
+        doist.exit()
+        server.close()
 
 
 def test_runcontroller_demo():
