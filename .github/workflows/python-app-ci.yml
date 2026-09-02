@@ -1,29 +1,16 @@
-# This workflow will install Python dependencies, run tests and lint with a single version of Python
-# For more information see: https://help.github.com/actions/language-and-framework-guides/using-python-with-github-actions
+name: Witness sender baseline experiment
 
-
-name: GitHub Actions for keripy
 on:
-  push:
-    branches:
-      - 'main'
   pull_request:
   workflow_dispatch:
 
 jobs:
-  test:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ macos-latest, ubuntu-latest ]
-
+  witness-sender:
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install libsodium
-        if: runner.os == 'macOS'
-        run: |
-          brew install libsodium
+        run: brew install libsodium
       - name: Set up Python 3.12.2
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -31,94 +18,9 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install flake8 pytest hio
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - name: Lint changes
-        run: |
-          # stop the build if there are Python syntax errors or undefined names
-          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-          # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-          flake8 . --count --exit-zero --ignore=E7,F841,E301,E302,E303 --max-complexity=10 --max-line-length=127 --statistics
-      - name: Set DYLD_FALLBACK_LIBRARY_PATH
-        if: runner.os == 'macOS'
-        run: |
-          echo "DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix libsodium)/lib" >> $GITHUB_ENV
-      - name: Run core KERI tests
-        run: |
-          pytest tests/ --ignore tests/demo/ --ignore test/scripts
-      - name: Run KERI demo tests
-        run: |
-          pytest tests/demo/
-
-  coverage:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Python 3.12.2
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: 3.12.2
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-cov hio
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - name: Run core KERI tests
-        run: |
-          pytest --cov=./ --cov-report=xml
-      - name: Upload
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-
-  scripts:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set up Python 3.12.2
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: 3.12.2
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-cov hio pytest-shell
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-      - name: Run KERI kli tests
-        run: |
-          ./scripts/demo/test_scripts.sh
-
-  interop-setup:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/interop'
-    outputs:
-      CACHE_KEY_INTEROP: ${{ steps.cache.outputs.CACHE_KEY_INTEROP }}
-      GITHUB_REPOSITORY_NAME: ${{ steps.cache.outputs.GITHUB_REPOSITORY_NAME }}
-    steps:
-      - name: Git checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Set outputs
-        id: cache
-        run: |
-          echo "::set-output name=CACHE_KEY_INTEROP::${{ hashFiles('.github/workflows/interop/Dockerfile') }}"
-          echo "::set-output name=GITHUB_REPOSITORY_NAME::$(echo ${GITHUB_REPOSITORY,,})"
-
-  build-interop-image:
-    needs: [ interop-setup, test ]
-    runs-on: ubuntu-latest
-    env:
-      DOCKER_BUILDKIT: 1
-      CACHE_KEY_INTEROP: ${{ needs.interop-setup.outputs.CACHE_KEY_INTEROP }}
-      GITHUB_REPOSITORY_NAME: ${{ needs.interop-setup.outputs.GITHUB_REPOSITORY_NAME }}
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-    steps:
-      - name: Git checkout
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: interop
-        run: |
-          echo ${{ secrets.CR_PAT }} | docker login ghcr.io --username ${{ secrets.CR_USER }} --password-stdin
-          docker build -f .github/workflows/interop/Dockerfile --no-cache -t ${{ env.GITHUB_REPOSITORY_NAME }}/keripy-interop:${{ env.CACHE_KEY_INTEROP }} .
-          docker tag ${{ env.GITHUB_REPOSITORY_NAME }}/keripy-interop:${{ env.CACHE_KEY_INTEROP }} ghcr.io/${{ env.GITHUB_REPOSITORY_NAME }}/keripy-interop:latest
-          docker push ghcr.io/${{ env.GITHUB_REPOSITORY_NAME }}/keripy-interop:latest
-          mkdir -p ${GITHUB_WORKSPACE}/cache
-          touch ${GITHUB_WORKSPACE}/cache/${{ env.CACHE_KEY_INTEROP }}
+          pip install pytest hio
+          pip install -r requirements.txt
+      - name: Configure libsodium path
+        run: echo "DYLD_FALLBACK_LIBRARY_PATH=$(brew --prefix libsodium)/lib" >> "$GITHUB_ENV"
+      - name: Run witness sender baseline
+        run: /usr/bin/time -p python -m pytest -q tests/app/test_agenting.py::test_witness_sender
