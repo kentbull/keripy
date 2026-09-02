@@ -6,6 +6,7 @@ keri.app.directing module
 simple direct mode demo support classes
 """
 import itertools
+from hio import hioing
 from hio.base import doing
 
 from .. import help, kering
@@ -263,7 +264,8 @@ class Reactor(doing.DoDoer):
         _ = (yield tock)  # enter context
         while True:
             for msg in self.hab.processCuesIter(self.kevery.cues):
-                self.sendMessage(msg, label="chit or receipt")
+                if not self.sendMessage(msg, label="chit or receipt"):
+                    return False
                 yield tock  # throttle just do one cue at a time
             yield tock
         return False  # should never get here except forced close
@@ -300,8 +302,15 @@ class Reactor(doing.DoDoer):
         """
         Sends message msg and loggers label if any
         """
-        self.client.tx(msg)  # send to remote
+        try:
+            self.client.tx(msg)  # send to remote
+        except hioing.TransmitClosedError as ex:
+            logger.info("%s could not send %s because transmit is closed: %s",
+                        self.hab.name, label, ex)
+            return False
+
         logger.info("%s sent %s:\n%s\n\n", self.hab.name, label, bytes(msg))
+        return True
 
 
 class Directant(doing.DoDoer):
@@ -434,7 +443,11 @@ class Directant(doing.DoDoer):
                     outputDrained = rant.responseSettled and not ix.txbs
                     deadlineExpired = self.tyme >= self.drainStops[ca]
 
-                    if rxSettled and outputDrained:
+                    if rxSettled and rant.responseSettled and rant.txPending:
+                        self._logDrainFailure(ca=ca, ix=ix, rant=rant,
+                                              reason="transmit cutoff")
+                        self.closeConnection(ca)
+                    elif rxSettled and outputDrained:
                         self.closeConnection(ca)
                     elif rxSettled and ix.txCutoff:
                         self._logDrainFailure(ca=ca, ix=ix, rant=rant,
@@ -459,13 +472,14 @@ class Directant(doing.DoDoer):
         """
         logger.error("Closing direct connection %s after %s; "
                      "rxbs=%d, messageInProgress=%s, responseSettled=%s, "
-                     "txbs=%d, txCutoff=%s",
+                     "txbs=%d, txPending=%d, txCutoff=%s",
                      ca,
                      reason,
                      len(ix.rxbs),
                      rant.messageInProgress if rant is not None else False,
                      rant.responseSettled if rant is not None else True,
                      len(ix.txbs),
+                     rant.txPending if rant is not None else 0,
                      ix.txCutoff)
 
     def closeConnection(self, ca):
@@ -510,6 +524,7 @@ class Reactant(doing.DoDoer):
         messageInProgress: Whether one CESR message awaits completion.
         cueInProgress: Whether a popped cue may still generate more output.
         rxError: Terminal error for incomplete input at receive cutoff.
+        txPending: Number of response bytes rejected after transmit cutoff.
     """
 
     def __init__(self, hab, remoter, verifier=None, exchanger=None, doers=None, **kwa):
@@ -529,6 +544,7 @@ class Reactant(doing.DoDoer):
         self.messageInProgress = False
         self.cueInProgress = False
         self.rxError = None
+        self.txPending = 0
 
         doers = doers if doers is not None else []
         doers.extend([doing.doify(self.msgDo, tock=hab.tocks["reactantMsg"]),
@@ -704,9 +720,18 @@ class Reactant(doing.DoDoer):
             msg: Bytes to queue on the connection.
             label: Optional description included in the log entry.
         """
-        self.remoter.tx(msg)  # send to remote
+        try:
+            self.remoter.tx(msg)  # send to remote
+        except hioing.TransmitClosedError as ex:
+            self.txPending = len(msg)
+            error = self.remoter.error if self.remoter.error is not None else ex
+            logger.error("Server %s could not queue %s after transmit cutoff; "
+                         "rejected=%d: %s",
+                         self.hab.name, label, self.txPending, error)
+            return False
         logger.info("Server %s: sent %s:\n%d\n\n", self.hab.name,
                     label, len(msg))
+        return True
 
 
 def runController(doers, expire=0.0):
