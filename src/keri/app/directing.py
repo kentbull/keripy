@@ -6,6 +6,7 @@ keri.app.directing module
 simple direct mode demo support classes
 """
 import itertools
+from hio import hioing
 from hio.base import doing
 
 from .. import help, kering
@@ -114,6 +115,8 @@ class Reactor(doing.DoDoer):
         .hab is Habitat instance of local controller's context
         .client is TCP Client instance.
         .kevery is Kevery instance
+        .error is the terminal transmit error retained when a response could
+            not be admitted to the client's local send buffer.
 
 
     Inherited Properties:
@@ -170,6 +173,7 @@ class Reactor(doing.DoDoer):
         self.verifier = verifier
         self.exc = exchanger
         self.direct = True if direct else False
+        self.error = None
         doers = doers if doers is not None else []
         doers.extend([doing.doify(self.msgDo, tock=hab.tocks["reactorMsg"]),
                       doing.doify(self.escrowDo, tock=hab.tocks["reactorEscrow"]),
@@ -263,7 +267,8 @@ class Reactor(doing.DoDoer):
         _ = (yield tock)  # enter context
         while True:
             for msg in self.hab.processCuesIter(self.kevery.cues):
-                self.sendMessage(msg, label="chit or receipt")
+                if not self.sendMessage(msg, label="chit or receipt"):
+                    return False
                 yield tock  # throttle just do one cue at a time
             yield tock
         return False  # should never get here except forced close
@@ -297,11 +302,25 @@ class Reactor(doing.DoDoer):
         return False  # should never get here except forced close
 
     def sendMessage(self, msg, label=""):
+        """Attempt to queue one response on the client transport.
+
+        Returns ``True`` when HIO accepted the bytes into its local transmit
+        buffer and ``False`` after retaining a terminal transmit error. Local
+        admission does not prove transport delivery or peer processing.
+
+        Parameters:
+            msg: Response bytes to queue.
+            label (str): Description included in transport logging.
         """
-        Sends message msg and loggers label if any
-        """
-        self.client.tx(msg)  # send to remote
+        try:
+            self.client.tx(msg)  # send to remote
+        except hioing.TransmitClosedError as ex:
+            self.error = self.client.error if self.client.error is not None else ex
+            logger.error("Client %s could not queue %s after transmit cutoff: %s",
+                         self.hab.name, label, self.error)
+            return False
         logger.info("%s sent %s:\n%s\n\n", self.hab.name, label, bytes(msg))
+        return True
 
 
 class Directant(doing.DoDoer):
@@ -434,11 +453,11 @@ class Directant(doing.DoDoer):
                     outputDrained = rant.responseSettled and not ix.txbs
                     deadlineExpired = self.tyme >= self.drainStops[ca]
 
-                    if rxSettled and outputDrained:
-                        self.closeConnection(ca)
-                    elif rxSettled and ix.txCutoff:
+                    if rxSettled and rant.responseSettled and ix.txCutoff:
                         self._logDrainFailure(ca=ca, ix=ix, rant=rant,
                                               reason="transmit cutoff")
+                        self.closeConnection(ca)
+                    elif rxSettled and outputDrained:
                         self.closeConnection(ca)
                     elif deadlineExpired:
                         self._logDrainFailure(ca=ca, ix=ix, rant=rant,
@@ -459,13 +478,14 @@ class Directant(doing.DoDoer):
         """
         logger.error("Closing direct connection %s after %s; "
                      "rxbs=%d, messageInProgress=%s, responseSettled=%s, "
-                     "txbs=%d, txCutoff=%s",
+                     "txbs=%d, txPending=%d, txCutoff=%s",
                      ca,
                      reason,
                      len(ix.rxbs),
                      rant.messageInProgress if rant is not None else False,
                      rant.responseSettled if rant is not None else True,
                      len(ix.txbs),
+                     rant.txPending if rant is not None else 0,
                      ix.txCutoff)
 
     def closeConnection(self, ca):
@@ -510,6 +530,10 @@ class Reactant(doing.DoDoer):
         messageInProgress: Whether one CESR message awaits completion.
         cueInProgress: Whether a popped cue may still generate more output.
         rxError: Terminal error for incomplete input at receive cutoff.
+        txError: Terminal error encountered while admitting response bytes to
+            the Remoter's local transmit buffer.
+        txPending: Number of response bytes rejected when ``txError`` was
+            recorded; zero while no transmit-admission failure exists.
     """
 
     def __init__(self, hab, remoter, verifier=None, exchanger=None, doers=None, **kwa):
@@ -529,6 +553,8 @@ class Reactant(doing.DoDoer):
         self.messageInProgress = False
         self.cueInProgress = False
         self.rxError = None
+        self.txError = None
+        self.txPending = 0
 
         doers = doers if doers is not None else []
         doers.extend([doing.doify(self.msgDo, tock=hab.tocks["reactantMsg"]),
@@ -669,7 +695,8 @@ class Reactant(doing.DoDoer):
                     if isinstance(msg, list):
                         msg = bytearray(itertools.chain(*msg))
 
-                    self.sendMessage(msg, label="chit or receipt or replay")
+                    if not self.sendMessage(msg, label="chit or receipt or replay"):
+                        break
                     yield tock  # throttle just do one cue at a time
             finally:
                 self.cueInProgress = False
@@ -697,16 +724,28 @@ class Reactant(doing.DoDoer):
     def sendMessage(self, msg, label=""):
         """Queue response bytes on the Remoter and log the local operation.
 
-        Returning means only that bytes entered the local transport buffer; it
+        ``True`` means only that bytes entered the local transport buffer; it
         is not acknowledgement of transport drain or peer processing.
+        ``False`` means transmit admission was terminal: ``txError`` retains
+        the cause and ``txPending`` records the rejected byte count for the
+        Directant's abandonment log.
 
         Parameters:
             msg: Bytes to queue on the connection.
             label: Optional description included in the log entry.
         """
-        self.remoter.tx(msg)  # send to remote
+        try:
+            self.remoter.tx(msg)  # send to remote
+        except hioing.TransmitClosedError as ex:
+            self.txError = (self.remoter.error
+                            if self.remoter.error is not None else ex)
+            self.txPending = len(msg)
+            logger.error("Server %s could not queue %s after transmit cutoff: %s",
+                         self.hab.name, label, self.txError)
+            return False
         logger.info("Server %s: sent %s:\n%d\n\n", self.hab.name,
                     label, len(msg))
+        return True
 
 
 def runController(doers, expire=0.0):

@@ -11,7 +11,7 @@ from keri.kering import ValidationError, AuthError
 from keri import core, help
 from keri.core import coring
 
-from keri.app import directing, habbing
+from keri.app import configing, directing, habbing
 
 from keri.app.cli import commands
 from keri.app.cli.common import existing
@@ -386,6 +386,33 @@ def test_run_failure_is_logged_and_hby_closed(helpers, monkeypatch):
         helpers.remove_test_dirs(name)
 
 
+def test_run_witness_reads_aids_from_config(helpers, monkeypatch, tmp_path):
+    """Configured witness startup reads aids from the complete config mapping."""
+    name = "configuredwit"
+    helpers.remove_test_dirs(name)
+    cf = configing.Configer(name="witness", headDirPath=str(tmp_path),
+                            reopen=True, clear=False)
+    cf.put({"aids": ["sample-aid"]})
+    cf.close()
+
+    captured = {}
+
+    def setup_witness(**kwa):
+        captured.update(kwa)
+        return []
+
+    monkeypatch.setattr(witness_start.indirecting, "setupWitness", setup_witness)
+    monkeypatch.setattr(witness_start.directing, "runController", lambda **kwa: None)
+
+    try:
+        witness_start.runWitness(name=name, alias="wit",
+                                 bran="0123456789abcdefghijk",
+                                 configDir=str(tmp_path), configFile="witness")
+        assert captured["aids"] == ["sample-aid"]
+    finally:
+        helpers.remove_test_dirs(name)
+
+
 def test_encrypted_keystore_non_tty_fails_fast(helpers, monkeypatch):
     """Starting an encrypted keystore with no passcode on a non-TTY must fail fast
     with a logged AuthError instead of stalling on an interactive getpass prompt."""
@@ -498,7 +525,5 @@ def test_logfile_emits_deprecation_warning(monkeypatch, capsys, tmp_path):
     args = _parse(["witness", "start", "--alias", "wit", "--logdir", str(tmp_path)])
     args.handler(args)
     assert "deprecated" not in capsys.readouterr().err
-
-
 
 

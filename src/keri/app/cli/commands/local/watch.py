@@ -92,7 +92,7 @@ class WatchDoer(doing.DoDoer):
                 witer.msgs.append(bytearray(msg))
 
                 start = time.perf_counter()
-                while not witer.idle:
+                while not witer.idle and witer.error is None:
                     end = time.perf_counter()
                     if end - start > 10:
                         break

@@ -72,28 +72,35 @@ class Poster(doing.DoDoer):
                     hab = self.hby.habs[src]
 
                 ends = hab.endsFor(recp)
+                delivered = True
                 try:
                     # If there is a controller, agent or mailbox in ends, send to all
                     if {Roles.controller, Roles.agent, Roles.mailbox} & set(ends):
                         for role in (Roles.controller, Roles.agent, Roles.mailbox):
                             if role in ends:
                                 if role == Roles.mailbox:
-                                    yield from self.forward(hab, ends[role], recp=recp, serder=srdr,
-                                                            atc=atc, topic=tpc, tock=tock)
+                                    success = yield from self.forward(
+                                        hab, ends[role], recp=recp, serder=srdr,
+                                        atc=atc, topic=tpc, tock=tock)
                                 else:
-                                    yield from self.sendDirect(hab, ends[role], serder=srdr,
-                                                               atc=atc, tock=tock)
+                                    success = yield from self.sendDirect(
+                                        hab, ends[role], serder=srdr, atc=atc,
+                                        tock=tock)
+                                delivered = delivered and success
 
                     # otherwise send to one witness
                     elif Roles.witness in ends:
-                        yield from self.forwardToWitness(hab, ends[Roles.witness], recp=recp,
-                                                         serder=srdr, atc=atc, topic=tpc,
-                                                         tock=tock)
+                        delivered = yield from self.forwardToWitness(
+                            hab, ends[Roles.witness], recp=recp, serder=srdr,
+                            atc=atc, topic=tpc, tock=tock)
                     else:
                         logger.info(f"No end roles for {recp} to send evt={srdr.said}")
                         continue
                 except kering.ConfigurationError as e:
                     logger.error(f"Error sending to {recp} with ends={ends}.  Err={e}")
+                    continue
+
+                if not delivered:
                     continue
                 # Get the kever of the recipient and choose a witness
 
@@ -159,7 +166,14 @@ class Poster(doing.DoDoer):
             yield tock
 
     def sendDirect(self, hab, ends, serder, atc, tock=None):
+        """Deliver directly and report whether all local transports drained.
+
+        Returns:
+            bool: true only when every selected messenger became idle without
+            retaining a terminal error.
+        """
         tock = self.deliverTock if tock is None else tock
+        delivered = True
         for ctrl, locs in ends.items():
             witer = agenting.messengerFrom(hab=hab, pre=ctrl, urls=locs)
 
@@ -170,12 +184,26 @@ class Poster(doing.DoDoer):
             witer.msgs.append(bytearray(msg))  # make a copy
             self.extend([witer])
 
-            while not witer.idle:
-                _ = (yield tock)
+            try:
+                while not witer.idle and witer.error is None:
+                    _ = (yield tock)
 
-            self.remove([witer])
+                if witer.error is not None:
+                    logger.error(f"Direct delivery to {witer.wit} failed: "
+                                 f"{witer.error}")
+                    delivered = False
+            finally:
+                self.remove([witer])
+
+        return delivered
 
     def forward(self, hab, ends, recp, serder, atc, topic, tock=None):
+        """Forward through a mailbox and report local transport completion.
+
+        Returns:
+            bool: true after local mailbox storage or successful messenger
+            completion; false after terminal transport failure.
+        """
         tock = self.deliverTock if tock is None else tock
         # If we are one of the mailboxes, just store locally in mailbox
         owits = oset(ends.keys())
@@ -184,7 +212,7 @@ class Poster(doing.DoDoer):
             if atc is not None:
                 msg.extend(atc)
             self.mbx.storeMsg(topic=f"{recp}/{topic}".encode("utf-8"), msg=msg)
-            return
+            return True
 
         # Its not us, randomly select a mailbox and forward it on
         mbx, mailbox = random.choice(list(ends.items()))
@@ -206,10 +234,25 @@ class Poster(doing.DoDoer):
         witer.msgs.append(bytearray(msg))  # make a copy
         self.extend([witer])
 
-        while not witer.idle:
-            _ = (yield tock)
+        try:
+            while not witer.idle and witer.error is None:
+                _ = (yield tock)
+
+            if witer.error is not None:
+                logger.error(f"Mailbox delivery to {witer.wit} failed: "
+                             f"{witer.error}")
+                return False
+            return True
+        finally:
+            self.remove([witer])
 
     def forwardToWitness(self, hab, ends, recp, serder, atc, topic, tock=None):
+        """Forward through a witness and report local transport completion.
+
+        Returns:
+            bool: true after local mailbox storage or successful messenger
+            completion; false after terminal transport failure.
+        """
         tock = self.deliverTock if tock is None else tock
         # If we are one of the mailboxes, just store locally in mailbox
         owits = oset(ends.keys())
@@ -218,7 +261,7 @@ class Poster(doing.DoDoer):
             if atc is not None:
                 msg.extend(atc)
             self.mbx.storeMsg(topic=f"{recp}/{topic}".encode("utf-8"), msg=msg)
-            return
+            return True
 
         # Its not us, randomly select a mailbox and forward it on
         mbx, mailbox = random.choice(list(ends.items()))
@@ -240,8 +283,17 @@ class Poster(doing.DoDoer):
         witer.msgs.append(bytearray(msg))  # make a copy
         self.extend([witer])
 
-        while not witer.idle:
-            _ = (yield tock)
+        try:
+            while not witer.idle and witer.error is None:
+                _ = (yield tock)
+
+            if witer.error is not None:
+                logger.error(f"Witness delivery to {witer.wit} failed: "
+                             f"{witer.error}")
+                return False
+            return True
+        finally:
+            self.remove([witer])
 
 
 class StreamPoster:

@@ -5,6 +5,8 @@ tests.app.agenting module
 """
 import time
 
+import pytest
+
 from hio.base import doing, tyming
 from hio.core import http
 
@@ -62,6 +64,269 @@ def test_http_messengers_read_state_after_client_service():
                 assert messenger.rep == expected  # should be exactly one response
             else:
                 assert list(messenger.sent) == [expected]  # should be exactly one response
+        finally:
+            doist.exit()
+
+
+@pytest.mark.parametrize("klas", [agenting.TCPMessenger,
+                                  agenting.TCPStreamMessenger])
+def test_tcp_messenger_retains_terminal_transport_error(klas):
+    marker = ConnectionResetError("send failed")
+
+    with habbing.openHab(name="tcp-messenger-terminal", temp=True) as (_, hab):
+        messenger = klas(
+            hab=hab,
+            wit="witness",
+            url="tcp://127.0.0.1:1",
+            **({"msg": b"message"}
+               if klas is agenting.TCPStreamMessenger else {}),
+        )
+        if klas is agenting.TCPMessenger:
+            messenger.msgs.append(bytearray(b"message"))
+
+        receipt = messenger.receiptDo(tymth=lambda: 0.0)
+        assert next(receipt) == 0.0
+        assert next(receipt) == 0.0
+        assert messenger.client.txbs
+
+        messenger.client.error = marker
+        messenger.client.cutoff = False
+        messenger.client.txCutoff = True
+
+        with pytest.raises(StopIteration):
+            next(receipt)
+
+        assert messenger.error is marker
+        assert not messenger.cutoff
+        assert messenger.txCutoff
+        assert not messenger.idle
+        messenger.client.close()
+
+
+@pytest.mark.parametrize("klas", [agenting.TCPMessenger,
+                                  agenting.TCPStreamMessenger])
+def test_tcp_messenger_allows_drain_after_receive_cutoff(klas):
+    with habbing.openHab(name="tcp-messenger-half-close",
+                         temp=True) as (_, hab):
+        messenger = klas(
+            hab=hab,
+            wit="witness",
+            url="tcp://127.0.0.1:1",
+            **({"msg": b"message"}
+               if klas is agenting.TCPStreamMessenger else {}),
+        )
+        if klas is agenting.TCPMessenger:
+            messenger.msgs.append(bytearray(b"message"))
+
+        receipt = messenger.receiptDo(tymth=lambda: 0.0)
+        assert next(receipt) == 0.0
+        assert next(receipt) == 0.0
+        messenger.client.cutoff = True
+
+        assert next(receipt) == 0.0
+        assert messenger.error is None
+        messenger.client.txbs.clear()
+
+        if klas is agenting.TCPStreamMessenger:
+            with pytest.raises(StopIteration):
+                next(receipt)
+        else:
+            assert next(receipt) == 0.0
+
+        assert messenger.cutoff
+        assert not messenger.txCutoff
+        assert messenger.error is None
+        assert messenger.idle
+        assert messenger.sent.popleft() == bytearray(b"message")
+        assert messenger.idle
+        messenger.client.close()
+
+
+@pytest.mark.parametrize(
+    ("cutoff", "tx_cutoff", "with_error"),
+    [(True, False, False), (False, True, True)],
+    ids=("receive-cutoff", "transmit-error"),
+)
+def test_http_messenger_retains_transport_error_after_client_service(
+        cutoff, tx_cutoff, with_error):
+    marker = ConnectionResetError("response failed") if with_error else None
+    messenger = agenting.HTTPMessenger(
+        hab=None,
+        wit="witness",
+        url="http://127.0.0.1:1",
+    )
+    response = messenger.responseDo(tymth=lambda: 0.0)
+    assert next(response) == 0.0
+
+    messenger.msgs.append(bytearray(b"message"))
+    messenger.client.connector.error = marker
+    messenger.client.connector.cutoff = cutoff
+    messenger.client.connector.txCutoff = tx_cutoff
+    assert next(response) is None
+
+    if marker is not None:
+        assert messenger.error is marker
+    else:
+        assert isinstance(messenger.error, kering.ClosedError)
+    assert messenger.cutoff is cutoff
+    assert messenger.txCutoff is tx_cutoff
+    assert not messenger.idle
+    response.close()
+    messenger.client.close()
+
+
+def test_http_messenger_completed_response_precedes_later_cutoff():
+    expected = http.clienting.Response(
+        version=(1, 1),
+        status=204,
+        reason=None,
+        headers={},
+        body=b"",
+        data=None,
+        request=None,
+        errored=False,
+        error=None,
+    )
+    marker = ConnectionResetError("closed after response")
+    messenger = agenting.HTTPMessenger(
+        hab=None,
+        wit="witness",
+        url="http://127.0.0.1:1",
+    )
+    messenger.client.responses.append(expected._asdict())
+    messenger.client.connector.error = marker
+    messenger.client.connector.cutoff = True
+    messenger.client.connector.txCutoff = True
+
+    response = messenger.responseDo(tymth=lambda: 0.0)
+    assert next(response) == 0.0
+    assert next(response) is None
+    assert next(response) is None
+
+    assert list(messenger.sent) == [expected]
+    assert messenger.error is None
+    assert messenger.idle
+    messenger.sent.popleft()
+    assert messenger.idle
+    response.close()
+    messenger.client.close()
+
+
+def test_http_stream_messenger_retains_terminal_transport_error():
+    messenger = agenting.HTTPStreamMessenger(
+        hab=None,
+        wit="witness",
+        url="http://127.0.0.1:1",
+        msg=b"message",
+    )
+    marker = ConnectionResetError("response failed")
+
+    def service():
+        messenger.client.connector.error = marker
+        messenger.client.connector.cutoff = True
+        messenger.client.connector.txCutoff = True
+
+    messenger.client.service = service
+    doist = doing.Doist(tock=0.03125, limit=1.0, doers=[messenger])
+    doist.enter()
+
+    try:
+        doist.recur()
+        assert messenger.done
+        assert messenger.rep is None
+        assert messenger.error is marker
+        assert not messenger.idle
+    finally:
+        doist.exit()
+
+
+def test_witness_inquisitor_contains_failed_messenger(monkeypatch):
+    with habbing.openHby(name="inquisitor-failure", temp=True) as hby:
+        wit = hby.makeHab(name="offline-witness", transferable=False)
+        hab = hby.makeHab(name="controller", transferable=True,
+                          wits=[wit.pre])
+        messenger = agenting.TCPMessenger(
+            hab=hab,
+            wit=wit.pre,
+            url="tcp://127.0.0.1:1",
+        )
+        messenger.error = kering.ClosedError("connection closed")
+        monkeypatch.setattr(agenting, "messenger",
+                            lambda hab, pre: messenger)
+
+        inquisitor = agenting.WitnessInquisitor(hby=hby)
+        inquisitor.query(pre=hab.pre, src=hab.pre, wits=[wit.pre])
+        doist = doing.Doist(tock=0.03125, limit=1.0,
+                            doers=[inquisitor])
+        doist.enter()
+
+        try:
+            doist.recur()
+            assert not inquisitor.msgs
+            assert not inquisitor.sent
+            assert messenger not in inquisitor.doers
+        finally:
+            doist.exit()
+
+
+def test_witness_receiptor_contains_failed_messenger(monkeypatch):
+    with habbing.openHby(name="receiptor-failure", temp=True) as hby:
+        wit = hby.makeHab(name="offline-witness", transferable=False)
+        hab = hby.makeHab(name="controller", transferable=True,
+                          wits=[wit.pre])
+        messenger = agenting.TCPMessenger(
+            hab=hab,
+            wit=wit.pre,
+            url="tcp://127.0.0.1:1",
+        )
+        messenger.error = kering.ClosedError("connection closed")
+        monkeypatch.setattr(agenting, "messenger",
+                            lambda hab, pre, auth=None: messenger)
+
+        receiptor = agenting.WitnessReceiptor(hby=hby)
+        receiptor.msgs.append(dict(pre=hab.pre))
+        doist = doing.Doist(tock=0.03125, limit=1.0,
+                            doers=[receiptor])
+        doist.enter()
+
+        try:
+            doist.recur()
+            doist.recur()
+            assert not receiptor.msgs
+            assert not receiptor.cues
+            assert messenger not in receiptor.doers
+        finally:
+            doist.exit()
+
+
+def test_witness_publisher_contains_failed_messenger(monkeypatch):
+    with habbing.openHby(name="publisher-failure", temp=True) as hby:
+        wit = hby.makeHab(name="offline-witness", transferable=False)
+        hab = hby.makeHab(name="controller", transferable=True,
+                          wits=[wit.pre])
+        messenger = agenting.TCPMessenger(
+            hab=hab,
+            wit=wit.pre,
+            url="tcp://127.0.0.1:1",
+        )
+        messenger.error = kering.ClosedError("connection closed")
+        monkeypatch.setattr(agenting, "messenger",
+                            lambda hab, pre: messenger)
+
+        publisher = agenting.WitnessPublisher(hby=hby)
+        publisher.msgs.append(dict(pre=hab.pre,
+                                   msg=hab.makeOwnInception()))
+        doist = doing.Doist(tock=0.03125, limit=1.0,
+                            doers=[publisher])
+        doist.enter()
+
+        try:
+            doist.recur()
+            doist.recur()
+            assert not publisher.msgs
+            assert not publisher.cues
+            assert messenger not in publisher.doers
+            assert publisher.idle
         finally:
             doist.exit()
 
@@ -255,6 +520,7 @@ class PublishDoer(doing.DoDoer):
         cue = self.witDoer.cues.popleft()
         assert cue["pre"] == self.palHab.pre
         assert cue["msg"] == msg
+        assert self.witDoer.idle
 
         for name in ["wes", "wil", "wan"]:
             reger = self.regers[name]

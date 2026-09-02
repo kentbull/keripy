@@ -9,6 +9,7 @@ import random
 from urllib.parse import urlencode, urlparse, urljoin
 
 from hio.base import doing
+from hio import hioing
 from hio.core import http
 from hio.core.tcp import clienting
 from hio.help import decking, Hict
@@ -24,6 +25,30 @@ from ..db import dbing
 from ..kering import Roles
 
 logger = help.ogler.getLogger()
+
+
+def _messengerTransportError(client, protocol, target, pending):
+    """Return the retained transport exception or a directional close error.
+
+    Parameters:
+        client: HIO TCP or HTTP client exposing directional terminal state.
+        protocol (str): transport label included in a synthesized error.
+        target (str): remote identifier included in a synthesized error.
+        pending (int): bytes still owned locally at terminal close.
+    """
+    if client.error is not None:
+        return client.error
+
+    directions = []
+    if client.cutoff:
+        directions.append("receive")
+    if client.txCutoff:
+        directions.append("transmit")
+
+    direction = " and ".join(directions) if directions else "connection"
+    return kering.ClosedError(
+        f"{protocol} {direction} cutoff for {target} with {pending} pending bytes"
+    )
 
 
 class Receiptor(doing.DoDoer):
@@ -350,6 +375,10 @@ class WitnessReceiptor(doing.DoDoer):
     waits for receipts to arrive in `hab.db` (via mailbox processing), then
     propagates the full receipt set across the witness group.
 
+    A completion cue means the original receipts exist locally and the
+    receipt fan-out reached every messenger's local transport boundary. It
+    does not assert that each remote witness processed the fan-out.
+
     Could be enhanced to have a `once` method that runs once and cleans up
     and an `all` method that runs and waits for more messages to receipt.
     """
@@ -384,7 +413,7 @@ class WitnessReceiptor(doing.DoDoer):
         posts the event, waits for receipts to be stored in `hab.db`, then
         shares the full receipt set across witnesses. If `force` is false and
         all receipts already exist, it skips resubmission.
-        Pushes the original request to self.cues to signal completion
+        Terminal messenger errors are logged and suppress the completion cue.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -420,6 +449,7 @@ class WitnessReceiptor(doing.DoDoer):
                 # Check to see if we already have all the receipts we need for this event
                 wigs = hab.db.getWigs(dgkey)
                 completed = len(wigs) == len(wits)
+                failed = False
                 if len(wigs) != len(wits):  # We have all the receipts, skip
                     for idx, witer in enumerate(witers):
                         wit = wits[idx]
@@ -435,14 +465,27 @@ class WitnessReceiptor(doing.DoDoer):
                         witer.msgs.append(bytearray(msg))  # make a copy
                         _ = (yield tock)
 
-                    while True: # wait for all receipts to arrive
+                    while True:  # wait for all receipts to arrive
                         wigs = hab.db.getWigs(dgkey)
                         if len(wigs) == len(wits):
                             break
+
+                        failure = next((witer for witer in witers
+                                        if witer.error is not None), None)
+                        if failure is not None:
+                            logger.error(f"Witness delivery to {failure.wit} failed: "
+                                         f"{failure.error}")
+                            failed = True
+                            break
                         _ = yield tock
+
+                if failed:
+                    self.remove(witers)
+                    continue
 
                 # If we started with all our receipts, exit unless told to force resubmit of all receipts
                 if completed and not self.force:
+                    self.remove(witers)
                     self.cues.push(evt)
                     continue
 
@@ -480,16 +523,21 @@ class WitnessReceiptor(doing.DoDoer):
                     _ = (yield tock)
 
                 while True:
-                    done = True
-                    for witer in witers:
-                        if not witer.idle:
-                            yield self.idleTock
-                            done = False
-                            break
-                    if done:
+                    failure = next((witer for witer in witers
+                                    if witer.error is not None), None)
+                    if failure is not None:
+                        logger.error(f"Witness delivery to {failure.wit} failed: "
+                                     f"{failure.error}")
+                        failed = True
                         break
+                    if all(witer.idle for witer in witers):
+                        break
+                    yield self.idleTock
 
                 self.remove(witers)
+
+                if failed:
+                    continue
 
                 self.cues.push(evt)
                 yield tock
@@ -535,7 +583,9 @@ class WitnessInquisitor(doing.DoDoer):
 
         For all msgs, select a random witness from Habitat's current set of witnesses
         send the msg and process all responses (KEL replays, RCTs, etc)
-        Pushes the raw sent message to self.sent to signal completion.
+        Pushes the raw sent message to self.sent to signal local transport
+        completion. Terminal delivery failure removes the messenger without
+        reporting the message as sent.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -597,8 +647,14 @@ class WitnessInquisitor(doing.DoDoer):
 
             witer.msgs.append(bytearray(msg))
 
-            while not witer.sent:
+            while not witer.sent and witer.error is None:
                 yield tock
+
+            if witer.error is not None:
+                logger.error(f"Witness query delivery to {witer.wit} failed: "
+                             f"{witer.error}")
+                self.remove([witer])
+                continue
 
             self.sent.append(witer.sent.popleft())
 
@@ -640,6 +696,11 @@ class WitnessInquisitor(doing.DoDoer):
 class WitnessPublisher(doing.DoDoer):
     """DoDoer that publishes messages to all witnesses for an identifier.
 
+    ``messageInProgress`` remains true from dequeue until every child
+    messenger reaches local completion or one records terminal failure.
+    ``cues`` is only a consumable success-notification queue and does not
+    participate in the publisher's ``idle`` calculation.
+
     Could be enhanced to have a `once` method that runs once and cleans up
     and an `all` method that runs and waits for more messages to receipt.
     """
@@ -651,9 +712,13 @@ class WitnessPublisher(doing.DoDoer):
             hby (Habery): Habitat environment for identifier lookups.
             msgs (Deck): publish requests with `pre` and `msg`.
             cues (Deck): completed request cues.
+
+        Attributes:
+            messageInProgress (bool): whether one dequeued publication still
+                owns child messenger work.
         """
         self.hby = hby
-        self.posted = 0
+        self.messageInProgress = False
         self.msgs = msgs if msgs is not None else decking.Deck()
         self.cues = cues if cues is not None else decking.Deck()
         super(WitnessPublisher, self).__init__(
@@ -663,7 +728,9 @@ class WitnessPublisher(doing.DoDoer):
     def sendDo(self, tymth=None, tock=0.0, **opts):
         """Doer loop that sends queued messages to each witness.
 
-        Pushes the original request to self.cues to signal completion
+        Pushes the request to `cues` only when every messenger becomes idle.
+        Terminal delivery failure removes all children without reporting
+        success.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -671,34 +738,49 @@ class WitnessPublisher(doing.DoDoer):
         while True:
             while self.msgs:
                 evt = self.msgs.popleft()
-                self.posted += 1
-                pre = evt["pre"]
-                msg = evt["msg"]
+                self.messageInProgress = True
+                try:
+                    pre = evt["pre"]
+                    msg = evt["msg"]
 
-                if pre not in self.hby.habs:
-                    continue
+                    if pre not in self.hby.habs:
+                        continue
 
-                hab = self.hby.habs[pre]
-                wits = hab.kever.wits
+                    hab = self.hby.habs[pre]
+                    wits = hab.kever.wits
 
-                witers = []
-                for wit in wits:
-                    witer = messenger(hab, wit)
-                    witers.append(witer)
-                    witer.msgs.append(bytearray(msg))  # make a copy so everyone munges their own
-                    self.extend([witer])
+                    witers = []
+                    for wit in wits:
+                        witer = messenger(hab, wit)
+                        witers.append(witer)
+                        # Each transport owns its own mutable message copy.
+                        witer.msgs.append(bytearray(msg))
+                        self.extend([witer])
 
-                    _ = (yield tock)
-
-                while witers:
-                    witer = witers.pop()
-                    while not witer.idle:
                         _ = (yield tock)
 
-                self.remove(witers)
-                self.cues.push(evt)
+                    failed = False
+                    for witer in witers:
+                        while not witer.idle and witer.error is None:
+                            _ = (yield tock)
 
-                yield tock
+                        if witer.error is not None:
+                            logger.error(
+                                f"Witness publication to {witer.wit} failed: "
+                                f"{witer.error}")
+                            failed = True
+
+                    self.remove(witers)
+
+                    if failed:
+                        continue
+
+                    self.messageInProgress = False
+                    self.cues.push(evt)
+
+                    yield tock
+                finally:
+                    self.messageInProgress = False
 
             yield tock
 
@@ -717,11 +799,29 @@ class WitnessPublisher(doing.DoDoer):
 
     @property
     def idle(self):
-        return len(self.msgs) == 0 and self.posted == len(self.cues)
+        """Whether no queued or active publication remains.
+
+        Completion cues are consumable notifications and therefore do not
+        participate in lifecycle accounting.
+        """
+        return not self.msgs and not self.messageInProgress
 
 
 class TCPMessenger(doing.DoDoer):
-    """Send outbound CESR messages to a witness via TCP and parse inbound receipts."""
+    """Serially send CESR messages to a witness and parse inbound receipts.
+
+    Only one dequeued message is owned at a time.  It remains in progress until
+    its bytes drain from HIO's local send buffer or the transport records a
+    terminal transmit error. A receive-only cutoff does not prevent raw TCP
+    from draining queued output. Local drain does not prove remote receipt or
+    processing.
+
+    ``sent`` is a consumable notification queue, not lifecycle accounting.
+    ``idle`` is therefore derived from the input queue, active-message flag,
+    and HIO transmit buffer. ``error`` retains the first terminal transport
+    outcome and makes ``idle`` false so owners cannot mistake failure for
+    successful completion.
+    """
 
     def __init__(self, hab, wit, url, msgs=None, sent=None, doers=None, **kwa):
         """Initialize TCP messenger with queues and parser wiring.
@@ -731,14 +831,21 @@ class TCPMessenger(doing.DoDoer):
             wit (str): qb64 witness identifier.
             url (str): tcp endpoint URL for the witness.
             msgs (Deck | None): outbound message queue.
-            sent (Deck | None): sent message queue.
+            sent (Deck | None): consumable successful-drain notification queue.
+
+        Attributes:
+            messageInProgress (bool): whether one dequeued message still owns
+                local transmit work.
+            error (Exception | None): retained terminal transmit failure.
         """
         self.hab = hab
         self.wit = wit
         self.url = url
-        self.posted = 0
+        self.messageInProgress = False
         self.msgs = msgs if msgs is not None else decking.Deck()
         self.sent = sent if sent is not None else decking.Deck()
+        self.client = None
+        self.error = None
         self.parser = None
         doers = doers if doers is not None else []
         doers.extend([doing.doify(self.receiptDo)])
@@ -749,7 +856,17 @@ class TCPMessenger(doing.DoDoer):
         super(TCPMessenger, self).__init__(doers=doers)
 
     def receiptDo(self, tymth=None, tock=0.0, **kwa):
-        """Doer loop that sends queued messages over TCP."""
+        """Send queued messages one at a time to local transport completion.
+
+        A dequeued message remains in progress while HIO owns any of its bytes
+        in ``txbs``. A transmit cutoff retains ``error`` and ends the sender.
+        A receive-only cutoff is directional and does not prevent remaining
+        bytes from draining. Successful drain publishes the original message
+        to the consumable ``sent`` queue before the next message is admitted.
+
+        Yields:
+            The configured ``tock`` while idle or awaiting transport drain.
+        """
         self.wind(tymth)
         _ = (yield tock)
 
@@ -757,12 +874,12 @@ class TCPMessenger(doing.DoDoer):
         if up.scheme != kering.Schemes.tcp:
             raise ValueError(f"invalid scheme {up.scheme} for TcpWitnesser")
 
-        client = clienting.Client(host=up.hostname, port=up.port)
-        self.parser = parsing.Parser(ims=client.rxbs,
+        self.client = clienting.Client(host=up.hostname, port=up.port)
+        self.parser = parsing.Parser(ims=self.client.rxbs,
                                      framed=True,
                                      kvy=self.kevery)
 
-        clientDoer = clienting.ClientDoer(client=client)
+        clientDoer = clienting.ClientDoer(client=self.client)
         self.extend([clientDoer, doing.doify(self.msgDo)])
 
         while True:
@@ -770,15 +887,30 @@ class TCPMessenger(doing.DoDoer):
                 yield tock
 
             msg = self.msgs.popleft()
-            self.posted += 1
+            self.messageInProgress = True
+            try:
+                try:
+                    self.client.tx(msg)  # send to connected remote
+                except hioing.HioError:
+                    if not self.client.txCutoff:
+                        raise
+                    self.error = _messengerTransportError(
+                        self.client, "TCP", self.wit, len(msg))
+                    return False
 
-            client.tx(msg)  # send to connected remote
+                while self.client.txbs:
+                    if self.client.txCutoff:
+                        self.error = _messengerTransportError(
+                            self.client, "TCP", self.wit,
+                            len(self.client.txbs))
+                        return False
+                    yield tock
 
-            while client.txbs:
+                self.messageInProgress = False
+                self.sent.append(msg)
                 yield tock
-
-            self.sent.append(msg)
-            yield tock
+            finally:
+                self.messageInProgress = False
 
     def msgDo(self, tymth=None, tock=0.0, **opts):
         """Doer loop that parses inbound TCP messages into the Kevery."""
@@ -792,28 +924,63 @@ class TCPMessenger(doing.DoDoer):
 
     @property
     def idle(self):
-        return len(self.sent) == self.posted
+        """Whether every queued message reached successful local TCP drain."""
+        return (self.error is None and
+                not self.msgs and
+                not self.messageInProgress and
+                (self.client is None or not self.client.txbs))
+
+    @property
+    def cutoff(self):
+        """Whether the TCP receive direction has closed."""
+        return bool(self.client is not None and self.client.cutoff)
+
+    @property
+    def txCutoff(self):
+        """Whether the TCP transmit direction has closed."""
+        return bool(self.client is not None and self.client.txCutoff)
 
 
 class TCPStreamMessenger(doing.DoDoer):
-    """Stream a CESR message to a witness via TCP and parse inbound receipts."""
+    """Send one CESR message over TCP and terminate at local completion.
 
-    def __init__(self, hab, wit, url, msgs=None, sent=None, doers=None, **kwa):
-        """Initialize TCP stream messenger with queues and parser wiring.
+    The one-shot outcome is retained independently of the consumable ``sent``
+    queue. Success means the admitted bytes drained from HIO's local transmit
+    buffer; transmit failure is retained in ``error``. Receive-only cutoff is
+    directional and does not prevent raw TCP output drain. Neither terminal
+    outcome means remote processing.
+    """
+
+    def __init__(self, hab, wit, url, msg=None, msgs=None, sent=None,
+                 doers=None, **kwa):
+        """Initialize the one-shot message and parser wiring.
 
         Parameters:
             hab (Hab): habitat for KEL parsing and db access.
             wit (str): qb64 witness identifier.
             url (str): tcp endpoint URL for the witness.
+            msg (bytes | None): sole CESR message to admit immediately.
             msgs (Deck | None): outbound message queue.
-            sent (Deck | None): sent message queue.
+            sent (Deck | None): consumable successful-drain notification queue.
+
+        Attributes:
+            messageInProgress (bool): whether the admitted message still owns
+                local transmit work.
+            error (Exception | None): retained terminal transmit failure.
+            _terminal (bool): private one-shot outcome latch used to end all
+                child doers after success or failure.
         """
         self.hab = hab
         self.wit = wit
         self.url = url
-        self.posted = 0
+        self.messageInProgress = False
         self.msgs = msgs if msgs is not None else decking.Deck()
+        if msg is not None:
+            self.msgs.append(bytearray(msg))
         self.sent = sent if sent is not None else decking.Deck()
+        self.client = None
+        self.error = None
+        self._terminal = False
         self.parser = None
         doers = doers if doers is not None else []
         doers.extend([doing.doify(self.receiptDo)])
@@ -824,9 +991,11 @@ class TCPStreamMessenger(doing.DoDoer):
         super(TCPStreamMessenger, self).__init__(doers=doers)
 
     def receiptDo(self, tymth=None, tock=0.0, **kwa):
-        """Doer loop that sends queued messages over TCP.
+        """Send the admitted message until local drain or transmit failure.
 
-        Pushes the original request to self.sent to signal completion
+        The message remains in progress while HIO owns bytes in ``txbs``.
+        Receive-only cutoff does not stop output drain. The retained one-shot
+        outcome then lets ``recur`` cleanly close all transport/parser children.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -835,28 +1004,44 @@ class TCPStreamMessenger(doing.DoDoer):
         if up.scheme != kering.Schemes.tcp:
             raise ValueError(f"invalid scheme {up.scheme} for TcpWitnesser")
 
-        client = clienting.Client(host=up.hostname, port=up.port)
-        self.parser = parsing.Parser(ims=client.rxbs,
+        self.client = clienting.Client(host=up.hostname, port=up.port)
+        self.parser = parsing.Parser(ims=self.client.rxbs,
                                      framed=True,
                                      kvy=self.kevery)
 
-        clientDoer = clienting.ClientDoer(client=client)
+        clientDoer = clienting.ClientDoer(client=self.client)
         self.extend([clientDoer, doing.doify(self.msgDo)])
 
-        while True:
-            while not self.msgs:
-                yield tock
+        while not self.msgs:
+            yield tock
 
-            msg = self.msgs.popleft()
-            self.posted += 1
+        msg = self.msgs.popleft()
+        self.messageInProgress = True
+        try:
+            try:
+                self.client.tx(msg)
+            except hioing.HioError:
+                if not self.client.txCutoff:
+                    raise
+                self.error = _messengerTransportError(
+                    self.client, "TCP", self.wit, len(msg))
+                self._terminal = True
+                return False
 
-            client.tx(msg)  # send to connected remote
-
-            while client.txbs:
+            while self.client.txbs:
+                if self.client.txCutoff:
+                    self.error = _messengerTransportError(
+                        self.client, "TCP", self.wit,
+                        len(self.client.txbs))
+                    self._terminal = True
+                    return False
                 yield tock
 
             self.sent.append(msg)
-            yield tock
+            self._terminal = True
+            return True
+        finally:
+            self.messageInProgress = False
 
     def msgDo(self, tymth=None, tock=0.0, **opts):
         """Doer loop that parses inbound TCP messages into the Kevery."""
@@ -868,13 +1053,39 @@ class TCPStreamMessenger(doing.DoDoer):
                 return ex.value
             yield tock
 
+    def recur(self, tyme, deeds=None):
+        """Advance children and finish once the one-shot outcome is retained."""
+        done = super(TCPStreamMessenger, self).recur(tyme, deeds)
+        return done or self._terminal
+
     @property
     def idle(self):
-        return len(self.sent) == self.posted
+        """Whether the admitted message reached successful local TCP drain."""
+        return (self.error is None and
+                not self.msgs and
+                not self.messageInProgress and
+                (self.client is None or not self.client.txbs))
+
+    @property
+    def cutoff(self):
+        """Whether the TCP receive direction has closed."""
+        return bool(self.client is not None and self.client.cutoff)
+
+    @property
+    def txCutoff(self):
+        """Whether the TCP transmit direction has closed."""
+        return bool(self.client is not None and self.client.txCutoff)
 
 
 class HTTPMessenger(doing.DoDoer):
-    """Send CESR messages to a witness over HTTP and capture responses."""
+    """Send CESR messages to a witness over HTTP and capture responses.
+
+    Lifecycle completion is derived from live ownership across ``msgs`` and
+    HIO's request, waited-response, transmit-buffer, and response queues.
+    ``sent`` remains a consumable response-notification queue, so consuming a
+    response cannot make completed work appear incomplete. ``error`` retains a
+    terminal transport outcome only while unfinished work exists.
+    """
 
     def __init__(self, hab, wit, url, msgs=None, sent=None, doers=None, auth=None, **kwa):
         """Initialize HTTP messenger with queues and optional auth.
@@ -884,14 +1095,18 @@ class HTTPMessenger(doing.DoDoer):
             wit (str): qb64 witness identifier.
             url (str): http/https endpoint URL for the witness.
             msgs (Deck | None): outbound message queue.
-            sent (Deck | None): response queue.
+            sent (Deck | None): consumable completed-response queue.
             auth (str | None): optional 2FA auth codes for witnesses.
+
+        Attributes:
+            error (Exception | None): terminal transport failure retained only
+                when HTTP work remains unfinished.
         """
         self.hab = hab
         self.wit = wit
-        self.posted = 0
         self.msgs = msgs if msgs is not None else decking.Deck()
         self.sent = sent if sent is not None else decking.Deck()
+        self.error = None
         self.parser = None
         self.auth = auth
         doers = doers if doers is not None else []
@@ -924,14 +1139,15 @@ class HTTPMessenger(doing.DoDoer):
             if self.auth is not None:
                 headers["Authorization"] = self.auth
 
-            self.posted += httping.streamCESRRequests(client=self.client, dest=self.wit, ims=msg, headers=headers)
+            httping.streamCESRRequests(client=self.client, dest=self.wit,
+                                       ims=msg, headers=headers)
             while self.client.requests:
                 yield tock
 
             yield tock
 
     def responseDo(self, tymth=None, tock=0.0, **kwa):
-        """Doer loop that processes HTTP responses from the client and adds them into `sent` cues."""
+        """Move completed responses to ``sent`` and retain terminal failure."""
         self.wind(tymth)
         _ = (yield tock)
 
@@ -940,15 +1156,48 @@ class HTTPMessenger(doing.DoDoer):
                 rep = self.client.respond()
                 self.sent.append(rep)
                 yield
+
+            pending = (bool(self.msgs) or
+                       bool(self.client.requests) or
+                       self.client.waited or
+                       bool(self.client.connector.txbs) or
+                       bool(self.client.responses))
+            if (self.error is None and pending and
+                    (self.client.error is not None or self.client.cutoff or
+                     self.client.txCutoff)):
+                self.error = _messengerTransportError(
+                    self.client, "HTTP", self.wit,
+                    len(self.client.connector.txbs))
             yield
 
     @property
     def idle(self):
-        return len(self.msgs) == 0 and self.posted == len(self.sent)
+        """Whether HIO and this messenger own no unfinished HTTP work."""
+        return (self.error is None and
+                not self.msgs and
+                not self.client.requests and
+                not self.client.waited and
+                not self.client.connector.txbs and
+                not self.client.responses)
+
+    @property
+    def cutoff(self):
+        """Whether the HTTP connector's receive direction has closed."""
+        return self.client.cutoff
+
+    @property
+    def txCutoff(self):
+        """Whether the HTTP connector's transmit direction has closed."""
+        return self.client.txCutoff
 
 
 class HTTPStreamMessenger(doing.DoDoer):
-    """Send a single CESR message via HTTP PUT and capture the response."""
+    """Send a single CESR message via HTTP PUT and retain one outcome.
+
+    ``rep`` holds the successful HTTP response. ``error`` holds terminal
+    transport failure. The doer completes for either outcome after servicing
+    HIO, so a response already produced at the boundary wins over later close.
+    """
 
     def __init__(self, hab, wit, url, msg=b'', headers=None, **kwa):
         """Initialize a single-request HTTP messenger.
@@ -959,10 +1208,15 @@ class HTTPStreamMessenger(doing.DoDoer):
             url (str): http/https endpoint URL for the witness.
             msg (bytes): CESR message body to send.
             headers (dict | None): extra HTTP headers.
+
+        Attributes:
+            rep (Response | None): retained successful HIO response.
+            error (Exception | None): retained terminal transport failure.
         """
         self.hab = hab
         self.wit = wit
         self.rep = None
+        self.error = None
         headers = headers if headers is not None else {}
 
         up = urlparse(url)
@@ -990,15 +1244,37 @@ class HTTPStreamMessenger(doing.DoDoer):
         super(HTTPStreamMessenger, self).__init__(doers=doers, **kwa)
 
     def recur(self, tyme, deeds=None):
-        """Service the client, then stop when its current response is ready."""
+        """Service the client, then retain its response or terminal error."""
         done = super(HTTPStreamMessenger, self).recur(tyme, deeds)
 
         if self.client.responses:
             self.rep = self.client.respond()
-            self.remove([self.client])
+            return True
+
+        if (self.error is None and
+                (self.client.error is not None or self.client.cutoff or
+                 self.client.txCutoff)):
+            self.error = _messengerTransportError(
+                self.client, "HTTP", self.wit,
+                len(self.client.connector.txbs))
             return True
 
         return done
+
+    @property
+    def idle(self):
+        """Whether the one-shot request completed with an HTTP response."""
+        return self.error is None and self.rep is not None
+
+    @property
+    def cutoff(self):
+        """Whether the HTTP connector's receive direction has closed."""
+        return self.client.cutoff
+
+    @property
+    def txCutoff(self):
+        """Whether the HTTP connector's transmit direction has closed."""
+        return self.client.txCutoff
 
 
 def mailbox(hab, cid):
@@ -1063,18 +1339,19 @@ def streamMessengerFrom(hab, pre, urls, msg, headers=None):
         hab (Habitat): Environment to use to look up witness URLs
         pre (str): qb64 identifier prefix of recipient to create a messanger for
         urls (dict): map of schemes to urls of available endpoints
-        msg (bytes): bytes of message to send
-        headers (dict): optional headers to send with HTTP requests
+        msg (bytes): sole message admitted by the one-shot messenger.
+        headers (dict | None): optional headers for an HTTP request.
 
     Returns:
-        Optional(TcpWitnesser, HTTPMessenger): witnesser for ensuring full reciepts
+        TCPStreamMessenger | HTTPStreamMessenger: one-shot doer that retains
+        either successful local completion or a terminal transport error.
     """
     if kering.Schemes.http in urls or kering.Schemes.https in urls:
         url = urls[kering.Schemes.http] if kering.Schemes.http in urls else urls[kering.Schemes.https]
         witer = HTTPStreamMessenger(hab=hab, wit=pre, url=url, msg=msg, headers=headers)
     elif kering.Schemes.tcp in urls:
         url = urls[kering.Schemes.tcp]
-        witer = TCPStreamMessenger(hab=hab, wit=pre, url=url)
+        witer = TCPStreamMessenger(hab=hab, wit=pre, url=url, msg=msg)
     else:
         raise kering.ConfigurationError(f"unable to find a valid endpoint for witness {pre}")
 
