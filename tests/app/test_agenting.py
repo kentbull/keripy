@@ -376,9 +376,17 @@ def test_witness_sender(seeder):
             habbing.openHby(name="wes", salt=core.Salter(raw=b'wess-the-witness').qb64) as wesHby, \
             habbing.openHby(name="pal", salt=core.Salter(raw=b'0123456789abcdef').qb64) as palHby:
 
-        # looks like bad magic value in seeder is causing this to fail
         pdoer = PublishDoer(wanHby, wilHby, wesHby, palHby, seeder)
-        directing.runController(doers=[pdoer], expire=10.0)
+        doist = doing.Doist(tock=0.001, doers=[pdoer])
+        deeds = doist.enter()
+        deadline = time.monotonic() + 2.0
+        try:
+            while not pdoer.done and time.monotonic() < deadline:
+                doist.recur(deeds=deeds)
+                time.sleep(doist.tock)
+        finally:
+            doist.exit(deeds=deeds)
+
         assert pdoer.done is True
 
 
