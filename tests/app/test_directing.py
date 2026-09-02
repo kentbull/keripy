@@ -473,9 +473,11 @@ def test_directant_tx_cutoff_accounts_for_unsent_response(
         )
 
         assert alice.pre in bob.kevers  # Final receive must still process the request.
-        assert remoter.txbs  # Receipt remains queued because send is terminal.
+        assert not remoter.txbs  # HIO rejects output once send is terminal.
+        assert remoter.error is not None
         assert any("after transmit cutoff" in error for error in errors)  # expose terminal reason
-        assert any(f"txbs={len(remoter.txbs)}" in error for error in errors)  # account for unsent bytes
+        assert any("txPending=" in error and "txPending=0" not in error
+                   for error in errors), errors  # account for rejected bytes
         assert ca not in directant.rants
     finally:
         doist.exit()
@@ -490,11 +492,14 @@ def test_directant_response_drain_stops_at_absolute_deadline(
     remoter = makeRemoter(alice.makeOwnEvent(sn=0), cutoff=True,
                           cs=remoterSocket, tymeout=1.0)
 
+    refreshes = []
+
     # Simulate one-byte writes that continually refresh HIO's idle timer.
     def serviceOneByteAndRefreshTimer():
         if remoter.txbs:
             del remoter.txbs[:1]
             remoter.refresh()
+            refreshes.append(remoter.tymer.elapsed)
 
     monkeypatch.setattr(remoter, "serviceSends",
                         serviceOneByteAndRefreshTimer)
@@ -514,15 +519,20 @@ def test_directant_response_drain_stops_at_absolute_deadline(
                         lambda msg, *args: errors.append(msg % args))
 
     try:
-        # First recurrence fixes Directant's non-refreshing drain deadline.
-        doist.recur()
+        # Enter draining and wait until the Reactant has queued its response.
+        recurUntil(
+            doist,
+            condition=lambda: bool(remoter.txbs),
+            message="response was not queued for drain",
+        )
         drainStop = directant.drainStops[ca]
-        transportRemaining = remoter.tymer.remaining
+        refreshCount = len(refreshes)
 
         # Second recurrence advances output and refreshes only HIO's timer.
         doist.recur()
         assert directant.drainStops[ca] == drainStop  # Partial sends cannot extend drain.
-        assert remoter.tymer.remaining > transportRemaining  # HIO timer did refresh.
+        assert len(refreshes) > refreshCount  # HIO timer did refresh.
+        assert refreshes[-1] == 0.0  # Refresh restarted from current time.
 
         recurUntil(
             doist,
