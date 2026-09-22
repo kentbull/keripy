@@ -4,6 +4,8 @@ tests.app.agenting module
 
 """
 import time
+import socket
+from contextlib import closing
 
 import falcon
 import pytest
@@ -19,6 +21,7 @@ from keri.help import nowIso8601
 from keri.app import habbing, indirecting, agenting, directing
 from keri.db import basing, dbing
 from keri.vdr import eventing, viring
+from tests.app.test_directing import openDoist
 
 
 def test_http_messengers_read_state_after_client_service():
@@ -138,6 +141,162 @@ def test_tcp_messenger_accounts_for_real_delivery(klas):
             assert messenger.idle
         finally:
             doist.exit()
+
+
+
+@pytest.fixture
+def connectedTcpMessenger():
+    """Connect a real messenger to a loopback server without sending application data."""
+    with (
+        habbing.openHab(name="tcp-outcome", temp=True) as (_, hab),
+        closing(serving.Server(host="127.0.0.1", port=0, tymeout=0.0)) as server,
+    ):
+        assert server.reopen()
+        server.eha = server.ha  # Advertise the port assigned by the OS.
+        messenger = agenting.TCPMessenger(
+            hab=hab, wit=hab.pre, url=f"tcp://127.0.0.1:{server.ha[1]}",
+        )
+        with openDoist(doers=[messenger], tock=0.03125, limit=1.0) as doist:
+            # The scheduler drives the client; the test accepts on the server side.
+            for _ in range(100):
+                doist.recur()
+                server.serviceConnects()
+                if messenger.client is not None and messenger.client.connected and server.ixes:
+                    break
+                time.sleep(0.001)  # Let the OS progress the real TCP handshake.
+            assert messenger.client.connected and len(server.ixes) == 1
+            yield messenger, next(iter(server.ixes.values())), doist
+
+
+def test_tcp_messenger_bounds_refused_connection():
+    """A non-listening endpoint cannot keep the messenger connecting forever.
+    HIO may reopen its socket, but the messenger's absolute deadline never resets.
+    Failure retains outstanding work and never produces a sent notification.
+    """
+    with (
+        habbing.openHab(name="tcp-refused", temp=True) as (_, hab),
+        socket.socket() as endpoint,
+    ):
+        endpoint.bind(("127.0.0.1", 0))  # Reserve the port without accepting connections.
+        first, second = b"first", b"second"
+        messenger = agenting.TCPMessenger(
+            hab=hab, wit=hab.pre, url=f"tcp://127.0.0.1:{endpoint.getsockname()[1]}",
+            msgs=agenting.decking.Deck([first, second]), connectTimeout=0.125,
+        )
+        with openDoist(doers=[messenger], tock=0.03125, limit=1.0) as doist:
+            doist.recur()  # Start the connection deadline and admit the first message.
+            started = doist.tyme - doist.tock
+            while not messenger.done and doist.tyme <= started + 0.25:
+                doist.recur()  # Each retry consumes the same absolute time budget.
+            assert messenger.done and messenger.failed
+            assert isinstance(messenger.error, TimeoutError)
+            assert doist.tyme <= started + 0.125 + doist.tock
+            assert messenger.unsent == len(first) + len(second)
+            assert messenger.messageInProgress and list(messenger.msgs) == [second]
+            assert not messenger.idle and not messenger.sent
+            assert messenger.client.cs is None and not messenger.deeds
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
+def test_tcp_messenger_requires_finite_positive_connection_deadline(timeout):
+    """Reject values that would disable or make the initial connection bound invalid."""
+    with pytest.raises(ValueError, match="finite and positive"):
+        agenting.TCPMessenger(hab=None, wit="wit", url="tcp://127.0.0.1:1",
+                             connectTimeout=timeout)
+
+
+def test_tcp_messenger_receive_eof_still_sends(connectedTcpMessenger):
+    """A peer closing only its send direction can still receive our queued message.
+    Verify the bytes at the peer, not just the messenger's local completion cue.
+    """
+    messenger, remoter, doist = connectedTcpMessenger
+    remoter.cs.shutdown(socket.SHUT_WR)  # Server stops sending but keeps reading.
+    for _ in range(20):
+        doist.recur()  # Client observes receive EOF without closing its send direction.
+        if messenger.client.cutoff:
+            break
+    assert messenger.client.cutoff and not messenger.client.txCutoff
+
+    # The initial-connect deadline no longer applies to this established connection.
+    doist.tyme += messenger.connectTimeout + 1.0
+    msg = b"output after receive EOF"
+    messenger.msgs.append(msg)
+    for _ in range(20):
+        doist.recur()  # Client admits and flushes output despite receive EOF.
+        remoter.serviceReceives()  # Server reads the actual bytes from the socket.
+        if messenger.sent and remoter.rxbs == msg:
+            break
+    assert remoter.rxbs == msg
+    assert list(messenger.sent) == [msg]
+    assert messenger.idle and not messenger.failed
+
+
+def test_tcp_messenger_retains_transmit_failure(connectedTcpMessenger):
+    """A send failure preserves its cause and all unsent bytes, then closes the child.
+    Shut down the socket's send direction so HIO observes a real broken pipe.
+    """
+    messenger, _, doist = connectedTcpMessenger
+    first, second = b"not sent", b"still queued"
+    messenger.msgs.extend([first, second])
+    doist.recur()  # Admit the first message; transport service sends on the next turn.
+    assert messenger.messageInProgress and messenger.client.txbs == first
+
+    # Bypass HIO's shutdown flag: its next send must discover the socket failure.
+    messenger.client.cs.shutdown(socket.SHUT_WR)
+    doist.recur()  # HIO records the broken pipe; the messenger retains the outcome.
+    assert messenger.done and messenger.failed
+    cause = messenger.error
+    assert isinstance(cause, BrokenPipeError)
+    assert messenger.unsent == len(first) + len(second)
+    assert messenger.client.txbs == first and list(messenger.msgs) == [second]
+    assert not messenger.sent and not messenger.idle
+    assert messenger.client.cs is None and not messenger.deeds
+    messenger._fail(ConnectionError("later cleanup"))
+    assert messenger.error is cause  # A later report cannot overwrite the first cause.
+
+
+
+def test_tcp_messenger_keeps_sent_before_receive_failure(connectedTcpMessenger, monkeypatch):
+    """A receive error cannot retract bytes already sent in the same scheduler turn.
+    The transport still fails, and the next queued message remains outstanding.
+    """
+    messenger, remoter, doist = connectedTcpMessenger
+    first, second = b"sent before failure", b"not admitted"
+    messenger.msgs.extend([first, second])
+    doist.recur()  # Admit only the first message, ready for the next turn's send.
+    cause = ConnectionResetError("receive failed after send")
+    def failReceive():
+        raise cause
+    monkeypatch.setattr(messenger.client, "serviceReceives", failReceive)
+    doist.recur()  # Flush and record the send before the receive error occurs.
+    remoter.serviceReceives()
+    assert remoter.rxbs == first
+    assert list(messenger.sent) == [first]
+    assert messenger.done and messenger.error is cause
+    assert messenger.unsent == len(second) and list(messenger.msgs) == [second]
+    assert not messenger.messageInProgress and not messenger.idle
+    assert messenger.client.cs is None and not messenger.deeds
+
+
+def test_tcp_messenger_retains_rejected_admission(connectedTcpMessenger, monkeypatch):
+    """If sending closes at admission, count the rejected message as unsent too.
+    Preserve HIO's originating error rather than replacing it with the typed rejection.
+    """
+    messenger, _, doist = connectedTcpMessenger
+    cause = BrokenPipeError("send closed at admission")
+    original = messenger.client.tx
+    def reject(data):
+        messenger.client.txCutoff = True
+        messenger.client.error = cause
+        original(data)  # Exercise HIO's actual TransmitClosedError rejection.
+    monkeypatch.setattr(messenger.client, "tx", reject)
+    messenger.msgs.extend([b"rejected", b"queued"])
+    doist.recur()  # Admission fails before any bytes enter the client buffer.
+    assert messenger.done and messenger.error is cause
+    assert messenger.unsent == len(b"rejectedqueued")
+    assert not messenger.client.txbs and not messenger.sent
+    assert messenger.messageInProgress and not messenger.idle
+    assert messenger.client.cs is None and not messenger.deeds
 
 
 def test_http_messenger_accounts_for_real_delivery():
