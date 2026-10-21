@@ -24,6 +24,7 @@ optional-custody, standalone-Dolly, and operator-workflow gates.
 | Linux-owned test source and installed KERIpy wheel | `V2_TEST_IMAGE=keripy-v2-refactor:runner V2_TEST_VOLUME=keripy-v2-refactor-runner scripts/v2-e2e/check.sh tests/core/test_threshold_distinct_indices.py` | 5 passed |
 | Released-peer runner without host mounts | `V2_MATRIX_IMAGE=keripy-v2-refactor:runner LEGACY_SKIP_BUILD=1 scripts/v2-e2e/legacy-peers/check.sh` | 2 passed, actual 1.2.14/1.3.6 peers |
 | R7 declared digest and exact opening bytes | `V2_TEST_IMAGE=keripy-v2-refactor:blid-exact V2_TEST_VOLUME=keripy-v2-refactor-blid-exact scripts/v2-e2e/check.sh tests/acdc/test_blid_digest_profile.py tests/acdc/test_regeventing.py` | 86 passed; independent review exposed and corrected encoding normalization |
+| R5-A registrar/observer pruner ownership | `V2_TEST_IMAGE=keripy-v2-refactor:pruner V2_TEST_VOLUME=keripy-v2-refactor-pruner scripts/v2-e2e/check.sh tests/app/test_native_service_pruning.py` | 2 passed: authenticated cache, expiry, cancellation, reopen, stale-query refusal |
 
 These targeted checks qualify the runner change, not the complete refactor.
 The historic 799-test result is not new evidence for the current changes.

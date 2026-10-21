@@ -63,3 +63,25 @@ test functions in `tests/acdc/test_blid_digest_profile.py`.
   invalid/long/trailing digests, placeholder fields, and public empty nonce.
   The 59-case profile and 27 existing registry tests pass in the installed Linux
   wheel. This does not establish R6 conflict policy or complete qualification.
+
+## R5-A: service-owned KRAM pruning
+
+Targets: `app.registrar.serving.Context.__init__` and
+`tests/app/test_native_service_pruning.py` (test and nested context factory).
+
+- Existing service composition entered in `66cbec1b088175246a25aa599b479cacf2031f00`,
+  recorded Git author Kent Bull, drawing on keri-foundation/kf-registrar
+  `bf14eac4d644275a13cbd3c5900cc2e4dd7c11d1` (Apache-2.0).
+- Reused `core.kraming.Pruner`: Keanu's
+  `a8bafd15afebaeffe1c566408762ea3a760ad33d` and
+  `afb81182cf41783bae05930e91d138390750ad83`, verified by Git blame.
+  Existing cache deadlines, authentication, and pruning rules remain authoritative.
+- Local Codex composition gives each evidence service one scheduled Pruner for
+  its intake Kramer. Observer inherits this concrete runtime owner. This repairs
+  absent lifecycle wiring; it does not define a new KRAM timing constraint.
+- New tests authenticate real signed service queries, cancel, reopen persistent
+  Linux stores, and expire caches by advancing receiver time. They verify retained
+  KEL evidence and rejection of the now-expired original query. No cache row is
+  fabricated. Both registrar and observer cases pass.
+- This unit covers service ownership only. Group/CLI/Dolly composition is tracked
+  separately before closing the whole R5 gate.

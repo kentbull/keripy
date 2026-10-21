@@ -16,7 +16,7 @@ from keri.app.httping import CESR_CONTENT_TYPE
 from keri.app.indirecting import createHttpServer
 from keri.db.basing import BaserDoer
 from keri.core import Kevery, Parser, SerderACDC, Counter, Codens, Number, NumDex
-from keri.core.kraming import Kramer
+from keri.core.kraming import Kramer, Pruner
 from keri.db.dbing import snKey
 from keri.kering import (ConfigurationError, ValidationError, MissingSignatureError,
     MissingWitnessSignatureError, MissingDelegationError, OutOfOrderError,
@@ -89,11 +89,26 @@ class Context(doing.DoDoer):
     """Own concrete remote KEL/native registry processors and their stores."""
 
     def __init__(self, hby, *, publishers=(), observers=(), reger=None, config=None):
+        """Compose authenticated intake, registry evidence, and cache maintenance.
+
+        Args:
+            hby: Habery owning KEL and KRAM persistence; caller closes it.
+            publishers: AIDs authorized to publish public registry evidence.
+            observers: AIDs authorized to retrieve hosted evidence.
+            reger: Optional existing native registry store, closed by ``close``.
+            config: Optional enabled KRAM policy accepted by ServiceConfig.
+
+        Schedule this context as a child doer for its entire service lifetime.
+        Its single pruner uses the same Kramer as intake; cancellation stops
+        maintenance before the caller closes stores. Reopening resumes pruning
+        persisted caches under the existing KRAM rules, without erasing evidence.
+        """
         self.hby = hby
         self.publishers, self.observers = set(publishers), set(observers)
         self.cf = ServiceConfig(config)
         self.kvy = Kevery(db=hby.db, cf=self.cf, enableKram=True, lax=False, local=False)
         self.kvy.kramer = Kramer(db=hby.db, cf=self.cf, cues=self.kvy.cues)
+        self.pruner = Pruner(self.kvy.kramer, tock=1.0)
         self.reger = reger if reger is not None else RegBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
         self.rever = Rever(db=hby.db, reger=self.reger)
@@ -103,7 +118,7 @@ class Context(doing.DoDoer):
         self.app.add_route('/', BulkEnd(self))
         self.app.add_route('/ingest', IngestEnd(self))
         self.app.add_route('/health', HealthEnd())
-        super().__init__(doers=[doing.doify(self.escrowDo)])
+        super().__init__(doers=[self.pruner, doing.doify(self.escrowDo)])
 
     def ingest(self, raw):
         """Parse public evidence; all native commits go through the shared Rever."""
