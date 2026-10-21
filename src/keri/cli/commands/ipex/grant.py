@@ -4,16 +4,21 @@ keri.app.cli.commands module
 
 """
 import argparse
-from ...common import native_exchange
+import json
+import math
+from pathlib import Path
+from ...common import native_exchange, cesr_sending
 
 from hio.base import doing
 
 from ...common import Parsery, setupHby
 
-from ....kering import Vrsn_1_0
+from ....kering import Vrsn_1_0, ConfigurationError
 from ....app import (Notifier, StreamPoster, Organizer,
                      GroupHab, Multiplexor, MailboxDirector,
                      serialize, multisigExn)
+from ....app.notifying import Noter
+from ....app.keeping import Keeper
 from ....app.grouping import loadHandlers as loadGroupingHandlers
 
 from ....core import coring, parsing, serdering
@@ -50,8 +55,13 @@ parser.add_argument('--opening', action='append', default=[], help='file contain
 parser.add_argument('--bound-event', help='explicit accepted issuee KEL event SAID for bound-state derivation')
 
 def handler(args):
+    """Select explicit native presentation or the established legacy grant path."""
     if args.native:
         return [native_exchange.ExchangeDoer(args, 'grant')]
+    if any(getattr(args, key, None) for key in ('from_grant', 'disclose', 'refresh', 'derive', 'opening', 'bound_event', 'observer', 'registry', 'proposal', 'proposal_output')):
+        raise ConfigurationError('native presentation options require --v2')
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise ConfigurationError('--timeout must be positive and finite')
     ed = GrantDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,
@@ -59,22 +69,41 @@ def handler(args):
                    said=args.said,
                    recp=args.recipient,
                    message=args.message,
-                   timestamp=args.time)
+                   timestamp=args.time, options=args)
     return [ed]
 
 
 class GrantDoer(doing.DoDoer):
 
-    def __init__(self, name, alias, base, bran, said, recp, message, timestamp):
+    def __init__(self, name, alias, base, bran, said, recp, message, timestamp, options=None):
+        """Open legacy identity/registry owners and retain optional direct delivery.
+
+        name/base/bran identify the local store; alias chooses its habitat.
+        said/recp select credential and recipient, message/timestamp author the
+        grant, and options supplies accepted prior, public input, output and URL.
+        """
+        self.options = options
         self.said = said
         self.recp = recp
         self.message = message
         self.timestamp = timestamp
-        self.hby = setupHby(name=name, base=base, bran=bran)
+        keeper = Keeper(name=name, base=base, reopen=True)
+        try:
+            aeid = keeper.gbls.get('aeid')
+            if aeid is None:
+                raise ConfigurationError('legacy grant requires an existing identity')
+        finally:
+            keeper.close()
+        self.hby = setupHby(name=name, base=base, bran=bran if aeid else None,
+                            version=Vrsn_1_0)
         self.hab = self.hby.habByName(alias)
+        if self.hab is None or self.hab.kever.serder.pvrsn != Vrsn_1_0:
+            self.hby.close()
+            raise ConfigurationError('legacy grant requires a v1 alias; use --v2 for native workflows')
         self.rgy = credentialing.Regery(hby=self.hby, name=name, base=base)
         self.org = Organizer(hby=self.hby)
-        notifier = Notifier(self.hby)
+        self.noter = Noter(name=self.hby.name, base=self.hby.base, temp=self.hby.temp)
+        notifier = Notifier(self.hby, noter=self.noter)
         mux = Multiplexor(self.hby, notifier=notifier)
 
         self.exc = exchanging.Exchanger(hby=self.hby, handlers=[])
@@ -83,7 +112,7 @@ class GrantDoer(doing.DoDoer):
 
         mbx = MailboxDirector(hby=self.hby,
                               topics=["/receipt", "/multisig", "/replay", "/credential"],
-                              exc=self.exc)
+                              exc=self.exc, version=Vrsn_1_0)
 
         self.toRemove = [mbx]
         super(GrantDoer, self).__init__(doers=self.toRemove + [doing.doify(self.grantDo)])
@@ -105,8 +134,14 @@ class GrantDoer(doing.DoDoer):
         self.tock = tock
         _ = (yield self.tock)
 
+        if self.options is not None and self.options.input:
+            parsing.Parser(version=Vrsn_1_0).parse(
+                ims=bytearray(Path(self.options.input).read_bytes()),
+                kvy=self.hby.kvy, exc=self.exc)
+            self.exc.processEscrow()
+
         creder, prefixer, seqner, saider = self.rgy.reger.cloneCred(said=self.said)
-        if creder is None:
+        if creder is None or creder.pvrsn != Vrsn_1_0:
             raise ValueError(f"invalid credential SAID to grant={self.said}")
 
         acdc = serialize(creder, prefixer, seqner, saider)
@@ -130,17 +165,21 @@ class GrantDoer(doing.DoDoer):
         if recp is None:
             raise ValueError("unable to find recipient")
 
-        iss = self.rgy.reger.cloneTvtAt(creder.said)
+        agree = None
+        if self.options is not None and self.options.prior:
+            agree = self.acceptedAgreement(self.options.prior, recp, creder)
+
+        iss = self.rgy.reger.cloneTvtAt(creder.said, gvrsn=Vrsn_1_0)
 
         iserder = serdering.SerderKERI(raw=bytes(iss))
         seqner = coring.Seqner(sn=iserder.sn)
 
         serder = self.hby.db.fetchLastSealingEventByEventSeal(creder.sad['i'],
                                                               seal=dict(i=iserder.pre, s=seqner.snh, d=iserder.said))
-        anc = self.hby.db.cloneEvtMsg(pre=serder.pre, fn=0, dig=serder.said)
+        anc = self.hby.db.cloneEvtMsg(pre=serder.pre, fn=0, dig=serder.said, gvrsn=Vrsn_1_0)
 
         exn, atc = ipexGrantExn(hab=self.hab, recp=recp, message=self.message, acdc=acdc, iss=iss, anc=anc,
-                                dt=self.timestamp)
+                                dt=self.timestamp, agree=agree, version=Vrsn_1_0)
         msg = bytearray(exn.raw)
         msg.extend(atc)
 
@@ -155,7 +194,7 @@ class GrantDoer(doing.DoDoer):
             smids.remove(self.hab.mhab.pre)
 
             for part in smids:  # this goes to other participants
-                postman = StreamPoster(hby=self.hby, hab=self.hab.mhab, recp=part, topic="multisig")
+                postman = StreamPoster(hby=self.hby, hab=self.hab.mhab, recp=part, topic="multisig", version=Vrsn_1_0)
                 postman.send(serder=wexn,
                              attachment=watc, gvrsn=Vrsn_1_0)
                 doer = doing.DoDoer(doers=postman.deliver())
@@ -165,8 +204,19 @@ class GrantDoer(doing.DoDoer):
                 yield self.tock
 
         if self.exc.lead(self.hab, said=exn.said):
+            if self.options is not None and (self.options.output or self.options.endpoint):
+                raw = self.directStream(creder, exn)
+                if self.options.output:
+                    with Path(self.options.output).open('xb') as output:
+                        output.write(raw)
+                if self.options.endpoint:
+                    yield from cesr_sending.send(self, self.options.endpoint, raw, self.options.timeout)
+                print(json.dumps(dict(exchange=exn.said, version='1.0', recipient=recp,
+                                      localAccepted=self.exc.complete(exn.said))))
+                self.remove(self.toRemove)
+                return
             print(f"Sending message {exn.said} to {recp}")
-            postman = StreamPoster(hby=self.hby, hab=sender, recp=recp, topic="credential")
+            postman = StreamPoster(hby=self.hby, hab=sender, recp=recp, topic="credential", version=Vrsn_1_0)
 
             sources = self.rgy.reger.sources(self.hby.db, creder)
             credentialing.sendArtifacts(self.hby, self.rgy.reger, postman, creder, recp)
@@ -190,3 +240,69 @@ class GrantDoer(doing.DoDoer):
             self.remove([doer])
 
         self.remove(self.toRemove)
+
+
+    def acceptedAgreement(self, said, recipient, credential):
+        """Verify a retained v1 agreement binds this issuer, recipient and offer.
+
+        said selects the accepted agreement; recipient and credential are the
+        requested grant bindings (credential is the verified SerderACDC). Missing or mismatched thread evidence raises
+        ConfigurationError before any grant is authored.
+        """
+        agree = self.hby.db.exns.get((said,))
+        if (agree is None or agree.pvrsn != Vrsn_1_0 or agree.route != '/ipex/agree'
+                or agree.pre != recipient):
+            raise ConfigurationError('legacy grant requires the recipient agreement')
+        exchanging.verify(self.hby, agree)
+        offer = self.hby.db.exns.get((agree.sad['p'],))
+        if (offer is None or offer.pvrsn != Vrsn_1_0 or offer.route != '/ipex/offer'
+                or offer.pre != self.hab.pre
+                or offer.sad.get('e', {}).get('acdc', {}).get('d') != credential.said):
+            raise ConfigurationError('legacy agreement does not bind this credential offer')
+        exchanging.verify(self.hby, offer)
+        if offer.sad['p']:
+            application = self.hby.db.exns.get((offer.sad['p'],))
+            if (application is None or application.pvrsn != Vrsn_1_0
+                    or application.route != '/ipex/apply' or application.pre != recipient
+                    or application.sad['a'].get('i') != self.hab.pre
+                    or application.sad['a'].get('s') != credential.schema):
+                raise ConfigurationError('legacy agreement changes the original application parties or schema')
+            exchanging.verify(self.hby, application)
+        return agree
+
+    def directStream(self, credential, exn):
+        """Return grant plus verified public dependencies for direct intake.
+
+        credential and exn are retained legacy artifacts. This mirrors
+        credentialing.sendArtifacts and sources using their existing replay
+        APIs. It includes source credentials and delegated KEL evidence, and
+        never includes private signing or registry derivation material.
+        """
+        raw = bytearray(self.hab.replay(gvrsn=Vrsn_1_0))
+        sources = list(self.rgy.reger.sources(self.hby.db, credential))
+        for creder in [source for source, _ in sources] + [credential]:
+            for aid in dict.fromkeys(aid for aid in (creder.israid, creder.iseaid) if aid):
+                if aid in self.hby.kevers:
+                    raw.extend(b''.join(self.hby.db.cloneDelegation(self.hby.kevers[aid], gvrsn=Vrsn_1_0)))
+                    raw.extend(b''.join(self.hby.db.clonePreIter(pre=aid, gvrsn=Vrsn_1_0)))
+            if creder.regid:
+                raw.extend(b''.join(self.rgy.reger.clonePreIter(pre=creder.regid, gvrsn=Vrsn_1_0)))
+            raw.extend(b''.join(self.rgy.reger.clonePreIter(pre=creder.said, gvrsn=Vrsn_1_0)))
+        for source, attachment in sources:
+            raw.extend(source.raw + attachment)
+        raw.extend(exchanging.serializeMessage(self.hby, exn.said, framed=True))
+        return bytes(raw)
+
+
+    def exit(self, deeds=None):
+        """Cancel child work before closing this command's registry and identity.
+
+        deeds is the scheduler's optional child queue. Close the separately
+        owned notification store as well, including after direct-output returns.
+        """
+        try:
+            super().exit(deeds=deeds)
+        finally:
+            self.noter.close()
+            self.rgy.close()
+            self.hby.close()

@@ -1,9 +1,9 @@
-"""Offer native IPEX disclosure."""
+"""Offer v1 or native v2 IPEX disclosure."""
 import argparse
-from ...common import Parsery, native_exchange
+from ...common import Parsery, native_exchange, legacy_negotiation
 from ....kering import ConfigurationError
 
-parser = argparse.ArgumentParser(description='Offer native IPEX disclosure', parents=[Parsery.keystore()])
+parser = argparse.ArgumentParser(description='Offer v1 or native v2 IPEX disclosure', parents=[Parsery.keystore()])
 parser.set_defaults(handler=lambda args: handler(args))
 parser.add_argument('--alias', '-a', required=True)
 parser.add_argument('--message', '-m', default='')
@@ -18,6 +18,7 @@ parser.add_argument('--disclose', action='append', default=[])
 
 
 def handler(args):
+    """Select v1 negotiation by default or the explicit native v2 command path."""
     if not args.native:
-        raise ConfigurationError('this command requires --native; legacy negotiation is not implemented')
+        return [legacy_negotiation.Negotiation(args, 'offer')]
     return [native_exchange.ExchangeDoer(args, 'offer')]
