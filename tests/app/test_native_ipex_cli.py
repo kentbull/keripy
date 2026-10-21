@@ -14,6 +14,21 @@ PASSCODE = '0123456789abcdefghijk'
 
 
 def invoke(name, *args):
+    """Run an installed native IPEX command over one independently reopened fixture store.
+
+    Args:
+        name (str): Isolated identity under native-ipex-cli.
+        *args: Public command/version/input/output/capability tokens.
+
+    Returns:
+        list[dict]: Ordered JSON-object transcript lines after a successful command.
+
+    Raises:
+        AssertionError: Nonzero process exit or textual KLI ERR indicates refusal.
+        TimeoutExpired, JSONDecodeError: Bounded process/output handling fails.
+
+    Each call is a separate process; retaining a Python object cannot conceal a
+    missing persisted prior, admission, or optional derivation capability."""
     result = subprocess.run([sys.executable, '-m', 'keri.cli.kli', *args,
         '--name', name, '--base', 'native-ipex-cli'], capture_output=True, text=True,
         env=dict(os.environ, KLI_KEYSTORE_PASSCODE=PASSCODE), timeout=20)
@@ -23,6 +38,13 @@ def invoke(name, *args):
 
 
 def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
+    """Negotiate/admit with real CLI processes, present retained proof without salt, and separately refresh by supplied opening and explicit provisioned derivation.
+
+    Parameters:
+        tmp_path: Pytest-owned exclusive KEL/proposal/credential/opening files transferred between installed processes.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     names, prefixes = {}, {}
     for role in ('issuer', 'holder', 'verifier'):
         name = names[role] = role + '-' + uuid.uuid4().hex
@@ -130,7 +152,13 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
 
 
 def test_public_upd_cli_grant_and_real_holder_admission(tmp_path):
-    """An accepted public update needs no fabricated blinded opening."""
+    """Admit an actual public-upd-backed Grant without inventing a blinded opening or provisioning custody.
+
+    Parameters:
+        tmp_path: Pytest-owned exclusive KEL/proposal/credential/opening files transferred between installed processes.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     names, prefixes = {}, {}
     for role in ('issuer', 'holder'):
         name = names[role] = 'public-' + role + '-' + uuid.uuid4().hex
@@ -151,6 +179,13 @@ def test_public_upd_cli_grant_and_real_holder_admission(tmp_path):
 
 
 def test_native_group_cli_approves_exact_exchange_after_reopen(tmp_path):
+    """Reopen pending real group exchange proposals and require explicit member approval of their exact child bytes.
+
+    Parameters:
+        tmp_path: Pytest-owned exclusive KEL/proposal/credential/opening files transferred between installed processes.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from contextlib import ExitStack
     from keri.acdc import acdcmap
     from keri.core import Parser

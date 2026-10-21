@@ -19,6 +19,18 @@ PASSCODE = '0123456789abcdefghijk'
 
 
 def command(name, *args):
+    """Execute one bounded installed CLI process against a persistent fixture store.
+
+    Args:
+        name (str): Isolated test identity under native-cli-test.
+        *args: Public KLI command tokens, including explicit native version selection.
+
+    Returns:
+        CompletedProcess: Captured status/stdout/stderr for success or refusal checks.
+
+    Raises:
+        TimeoutExpired: The process exceeds twenty seconds. The public fixture
+        passcode is supplied through the environment rather than command logging."""
     env = dict(os.environ, KLI_KEYSTORE_PASSCODE=PASSCODE)
     result = subprocess.run([sys.executable, '-m', 'keri.cli.kli', *args,
                              '--name', name, '--base', 'native-cli-test'],
@@ -27,6 +39,18 @@ def command(name, *args):
 
 
 def invoke(name, *args):
+    """Require success from one installed command and decode its JSON transcript.
+
+    Args:
+        name (str): Existing isolated test identity.
+        *args: Public KLI tokens forwarded unchanged to command.
+
+    Returns:
+        list[dict]: Every JSON-object output line, preserving emission order.
+
+    Raises:
+        AssertionError: Nonzero exit or KLI's textual ERR fallback reports refusal.
+        TimeoutExpired, JSONDecodeError: Execution/output is not a valid success."""
     result = command(name, *args)
     assert result.returncode == 0, result.stderr
     assert 'ERR:' not in result.stdout, result.stdout
@@ -34,6 +58,13 @@ def invoke(name, *args):
 
 
 def test_native_cli_authoring_reopen_and_private_export(tmp_path):
+    """Reopen installed native authoring, verify actual public/private exports, and retain exact old issuance after revocation or custody-row loss.
+
+    Parameters:
+        tmp_path: Pytest-owned exclusive credential, public proof, private custody, and bound-evidence files.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     name = 'native-' + uuid.uuid4().hex
     with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
@@ -112,6 +143,10 @@ def test_native_cli_authoring_reopen_and_private_export(tmp_path):
 
 
 def test_native_option_is_explicit_and_legacy_remains_default():
+    """Keep v1 command defaults while recognizing --v2 and --native as the same explicit native selection.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     parser = multicommand.create_parser(commands)
     for command in (['vc', 'registry', 'incept', '-a', 'issuer'],
                     ['vc', 'create', '-a', 'issuer', '--data', '{}'],
@@ -122,6 +157,10 @@ def test_native_option_is_explicit_and_legacy_remains_default():
 
 
 def test_native_cli_refuses_unencrypted_custody_before_registry_creation():
+    """Refuse requested private custody on an unencrypted Keeper before creating any named registry.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     name = 'unencrypted-' + uuid.uuid4().hex
     with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
         hby.makeHab(name='issuer', version=Vrsn_2_0)
@@ -137,11 +176,10 @@ def test_native_cli_refuses_unencrypted_custody_before_registry_creation():
 
 
 def test_public_cli_lifecycle_never_provisions_or_encrypts_custody():
-    """Public inception/issue/revoke/list work with an unencrypted identity.
+    """Run public inception/issue/revoke/list without salt records or implicit Keeper AEID migration despite an environment passcode.
 
-    The subprocess helper supplies a passcode environment variable deliberately;
-    ordinary opening must not silently migrate Keeper encryption or create salt.
-    """
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     name = 'public-' + uuid.uuid4().hex
     with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
         hby.makeHab(name='issuer', version=Vrsn_2_0)
@@ -169,6 +207,10 @@ def test_public_cli_lifecycle_never_provisions_or_encrypts_custody():
 
 
 def test_native_cli_pending_witness_anchor_resumes_without_resealing():
+    """Keep missing real witness receipts pending, then resume the same staged registry/anchor without creating another sealing event.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     name = 'pending-' + uuid.uuid4().hex
     with openHby(name='witness-' + uuid.uuid4().hex, version=Vrsn_2_0) as whby:
         witness = whby.makeHab(name='witness', transferable=False, version=Vrsn_2_0)
@@ -206,6 +248,13 @@ def test_native_cli_pending_witness_anchor_resumes_without_resealing():
 
 
 def test_native_cli_unblinded_issuance_then_blind_revocation(tmp_path):
+    """Preserve one mixed public/blinded history and bind explicit native revocation without fabricating an issuance opening.
+
+    Parameters:
+        tmp_path: Pytest-owned exclusive credential, public proof, private custody, and bound-evidence files.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     name = 'mixed-' + uuid.uuid4().hex
     with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
@@ -229,6 +278,13 @@ def test_native_cli_unblinded_issuance_then_blind_revocation(tmp_path):
 
 
 def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
+    """Use real Issuee KEL coordinates for bound issuance/revocation and preserve the exact historical issuance on retry.
+
+    Parameters:
+        tmp_path: Pytest-owned exclusive credential, public proof, private custody, and bound-evidence files.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     name = 'bound-' + uuid.uuid4().hex
     with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:

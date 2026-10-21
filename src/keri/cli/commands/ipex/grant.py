@@ -55,7 +55,18 @@ parser.add_argument('--opening', action='append', default=[], help='file contain
 parser.add_argument('--bound-event', help='explicit accepted issuee KEL event SAID for bound-state derivation')
 
 def handler(args):
-    """Select explicit native presentation or the established legacy grant path."""
+    """Select the explicit native presentation owner or existing legacy Grant runtime.
+
+    Args:
+        args (Namespace): Parsed identity, credential/recipient, version selection,
+        optional native capability controls, and legacy prior/output/delivery options.
+
+    Returns:
+        list[Doer]: One native ExchangeDoer when --v2 is selected, otherwise GrantDoer.
+
+    Raises:
+        ConfigurationError: Native-only controls are supplied to v1, timeout is not
+        finite/positive, or opening the selected existing legacy identity fails."""
     if args.native:
         return [native_exchange.ExchangeDoer(args, 'grant')]
     if any(getattr(args, key, None) for key in ('from_grant', 'disclose', 'refresh', 'derive', 'opening', 'bound_event', 'observer', 'registry', 'proposal', 'proposal_output')):
@@ -75,13 +86,33 @@ def handler(args):
 
 class GrantDoer(doing.DoDoer):
 
-    def __init__(self, name, alias, base, bran, said, recp, message, timestamp, options=None):
-        """Open legacy identity/registry owners and retain optional direct delivery.
+    """Own legacy credential Grant composition, child delivery, and opened stores.
 
-        name/base/bran identify the local store; alias chooses its habitat.
-        said/recp select credential and recipient, message/timestamp author the
-        grant, and options supplies accepted prior, public input, output and URL.
-        """
+    The existing multisig/mailbox path remains available. Explicit direct output
+    includes public artifact dependencies and any verified accepted negotiation;
+    transport completion does not prove recipient credential acceptance."""
+    def __init__(self, name, alias, base, bran, said, recp, message, timestamp, options=None):
+        """Open the selected existing v1 identity and compose its legacy Grant owners.
+
+        Args:
+            name (str): Existing Keeper/Habery name.
+            alias (str): Local v1 habitat or group alias sending the Grant.
+            base (str): Store namespace shared by identity, registry, and notification data.
+            bran (str | None): Authentication passcode for an already encrypted Keeper.
+            said (str): Retained credential SAID to disclose.
+            recp (str | None): Recipient AID/contact; None selects the credential Issuee.
+            message (str): Human Grant message.
+            timestamp (str | None): Optional authored exchange timestamp.
+            options (Namespace | None): Accepted prior, public input, exclusive output,
+            endpoint, and deadline for the optional direct adapter.
+
+        Returns:
+            None. Owns Habery, legacy Regery/Noter, mailbox and scheduled Grant work.
+
+        Raises:
+            ConfigurationError: Keeper is absent, alias is unknown, or alias uses v2.
+            Identity authentication/storage errors propagate. An existing unencrypted
+            Keeper opens without bran so this operation does not migrate its AEID."""
         self.options = options
         self.said = said
         self.recp = recp
@@ -118,17 +149,31 @@ class GrantDoer(doing.DoDoer):
         super(GrantDoer, self).__init__(doers=self.toRemove + [doing.doify(self.grantDo)])
 
     def grantDo(self, tymth, tock=0.0, **kwa):
-        """ Grant credential by creating /ipex/grant exn message
+        """Create an authenticated legacy Grant and perform selected group/direct delivery.
 
-        Parameters:
-            tymth (function): injected function wrapper closure returned by .tymen() of
-                Tymist instance. Calling tymth() returns associated Tymist .tyme.
-            tock (float): injected initial tock value
+        Args:
+            tymth (Callable): HIO injected clock driving this cooperative operation.
+            tock (float): Scheduling delay while waiting for group/mailbox/direct work.
+            **kwa: Additional HIO lifecycle metadata, unused here.
+
+        Yields:
+            float | None: Initial delay and group/transport progress.
 
         Returns:
-            doifiable Doist compatible generator method
+            None. Optional direct output prints locally accepted v1 exchange identifiers;
+            the existing default route reports transport progress to the operator.
 
-        """
+        Raises:
+            ValueError: Retained credential is absent/wrong-version or recipient cannot
+            be resolved. ConfigurationError refuses mismatched accepted negotiation.
+            TimeoutError: Explicit direct delivery exceeds its selected deadline.
+            OSError: Input/output access or exclusive file creation fails.
+
+        Input evidence passes through ordinary Parser/Exchanger first. An accepted prior
+        is checked before authoring; directStream includes public dependencies. Existing
+        multisig leader selection and mailbox scheduling retain their original contract;
+        only the direct transport helper adds its own finite request deadline. exit owns
+        final child cancellation and store closure, including failure paths."""
         # enter context
         self.wind(tymth)
         self.tock = tock
@@ -243,12 +288,23 @@ class GrantDoer(doing.DoDoer):
 
 
     def acceptedAgreement(self, said, recipient, credential):
-        """Verify a retained v1 agreement binds this issuer, recipient and offer.
+        """Verify retained signed negotiation binds the requested legacy Grant exactly.
 
-        said selects the accepted agreement; recipient and credential are the
-        requested grant bindings (credential is the verified SerderACDC). Missing or mismatched thread evidence raises
-        ConfigurationError before any grant is authored.
-        """
+        Args:
+            said (str): Accepted agreement SAID selected as the new Grant predecessor.
+            recipient (str): Required agreement signer and original Apply sender.
+            credential (SerderACDC): Verified retained credential promised by the issuer Offer.
+
+        Returns:
+            SerderKERI: Agreement after its signature and Offer/optional Apply bindings verify.
+
+        Raises:
+            ConfigurationError: Missing/wrong-version/route thread evidence, wrong parties,
+            substituted offered credential, or original application schema mismatch.
+            KeriError: Retained exchange signatures cannot be verified.
+
+        Each selected thread message reuses exchanging.verify; an arbitrary body row or
+        route spelling alone cannot authorize a new Grant. No message is authored here."""
         agree = self.hby.db.exns.get((said,))
         if (agree is None or agree.pvrsn != Vrsn_1_0 or agree.route != '/ipex/agree'
                 or agree.pre != recipient):
@@ -271,13 +327,20 @@ class GrantDoer(doing.DoDoer):
         return agree
 
     def directStream(self, credential, exn):
-        """Return grant plus verified public dependencies for direct intake.
+        """Assemble exact accepted Grant bytes with public dependencies for direct intake.
 
-        credential and exn are retained legacy artifacts. This mirrors
-        credentialing.sendArtifacts and sources using their existing replay
-        APIs. It includes source credentials and delegated KEL evidence, and
-        never includes private signing or registry derivation material.
-        """
+        Args:
+            credential (SerderACDC): Retained legacy credential whose source graph is needed.
+            exn (SerderKERI): Locally accepted Grant to serialize with its stored attachments.
+
+        Returns:
+            bytes: Sender/delegation KELs, registry/credential TELs, source credentials,
+            and the final exact Grant stream in the legacy genus.
+
+        This mirrors credentialing.sendArtifacts/sources through existing replay APIs;
+        private signing/registry derivation material is never selected. Missing/corrupt
+        retained artifacts or replay storage errors propagate rather than supplying
+        synthetic acceptance rows. Recipient verification remains a separate boundary."""
         raw = bytearray(self.hab.replay(gvrsn=Vrsn_1_0))
         sources = list(self.rgy.reger.sources(self.hby.db, credential))
         for creder in [source for source, _ in sources] + [credential]:
@@ -295,11 +358,14 @@ class GrantDoer(doing.DoDoer):
 
 
     def exit(self, deeds=None):
-        """Cancel child work before closing this command's registry and identity.
+        """Cancel owned scheduler children before closing legacy stores.
 
-        deeds is the scheduler's optional child queue. Close the separately
-        owned notification store as well, including after direct-output returns.
-        """
+        Args:
+            deeds: Optional HIO child-deed queue passed to DoDoer.exit.
+
+        Returns:
+            None. Closes separately owned Noter, Regery and Habery even after direct
+            output completion or scheduling failure; close/storage errors propagate."""
         try:
             super().exit(deeds=deeds)
         finally:
