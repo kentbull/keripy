@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import falcon
 from hio.base import doing
-from hio.core import http
+from hio.core import http, tcp
 
 from keri import Vrsn_2_0, Kinds
 from keri.acdc import ipexing
@@ -91,7 +91,7 @@ def options(parser, *, send=False):
     parser.add_argument('--proposal', help='approve this exact member-signed group IPEX proposal')
     parser.add_argument('--proposal-output', help='write a signed member proposal instead of network fanout')
     if send:
-        parser.add_argument('--endpoint', help='recipient CESR intake URL')
+        parser.add_argument('--endpoint', help='recipient HTTP(S) intake URL or tcp://host:port')
 
 
 class ExchangeDoer(doing.DoDoer):
@@ -100,9 +100,41 @@ class ExchangeDoer(doing.DoDoer):
         super().__init__(doers=[doing.doify(self.run)])
 
     def request(self, url, body):
+        """Send exact CESR bytes with bounded, cooperatively scheduled transport.
+
+        ``url`` selects HTTP(S) intake or a raw TCP host and explicit port;
+        ``body`` is the already authenticated message stream. HTTP returns the
+        response after checking its status. TCP returns only a transport marker
+        after its send buffer drains, never a receiver acceptance assertion.
+        The caller must observe authenticated protocol or application results.
+        All child sockets close on completion, failure, or cancellation.
+        """
         target = urlsplit(url)
+        if target.scheme == 'tcp':
+            if (not target.hostname or not target.port or target.username or
+                    target.password or target.path not in ('', '/') or
+                    target.query or target.fragment):
+                raise ConfigurationError('TCP intake requires tcp://host:port')
+            client = tcp.clienting.Client(host=target.hostname, port=target.port)
+            owner = tcp.clienting.ClientDoer(client=client)
+            self.extend([owner])
+            try:
+                # Match KERIpy TCPMessenger's tx-buffer completion boundary.
+                # A drained buffer is not evidence of application acceptance.
+                client.tx(body)
+                deadline = self.tyme + self.args.timeout
+                while not client.connected or client.txbs:
+                    if client.cutoff:
+                        raise ConnectionError('native IPEX TCP peer closed before send completed')
+                    if self.tyme >= deadline:
+                        raise TimeoutError('native IPEX TCP send timed out')
+                    yield self.tock
+                return {'transport': 'tcp', 'sent': len(body)}
+            finally:
+                self.remove([owner])
+                client.close()
         if target.scheme not in ('http', 'https') or not target.hostname:
-            raise ConfigurationError('an HTTP(S) endpoint is required')
+            raise ConfigurationError('an HTTP(S) or TCP endpoint is required')
         client = http.clienting.Client(scheme=target.scheme, hostname=target.hostname,
             port=target.port or (443 if target.scheme == 'https' else 80))
         owner = http.clienting.ClientDoer(client=client)
@@ -169,6 +201,8 @@ class ExchangeDoer(doing.DoDoer):
             for regid in args.registry:
                 if not args.observer:
                     raise ConfigurationError('--registry synchronization requires --observer')
+                if urlsplit(args.observer).scheme not in ('http', 'https'):
+                    raise ConfigurationError('observer queries require an HTTP(S) endpoint')
                 response = yield from self.request(args.observer, signedQuery(hab, 'tels', {'i': regid}))
                 if response.get('headers', {}).get('observer-evidence-state') != 'fresh':
                     raise ConfigurationError('observer has no fresh evidence')

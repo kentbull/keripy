@@ -266,3 +266,13 @@ all four fail with the previous lookup restored. The complete KRAM file plus
 native sender transport tests pass (60 cases). The existing monotonicity test
 now deliberately removes persistent sender state as well as RAM state, keeping
 its original assertion about rejection order without relying on the cache bug.
+
+### Native direct TCP sender
+
+`ExchangeDoer.request` now accepts `tcp://host:port` for exact signed CESR
+transmission. Its HIO ownership and send-buffer boundary follow existing
+`keri.app.agenting.TCPMessenger.receiptDo`; URL constraints, timeout, cancellation
+cleanup, and the transport-only result are local CLI composition decisions.
+Observer requests still require HTTP response evidence. Six real-socket and
+invalid-destination tests pass, including multi-buffer byte preservation and an
+unavailable peer deadline. TCP send completion never claims receiver acceptance.
