@@ -124,3 +124,12 @@ service remains the lifecycle owner. This composition boundary is a local
 implementation decision needed by the external wallet, not a protocol change.
 Nineteen installed tests cover borrowed ownership and existing service
 acceptance/pruning, including restart and cancellation.
+
+`credential_disclosing.registryProof` extracts event-opening composition from
+`ExchangeDoer.registryOrigin` at `a6539208`. It accepts exact retained openings
+and an optional explicit derivation callable; it does not open custody or expand
+credential attributes. The CLI retains its file loading and bound-coordinate
+selection. Missing history now raises a precise configuration error. This local
+composition change lets Locksmith reuse the qualified proof selection without
+importing CLI code. Twenty-nine installed native CLI, wallet and custody tests
+pass, including retained presentation and supplied/derived refresh boundaries.

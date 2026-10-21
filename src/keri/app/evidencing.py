@@ -306,4 +306,3 @@ class EvidenceProcessor:
                 tel.extend(raw)
                 tel.extend(Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
         return bytes(kel + tel)
-

@@ -12,14 +12,15 @@ from hio.core import http
 
 from keri import Vrsn_2_0, Kinds
 from keri.acdc import ipexing
-from keri.acdc.regeventing import issuerRegistry, vetBlind, vetBound, _blindCandidates
+from keri.acdc.regeventing import issuerRegistry, _blindCandidates
 from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import GroupHab, Notifier
 from keri.app.native_grouping import NativeGroup
+from keri.app.credential_disclosing import registryProof
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.app.indirecting import createHttpServer
 from keri.app.evidencing import EvidenceContext, signedQuery, KEL_DEPENDENCIES
-from keri.core import Codens, Compactor, Counter, Diger, Number, Parser, SealEvent, SerderACDC, messagize
+from keri.core import Compactor, Diger, Number, Parser, SerderACDC, messagize
 from keri.kering import ConfigurationError, MissingChainError, MissingSchemaError
 from keri.peer import exchanging
 from keri.db import openLMDB
@@ -358,52 +359,21 @@ class ExchangeDoer(doing.DoDoer):
             if len(candidates) != 1:
                 raise ConfigurationError('opening file must contain exactly one CESR Blinder')
             retained.append(candidates[0])
-        head = rgy.store.headEvent(regid)
-        if head is None:
-            raise ConfigurationError('registry evidence has not been acquired')
         explicit = (wallet.boundEvent(credential, self.args.bound_event)
                     if self.args.bound_event else {})
         issued = wallet.db.issued.get((credential.said,))
-        bonds = []
-        binding = None
-        for ordinal in range(Number(numh=head.sad['n']).num, 0, -1):
-            update = rgy.store.seqEvent(regid, ordinal)
-            if update.ilk == 'upd':
-                if update.sad['td']:
-                    binding = update
-                    break
-                continue
-            found = next((proof for proof in retained if proof.said == update.sad['b']), None)
+
+        def derive(update, target, state):
+            """Apply the selected custody's existing bound coordinates to this event."""
             parameters = explicit
             if not parameters and issued is not None and issued.update == update.said and issued.bound:
                 parameters = dict(bound=True, bsn=issued.bound['bn'], bd=issued.bound['bd'])
-            if found is None and wallet.custody is not None:
-                for target, state in ((credential.said, 'issued'), (credential.said, 'revoked'), ('', '')):
-                    # A bound vacuous update has its specified empty coordinates.
-                    args = (dict(bound=True, bsn=0, bd='') if parameters and not target
-                            else parameters)
-                    proof = wallet.custody.derive(regid, ordinal, target, state, **args)
-                    if proof.said == update.sad['b']:
-                        found = proof
-                        break
-            if found is None:
-                raise ConfigurationError('current registry opening unavailable; supply --opening or provision custody and use --derive')
-            target, _ = vetBlind(found, blid=update.sad['b'])
-            if target and target != credential.said:
-                raise ConfigurationError('registry opening binds a different credential')
-            vetBound(found, acdc=credential, db=wallet.hby.db)
-            bonds.append(found.data)
-            if found.acdc:
-                binding = update
-                break
-        if binding is None:
-            raise ConfigurationError('registry has no disclosed non-vacuous credential binding')
-        if issuerRegistry(credential) is None:
-            bonds.append(SealEvent(i=regid, s=binding.sad['n'], d=binding.said))
-        # Mutual public updates authenticate through the declared registry;
-        # their credential foot is explicitly empty, with no invented BLID.
-        return (messagize(credential, bonds=bonds, gvrsn=Vrsn_2_0) if bonds else
-                credential.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
+            if parameters and not target:
+                parameters = dict(bound=True, bsn=0, bd='')
+            return wallet.custody.derive(regid, update.sn, target, state, **parameters)
+
+        return registryProof(wallet.hby, rgy, credential, regid, retained=retained,
+                             derive=derive if wallet.custody is not None else None)
 
     def checkProposal(self, exn, args):
         """Refuse a group proposal that contradicts the explicit command selection.
