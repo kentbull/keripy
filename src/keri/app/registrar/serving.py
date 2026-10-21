@@ -33,6 +33,16 @@ class ServiceConfig:
     """Fixed, enabled KRAM policy for authenticated service requests."""
 
     def __init__(self, data=None):
+        """Select a concrete enabled KRAM policy for authenticated service requests.
+
+            Args:
+                data (dict | None): Explicit KRAM settings; None uses service defaults.
+
+            Returns:
+                None. The service rejects disabled KRAM and denial exemptions.
+
+            Raises:
+                ConfigurationError: Configuration disables mandatory authentication."""
         self.data = data if data is not None else {
             'kram': {'enabled': True, 'denials': [],
                      'caches': {'~': [1000, 5000, 60000, 300000, 5000, 60000, 300000]}}}
@@ -41,11 +51,25 @@ class ServiceConfig:
             raise ConfigurationError('service requests require enabled KRAM without denial exemptions')
 
     def get(self):
+        """Expose this service's concrete KRAM settings to Kramer.
+
+            Returns:
+                dict: The selected settings object; no network fetch or policy inference."""
         return self.data
 
 
 def signedQuery(hab, route, query=None):
-    """Construct a fresh signed CESR service query; callers retain no secret here."""
+    """Create a fresh, signed native service query with existing habitat keys.
+
+        Args:
+            hab: Authenticated signing habitat for the requester AID.
+            route (str): Service query route, such as tels/bulk.
+            query (dict | None): Query attributes; None supplies an empty map.
+
+        Returns:
+            bytes: Endorsed v2 CESR query stream with current request timestamp.
+
+        Key/signing failures propagate. This helper conveys no registry salt."""
     from keri.core import query as makeQuery
     from keri.help import helping
     serder = makeQuery(pre=hab.pre, route=route, query=query or {},
@@ -54,7 +78,23 @@ def signedQuery(hab, route, query=None):
 
 
 def authenticate(req, ctx, allowed, routes):
-    """Authenticate exactly one signed qry and its explicit service authorization."""
+    """Authenticate one complete native query and enforce the service allowlist.
+
+        Args:
+            req: Falcon request carrying one signed CESR query in its bounded body.
+            ctx (Context): Service holding enabled KRAM and authenticated KEL evidence.
+            allowed (Collection[str]): Explicit requester AIDs permitted for this route.
+            routes (Collection[str]): Query routes this endpoint accepts.
+
+        Returns:
+            tuple: Authenticated query Serder and its query-attribute map.
+
+        Raises:
+            falcon.HTTPError: Unsupported media, malformed/multiple messages, forbidden
+                AID/route, unavailable authentication, or invalid/replayed evidence.
+
+        Authorization alone cannot authenticate input. KRAM verifies the exact request
+        and updates replay/liveness state before endpoint code consumes its payload."""
     if (req.content_type or '').split(';')[0].lower() != CESR_CONTENT_TYPE:
         raise falcon.HTTPUnsupportedMediaType()
     ims = bytearray(req.bounded_stream.read())
@@ -89,20 +129,24 @@ class Context(doing.DoDoer):
     """Own concrete remote KEL/native registry processors and their stores."""
 
     def __init__(self, hby, *, publishers=(), observers=(), reger=None, config=None):
-        """Compose authenticated intake, registry evidence, and cache maintenance.
+        """Compose public evidence intake with one owned KRAM maintenance runtime.
 
-        Args:
-            hby: Habery owning KEL and KRAM persistence; caller closes it.
-            publishers: AIDs authorized to publish public registry evidence.
-            observers: AIDs authorized to retrieve hosted evidence.
-            reger: Optional existing native registry store, closed by ``close``.
-            config: Optional enabled KRAM policy accepted by ServiceConfig.
+            Args:
+                hby: Caller-owned Habery containing authenticated KEL and KRAM persistence.
+                publishers (Iterable[str]): Explicit AIDs allowed to publish public evidence.
+                observers (Iterable[str]): Explicit AIDs allowed to retrieve bulk evidence.
+                reger (RegBaser | None): Registry store, closed by this context's close().
+                config (dict | None): Enabled KRAM settings accepted by ServiceConfig.
 
-        Schedule this context as a child doer for its entire service lifetime.
-        Its single pruner uses the same Kramer as intake; cancellation stops
-        maintenance before the caller closes stores. Reopening resumes pruning
-        persisted caches under the existing KRAM rules, without erasing evidence.
-        """
+            Returns:
+                None. Schedule the context for its entire service lifetime; its single
+                Pruner and escrow child stop before the caller closes backing stores.
+
+            Raises:
+                ConfigurationError: Requested service policy disables required KRAM.
+
+            KEL/native TEL acceptance remains in the shared processors. Reopening resumes
+            persisted cache maintenance without deleting accepted evidence."""
         self.hby = hby
         self.publishers, self.observers = set(publishers), set(observers)
         self.cf = ServiceConfig(config)
@@ -121,14 +165,21 @@ class Context(doing.DoDoer):
         super().__init__(doers=[self.pruner, doing.doify(self.escrowDo)])
 
     def ingest(self, raw):
-        """Parse public evidence and summarize the shared Rever's final state.
+        """Process public evidence and summarize final shared-processor outcomes.
 
-        raw is a CESR stream of KEL/native TEL evidence. Returns accepted,
-        pending and rejected counts with accepted heads. An occupied TEL slot
-        does not reject a rival whose independent anchor is still pending;
-        authenticated conflicts and invalid evidence remain rejected. Intake
-        errors are reported in the rejected stream entry rather than raised.
-        """
+            Args:
+                raw (bytes): Complete or concatenated CESR KEL/native TEL evidence stream.
+
+            Returns:
+                dict: Accepted/pending/rejected counts and accepted per-registry heads.
+                    Stream/framing failures are recorded as rejected stream entries.
+
+            Recognized retained KEL dependencies permit continued intake; other failures
+            stop this stream. Escrows run before classification so a staged sibling is
+            not mistaken for acceptance. Unknown rival anchors remain pending; proven
+            conflicts never replace the accepted chain. Conflict proof discovered while
+            processing supporting KEL is retained locally, without inventing a TEL event
+            in this batch's counters. Freshness is a separate observer policy."""
         ims = bytearray(raw)
         summary = dict(accepted={}, pending={}, rejected={}, heads={})
         events = []
@@ -187,7 +238,14 @@ class Context(doing.DoDoer):
         return summary
 
     def _kelPending(self, event):
-        """Check exact ordinary KEL/receipt escrow membership, not just exception type."""
+        """Confirm that one exact KEL/receipt dependency remains durably escrowed.
+
+            Args:
+                event: Parsed KERI event or receipt whose processing raised a dependency.
+
+            Returns:
+                bool: Whether the concrete ordinary escrow retains this event identity.
+                    Exception class alone is insufficient evidence of recoverable work."""
         db = self.hby.db
         if event.ilk != 'rct':
             if any(event.said in escrow.get(keys=event.pre, on=event.sn)
@@ -201,10 +259,27 @@ class Context(doing.DoDoer):
         return any(receipt[0].qb64 == event.said for receipt in receipts)
 
     def registries(self):
+        """Enumerate only registries with an accepted native head.
+
+            Returns:
+                list[str]: Sorted registry SAIDs; staged inception bodies are excluded."""
         return sorted(keys[0] for keys, _ in self.reger.heads.getTopItemIter())
 
     def clone(self, regks=None, sn=0):
-        """Clone accepted controller evidence followed by accepted native TELs."""
+        """Clone accepted controller KEL evidence and selected accepted native TELs.
+
+            Args:
+                regks (Iterable[str] | None): Registry scope; None selects all accepted heads.
+                sn (int): First TEL ordinal to include, while retaining supporting KELs.
+
+            Returns:
+                bytes: Supporting delegation/controller evidence followed by framed TELs.
+
+            Raises:
+                KeyError: Scope contains a registry without an accepted inception.
+
+            Controller evidence is emitted once per issuer. Pending or conflicting body
+            rows never acquire accepted ordinals merely because their anchors are known."""
         regks = self.registries() if regks is None else list(regks)
         kel, tel, issuers = bytearray(), bytearray(), set()
         for regk in regks:
@@ -223,6 +298,16 @@ class Context(doing.DoDoer):
         return bytes(kel + tel)
 
     def escrowDo(self, tymth=None, tock=0.0, **kwa):
+        """Retry concrete KEL/TEL dependencies while this service is scheduled.
+
+            Args:
+                tymth: HIO scheduler clock injected on entry.
+                tock (float): Cooperative recurrence delay.
+                **kwa: Scheduler metadata unused by this loop.
+
+            Yields:
+                float: Delay between bounded processor passes. Cancellation stops retries;
+                the sibling Pruner owns cache expiration rather than deleting evidence."""
         self.wind(tymth)
         yield tock
         while True:
@@ -231,19 +316,50 @@ class Context(doing.DoDoer):
             yield tock
 
     def close(self):
+        """Close the native registry store after child doers have stopped.
+
+            Returns:
+                None. Habery remains caller-owned; scheduling cancellation must precede
+                this close so pruning/escrow work cannot access a closed environment."""
         self.reger.close()
 
 
 class HealthEnd:
     def on_get(self, req, rep):
+        """Return service availability without claiming credential acceptance.
+
+            Args:
+                req: Falcon health request; body is unused.
+                rep: Falcon response whose media is set to status ok.
+
+            Returns:
+                None. Health is not authorization, freshness, or a verification verdict."""
         rep.media = {'status': 'ok'}
 
 
 class IngestEnd:
     def __init__(self, ctx):
+        """Bind authorized public-evidence publication to one service context.
+
+            Args:
+                ctx (Context): Existing processor/runtime owner; endpoint never closes it.
+
+            Returns:
+                None."""
         self.ctx = ctx
 
     def on_post(self, req, rep):
+        """Authenticate publication and classify the supplied public CESR stream.
+
+            Args:
+                req: Falcon request with an allowlisted signed tels/publish query.
+                rep: Response receiving intake summary and 200/202/422 outcome status.
+
+            Returns:
+                None. Intake acknowledgement does not imply every dependency completed.
+
+            Raises:
+                falcon.HTTPError: Query authorization/authentication or stream field fails."""
         _, qry = authenticate(req, self.ctx, self.ctx.publishers, ('tels/publish',))
         raw = qry.get('stream')
         if not isinstance(raw, str) or not raw:
@@ -255,9 +371,28 @@ class IngestEnd:
 
 class BulkEnd:
     def __init__(self, ctx):
+        """Bind cache-only bulk retrieval to the existing evidence owner.
+
+            Args:
+                ctx (Context): Service owning accepted KEL/TEL records and allowlists.
+
+            Returns:
+                None. Endpoint creation schedules no network acquisition."""
         self.ctx = ctx
 
     def on_post(self, req, rep):
+        """Authenticate registry-scoped bulk retrieval without credential lookup.
+
+            Args:
+                req: Falcon request containing an authorized tels/bulk or regs query.
+                rep: Response receiving accepted evidence bytes and CESR content type.
+
+            Returns:
+                None. Query handling never authorizes or accelerates an observer pull.
+
+            Raises:
+                falcon.HTTPError: Invalid query/ordinal/scope, forbidden vcid, missing
+                    accepted registry, or authentication/authorization failure."""
         _, qry = authenticate(req, self.ctx, self.ctx.observers, ('tels/bulk', 'regs'))
         if 'vcid' in qry:
             raise falcon.HTTPForbidden(description='credential queries are not served here')
@@ -277,7 +412,22 @@ class BulkEnd:
 
 def setup(hby, *, host='127.0.0.1', port=6632, keypath=None, certpath=None,
           cafilepath=None, **kwa):
-    """Return the service context and ordinary HTTP server doer."""
+    """Compose the registrar context and its HTTP/service persistence doers.
+
+        Args:
+            hby: Existing caller-owned Habery with controller evidence and keys.
+            host (str): HTTP listening interface.
+            port (int): HTTP listening port.
+            keypath (str | None): Optional TLS private-key path.
+            certpath (str | None): Optional TLS certificate path.
+            cafilepath (str | None): Optional TLS CA path.
+            **kwa: Context publisher/observer allowlists, registry store, and KRAM policy.
+
+        Returns:
+            tuple: Context and doers owning registry persistence, maintenance, and HTTP.
+
+        Configuration/listener failures propagate. The caller schedules and cancels
+        returned doers, then closes stores; setup alone is not a running service."""
     ctx = Context(hby, **kwa)
     server = createHttpServer(host=host, port=port, app=ctx.app,
                               keypath=keypath, certpath=certpath, cafilepath=cafilepath)
