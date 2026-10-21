@@ -15,11 +15,23 @@ from keri.peer import Exchanger
 
 class Notices:
     def add(self, attrs):
+        """Ignore accepted-notification attributes for this verifier-only test.
+
+        Args:
+            attrs (dict): Notification payload deliberately unused by the test.
+
+        Returns:
+            None. No notification side effects are needed to observe acceptance."""
         pass
 
 
 @pytest.fixture
 def members():
+    """Yield three independent members of an accepted real 2-of-3 group.
+
+    Yields:
+        tuple: Haberies, GroupHabs, Regery owners, and NativeGroup coordinators.
+        groupMembers owns cleanup; membership/quorum are real signed KEL state."""
     with groupMembers('members') as result:
         yield result
 
@@ -74,6 +86,13 @@ def groupMembers(label, *, sectioned=False):
 
 
 def test_registry_quorum_and_explicit_member_approval(members):
+    """Require real group quorum and each member local approval before accepting native TEL state; old proposal replay cannot lower the head.
+
+    Parameters:
+        members: Three independent accepted 2-of-3 group environments and coordinators.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     hbys, groups, rgys, owners = members
     rip = regcept(groups[0].pre)
     first, atc = owners[0].approveRegistry(rip)
@@ -109,6 +128,13 @@ def test_registry_quorum_and_explicit_member_approval(members):
 
 
 def test_group_ipex_uses_real_threshold_and_shared_semantic_handler(members):
+    """Combine independent member signatures through the shared IPEX verifier without accepting unapproved member state.
+
+    Parameters:
+        members: Three independent accepted 2-of-3 group environments and coordinators.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     hbys, groups, _, owners = members
     holder = hbys[0].makeHab(name='holder')
     credential = acdcmap(israid=groups[0].pre, iseaid=holder.pre,
@@ -136,6 +162,13 @@ def test_group_ipex_uses_real_threshold_and_shared_semantic_handler(members):
 
 
 def test_native_registry_approval_refuses_different_tel(members):
+    """Refuse a substituted TEL body under an anchor approved for a different exact inception.
+
+    Parameters:
+        members: Three independent accepted 2-of-3 group environments and coordinators.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     _, groups, _, owners = members
     rip = regcept(groups[0].pre)
     proposal, atc = owners[0].approveRegistry(rip)
@@ -146,6 +179,13 @@ def test_native_registry_approval_refuses_different_tel(members):
 
 
 def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fanout(tmp_path):
+    """Resume exact public group proposals across actual CLI process exits and issue without distributing custody secrets.
+
+    Parameters:
+        tmp_path: Pytest-owned exact proposal files surviving installed CLI process exits.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     import uuid
     from tests.app.test_native_cli import PASSCODE, command, invoke
 
@@ -203,6 +243,15 @@ def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fano
 
 @contextmanager
 def groupNetwork(members, unused_tcp_port_factory):
+    """Run real HTTP group delivery over authenticated endpoint-role/location replies.
+
+    Args:
+        members (tuple): Independent accepted group members and concrete coordinators.
+        unused_tcp_port_factory: Pytest allocator for independent loopback listeners.
+
+    Yields:
+        tuple: A bounded cooperative until(predicate) driver and observable intake
+        endpoints. Finally removes doers and closes all sockets on exit."""
     import time
     import falcon
     from hio.base import doing
@@ -214,16 +263,40 @@ def groupNetwork(members, unused_tcp_port_factory):
 
     class Intake(HttpEnd):
         def __init__(self, owner):
+            """Bind one loopback HTTP intake endpoint to its real group coordinator.
+
+            Args:
+                owner (NativeGroup): Destination coordinator receiving each request stream.
+
+            Returns:
+                None. Initializes a fresh byte buffer and request counter."""
             self.owner, self.requests = owner, 0
             super().__init__(rxbs=bytearray())
 
         def on_post(self, req, rep):
+            """Parse a real HTTP POST body then hand its bytes to group intake.
+
+            Args:
+                req (falcon.Request): Incoming CESR request.
+                rep (falcon.Response): Response populated by the ordinary HttpEnd parser.
+
+            Returns:
+                None. Counts delivery and clears the buffer after owner.receive; acceptance
+                and explicit local approval are asserted separately."""
             super().on_post(req, rep)
             self.requests += 1
             self.owner.receive(self.rxbs)
             self.rxbs.clear()
 
         def on_put(self, req, rep):
+            """Parse a real HTTP PUT body then hand its bytes to group intake.
+
+            Args:
+                req (falcon.Request): Incoming CESR request.
+                rep (falcon.Response): Response populated by the ordinary HttpEnd parser.
+
+            Returns:
+                None. Counts delivery and clears the buffer; it grants no member approval."""
             super().on_put(req, rep)
             self.requests += 1
             self.owner.receive(self.rxbs)
@@ -250,6 +323,13 @@ def groupNetwork(members, unused_tcp_port_factory):
     doist.enter()
     try:
         def until(predicate):
+            """Drive cooperative group/socket work until the predicate holds or five seconds pass.
+
+            Args:
+                predicate (Callable[[], bool]): Observable accepted/delivered state to await.
+
+            Returns:
+                None. AssertionError reports a deadline without falsely claiming completion."""
             deadline = time.monotonic() + 5
             while not predicate() and time.monotonic() < deadline:
                 doist.recur()
@@ -264,6 +344,14 @@ def groupNetwork(members, unused_tcp_port_factory):
 
 
 def test_group_fanout_uses_real_http_and_keeps_unapproved_member_pending(members, unused_tcp_port_factory):
+    """Deliver proposals over real discovered HTTP endpoints while leaving an unapproved third member pending.
+
+    Parameters:
+        members: Three independent accepted 2-of-3 group environments and coordinators.
+        unused_tcp_port_factory: Pytest allocator for real independent loopback listeners.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     hbys, groups, rgys, owners = members
     with groupNetwork(members, unused_tcp_port_factory) as (until, endpoints):
         rip = regcept(groups[0].pre)
@@ -283,6 +371,14 @@ def test_group_fanout_uses_real_http_and_keeps_unapproved_member_pending(members
 
 
 def test_group_issuer_holder_admission_presentation_and_revocation_converge(members, unused_tcp_port_factory):
+    """Converge real group issuer/holder approvals, explicit admission, onward presentation, and later revocation over loopback transport.
+
+    Parameters:
+        members: Three independent accepted 2-of-3 group environments and coordinators.
+        unused_tcp_port_factory: Pytest allocator for real independent loopback listeners.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc import admit
     from keri.acdc.regeventing import vet
     from keri.app.credentialing import Wallet
@@ -307,6 +403,14 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
 
         with groupNetwork(combined, unused_tcp_port_factory) as (until, endpoints):
             def approveRegistry(team, event):
+                """Collect independent local approvals and deliver the same TEL proposal to a team.
+
+                Args:
+                    team (tuple): Real group environments, registries, and coordinators.
+                    event (SerderACDC): Exact native TEL event requiring group approval.
+
+                Returns:
+                    None. Assertions require each member's accepted registry frontier to converge."""
                 _, _, stores, peers = team
                 first, atc = peers[0].approveRegistry(event)
                 peers[0].send(first, atc)
@@ -322,6 +426,11 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             def synchronize():
                 # Public proof dissemination goes through the production Parser
                 # and Rever; no accepted-table shortcuts or synthetic KRAM rows.
+                """Replay actual group KEL/TEL bytes between issuer, holder, and verifier teams.
+
+                Returns:
+                    None. Each destination uses ordinary group intake rather than copying accepted
+                    database rows; pending dependencies remain subject to its normal processors."""
                 for team in allTeams:
                     _, teamGroups, stores, _ = team
                     stream = bytearray(teamGroups[0].replay(gvrsn=Vrsn_2_0))
@@ -331,6 +440,15 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
                         owner.receive(stream)
 
             def approveExchange(team, stream):
+                """Collect explicit group approvals for one exact native child exchange stream.
+
+                Args:
+                    team (tuple): Real group environments and coordinators.
+                    stream (bytes): Exact signed native exchange bytes to approve and deliver.
+
+                Returns:
+                    bytearray: Serialized accepted child exchange/proof after every group peer
+                    reports completion."""
                 _, _, _, peers = team
                 child = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False)[0].serder
                 first, atc = peers[0].approveExchange(stream)
@@ -361,6 +479,16 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             original, atc = grant(issuer, holder.pre, 'group issuance', origin=credential.raw + foot)
 
             def presentation(stream, exn, prior, sn):
+                """Anchor a holder-group presentation binding and attach its actual historical source.
+
+                Args:
+                    stream (bytes): Native Grant stream whose first node receives the source.
+                    exn (Serder): Grant whose immutable SAID the public presentation update binds.
+                    prior (str): Accepted holder TEL predecessor.
+                    sn (int): Next holder registry ordinal.
+
+                Returns:
+                    tuple: Accepted presentation update and serialized exact Grant with source proof."""
                 binding = update(holderRip.said, prior, exn.said, 'presented', sn=sn)
                 approveRegistry(holderTeam, binding)
                 synchronize()
@@ -448,7 +576,15 @@ def test_group_ipex_independent_schema_preserves_approved_disclosure(arrival, in
         exn, atc = grant(groups[0], holder.pre, 'group partial disclosure', origin=origin)
 
         def receiveSection(owner, message):
-            """Feed a standalone section through the selected production parser."""
+            """Feed an independent schema through the selected real direct/mailbox parser.
+
+            Args:
+                owner (NativeGroup): Peer sharing one concrete Sectioner with both parsers.
+                message (SerderACDC): Independently received schema section message.
+
+            Returns:
+                None. Dispatches the framed message and retries group work without changing
+                the approved/retained credential view."""
             wire = message.raw + Counter(Codens.AttachmentGroup, count=0,
                                          version=Vrsn_2_0).qb64b
             assert owner.parser.scy is owner.scy

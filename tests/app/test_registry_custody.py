@@ -17,7 +17,14 @@ from tests.app.test_native_wallet import Notices, anchored, encrypted, receive, 
 
 @pytest.mark.parametrize('publicTail', [False, True])
 def test_explicit_custody_provisioning_allows_public_prefix_but_never_recreates_after_bup(tmp_path, publicTail):
-    """Public histories can opt in; lost salts after blinded history require import."""
+    """Allow explicit custody provisioning after public history, then forbid salt recreation after any accepted blinded update.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry/wallet directories.
+        publicTail: Whether an accepted public update follows the blinded history before custody loss.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     key = Signer(transferable=False)
     with encrypted('custody-history', tmp_path, key) as hby:
         issuer = hby.makeHab(name='issuer')
@@ -56,7 +63,13 @@ def test_explicit_custody_provisioning_allows_public_prefix_but_never_recreates_
 
 
 def test_fresh_blinded_issuance_requires_supplied_common_verifier_opening(tmp_path):
-    """An unencrypted public wallet accepts explicit proof, never derives a salt."""
+    """Require supplied common-verifier proof for fresh blinded inventory while allowing an exact existing-history retry without deriving secrets.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry/wallet directories.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='supplied-opening', version=Vrsn_2_0) as hby:
         issuer = hby.makeHab(name='issuer')
         rgy = regery(hby, tmp_path)
@@ -101,7 +114,11 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
     name = 'holder-capability-' + custodyState
 
     def holderContext():
-        """Open the same supported identity without modifying its encryption mode."""
+        """Reopen the same supported identity without migrating Keeper encryption.
+
+        Returns:
+            contextmanager: Existing encrypted or deliberately unencrypted Habery selected
+            by the outer test case. Custody corruption/rotation never changes this choice."""
         if custodyState == 'unencrypted':
             return openHby(name=name, temp=False, headDirPath=str(tmp_path),
                 cf=Configer(name=name, temp=True), version=Vrsn_2_0)

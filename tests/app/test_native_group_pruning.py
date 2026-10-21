@@ -41,7 +41,14 @@ def test_group_pruner_has_one_owner_and_cancels_with_its_runtime(fakeHelpingCloc
         sender = groups[0].mhab
 
         def receiveGrant(message):
-            """Authenticate a real empty native grant and return its KRAM key/cache."""
+            """Authenticate one real empty native Grant to populate the group KRAM cache.
+
+            Args:
+                message (str): Human payload distinguishing independent signed Grants.
+
+            Returns:
+                tuple: Exchange, exact transactional cache key, and retained cache record.
+                Assertions require ordinary group exchange acceptance before returning."""
             exn, atc = grant(sender, groups[0].pre, message)
             receiver.receive(exn.raw + atc)
             assert receiver.completeExchange(exn.said)

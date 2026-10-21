@@ -15,11 +15,26 @@ from keri.kering import ConfigurationError
 
 
 def native(*events):
+    """Serialize native TEL bodies with complete empty attachment-group feet.
+
+    Args:
+        *events: Ordered native registry events to send to actual service intake.
+
+    Returns:
+        bytes: Concatenated exact bodies and prescribed v2 foot counters."""
     foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
     return b''.join(event.raw + foot for event in events)
 
 
 def issue(hab):
+    """Create a genuinely KEL-anchored native registry and blinded issuance.
+
+    Args:
+        hab (Hab): Controller creating both TEL and signed sealing key events.
+
+    Returns:
+        tuple[SerderACDC, SerderACDC]: Inception and issued update. Private openings
+        are intentionally not returned because service acquisition hosts public proof."""
     rip = regcept(israid=hab.pre)
     hab.interact(data=[dict(s=rip.sad['n'], d=rip.said)])
     acdc = acdcmap(israid=hab.pre, regid=rip.said, attribute={'d': '', 'name': 'Test'})
@@ -30,11 +45,27 @@ def issue(hab):
 
 
 def post(client, hab, route, query=None, path='/', suffix=b''):
+    """Send one signed service query through Falcon's real request contract.
+
+    Args:
+        client (TestClient): Registrar or observer app under test.
+        hab (Hab): Requester signing the query.
+        route (str): Native service query resource.
+        query (dict | None): Query attributes.
+        path (str): HTTP route, default root.
+        suffix (bytes): Deliberately appended framing material for hostile-input cases.
+
+    Returns:
+        Result: Falcon response, including status/body/headers for assertions."""
     return client.simulate_post(path, body=signedQuery(hab, route, query) + suffix,
                                 headers={'Content-Type': CESR_CONTENT_TYPE})
 
 
 def test_resolved_wrong_anchor_locator_is_not_dropped_at_service_intake():
+    """Reject a resolvably false supplied locator at service intake, then accept a clean authentic replay without retained poisoning.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with (openHby(name='locator-issuer', version=Vrsn_2_0) as issuer,
           openHby(name='locator-registrar', version=Vrsn_2_0) as registrar):
         hab = issuer.makeHab(name='issuer')
@@ -60,6 +91,13 @@ def test_resolved_wrong_anchor_locator_is_not_dropped_at_service_intake():
 
 
 def test_authorized_foreign_hosting_and_independent_cache(tmp_path):
+    """Enforce signed service roles, independently acquire foreign KEL/TEL, and refuse stale/prefix/omitted-scope observations as freshness.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry/observation directories for restart assertions.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with (openHby(name='service-issuer', temp=True, version=Vrsn_2_0) as issuer,
           openHby(name='service-registrar', temp=True, version=Vrsn_2_0) as registrar,
           openHby(name='service-observer', temp=True, version=Vrsn_2_0) as observer):
@@ -125,6 +163,10 @@ def test_authorized_foreign_hosting_and_independent_cache(tmp_path):
 
 
 def test_authentication_must_be_enabled():
+    """Refuse service configuration that disables or denies mandatory KRAM query authentication.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with pytest.raises(ConfigurationError):
         ServiceConfig({'kram': {'enabled': False}})
     with pytest.raises(ConfigurationError):
@@ -132,6 +174,13 @@ def test_authentication_must_be_enabled():
 
 
 def test_reopened_observer_requires_observation_from_active_registrar_url(tmp_path):
+    """Require a fresh observation from the active configured registrar URL after persistent observer reopen.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry/observation directories for restart assertions.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc.regbasing import RegBaser
 
     oldURL, newURL = 'http://registrar.old.test/', 'http://registrar.new.test/'
@@ -141,6 +190,14 @@ def test_reopened_observer_requires_observation_from_active_registrar_url(tmp_pa
         public = controller.replay(gvrsn=Vrsn_2_0) + native(rip, update)
 
         def context(hby, urls):
+            """Reopen one persistent observer using the explicitly active registrar URLs.
+
+            Args:
+                hby (Habery): Caller-owned authenticated KEL environment.
+                urls (Iterable[str]): Current allowed observation source URLs.
+
+            Returns:
+                Observer: Caller-owned service with persistent TEL and freshness stores."""
             return Observer(hby, readers=[reader], urls=urls,
                 reger=RegBaser(name='source-rotation', headDirPath=str(tmp_path), temp=False),
                 observations=ObservationBaser(name='source-rotation', headDirPath=str(tmp_path), temp=False))
@@ -178,6 +235,13 @@ def test_reopened_observer_requires_observation_from_active_registrar_url(tmp_pa
 
 
 def test_pending_native_evidence_survives_reopen_and_remains_unservable(tmp_path):
+    """Persist incomplete native evidence across restart without serving it as accepted or observed state.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry/observation directories for restart assertions.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc.regbasing import RegBaser
     with (openHby(name='pending-issuer', temp=True, version=Vrsn_2_0) as issuer,
           openHby(name='pending-observer', temp=True, version=Vrsn_2_0) as receiver):
@@ -206,6 +270,10 @@ def test_pending_native_evidence_survives_reopen_and_remains_unservable(tmp_path
 
 
 def test_cooperative_socket_poll_and_cancellation():
+    """Run actual HTTP polling alongside a sentinel doer and cancel cleanly without blocking the scheduler.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with (openHby(name='socket-issuer', temp=True, version=Vrsn_2_0) as issuer,
           openHby(name='socket-reg', temp=True, version=Vrsn_2_0) as registrar,
           openHby(name='socket-obs', temp=True, version=Vrsn_2_0) as observer):
@@ -218,6 +286,14 @@ def test_cooperative_socket_poll_and_cancellation():
 
         class Requests:
             def process_request(self, req, rep):
+                """Record actual HTTP request paths without changing Falcon dispatch.
+
+                Args:
+                    req (falcon.Request): Incoming real socket request.
+                    rep (falcon.Response): Response left to the service endpoint.
+
+                Returns:
+                    None. Appends the path so tests can distinguish acquisition from cache reads."""
                 requests.append(req.path)
 
         reg.app.add_middleware(Requests())
@@ -234,6 +310,16 @@ def test_cooperative_socket_poll_and_cancellation():
             cache = testing.TestClient(obs.app)
 
             def sentinel(tymth=None, tock=0.01, **kwa):
+                """Observe scheduler progress while real registrar polling runs concurrently.
+
+                Args:
+                    tymth (Callable): HIO injected simulated clock.
+                    tock (float): Cooperative scheduling delay.
+                    **kwa: HIO lifecycle metadata unused by this observation doer.
+
+                Yields:
+                    float: Requested delay after recording a tick and, after startup, exercising
+                    the observer cache. Cancellation closes the generator through ordinary HIO."""
                 while True:
                     ticks.append(tymth())
                     if tymth() > 0.2:
@@ -259,6 +345,13 @@ def test_cooperative_socket_poll_and_cancellation():
 
 
 def test_witness_dependency_retains_following_tel_and_recovers_after_store_reopen(tmp_path):
+    """Keep a TEL following an unresolved witnessed KEL event and recover after actual store reopen and receipt arrival.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry/observation directories for restart assertions.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc.regbasing import RegBaser
     from keri.db.basing import Baser
     with (openHby(name='pending-witness-issuer', version=Vrsn_2_0) as issuer,
@@ -308,6 +401,10 @@ def test_witness_dependency_retains_following_tel_and_recovers_after_store_reope
 
 
 def test_conflicting_supplied_sibling_is_rejected_after_escrow_resolution():
+    """Classify a supplied authenticated rival as rejected conflict after dependencies resolve, while preserving the accepted head.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with (openHby(name='service-sibling-issuer', version=Vrsn_2_0) as issuer,
           openHby(name='service-sibling-receiver', version=Vrsn_2_0) as receiver):
         controller = issuer.makeHab(name='controller')
@@ -422,6 +519,13 @@ def test_old_unanchored_rival_does_not_monopolize_observer_freshness():
 
 @pytest.mark.parametrize('value', [float('nan'), float('inf'), -float('inf'), 0, -1])
 def test_observer_durations_must_be_finite_and_positive(value):
+    """Refuse zero, negative, NaN, or infinite observer freshness/poll durations before runtime scheduling.
+
+    Parameters:
+        value: Invalid duration selected for freshness or polling configuration.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with pytest.raises(ValueError, match='finite and positive'):
         Observer(None, maximumAge=value)
     with pytest.raises(ValueError, match='finite and positive'):

@@ -26,7 +26,15 @@ def test_service_pruner_expiry_restart_and_cancellation(service, tmp_path, fakeH
               'caches': {'~': [1000, 5000, 60000, 300000, 5000, 60000, 300000]}}}
 
     def context(hby, requester):
-        """Compose the selected service over persistent stores for ``hby``."""
+        """Compose the selected service over persistent KRAM/TEL stores.
+
+        Args:
+            hby (Habery): Caller-owned identity and accepted KEL environment.
+            requester (str): Authorized observer/reader AID for this service role.
+
+        Returns:
+            Registrar | Observer: Caller-owned context with the tested finite KRAM policy
+            and, for Observer, a persistent observation store."""
         reger = RegBaser(name=service, headDirPath=str(tmp_path), temp=False)
         if service == 'registrar':
             return Registrar(hby, reger=reger, observers=[requester], config=config)

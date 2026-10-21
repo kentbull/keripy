@@ -21,24 +21,63 @@ from keri.peer.exchanging import Exchanger, loadParsedNestedSubstreams
 
 class Notices:
     def __init__(self):
+        """Create an in-memory notification recorder for accepted native exchanges.
+
+        Returns:
+            None. Each instance starts with an independent empty items list."""
         self.items = []
 
     def add(self, attrs):
+        """Record one accepted-notification payload without altering verification.
+
+        Args:
+            attrs (dict): Attributes emitted by the concrete IPEX handler.
+
+        Returns:
+            None. Appends attrs so tests can observe notifier effects."""
         self.items.append(attrs)
 
 
 def encrypted(name, root, key):
+    """Open the same persistent test identity using an explicit encryption key.
+
+    Args:
+        name (str): Isolated identity/database name.
+        root (Path): Pytest-owned persistent store directory.
+        key (Signer): Nontransferable encryption seed and matching AEID.
+
+    Returns:
+        contextmanager: Habery that closes on exit; repeated calls reopen existing
+        identity state without changing its encryption identity."""
     return openHby(name=name, temp=False, headDirPath=str(root),
         cf=Configer(name=name, temp=True), seed=key.qb64, aeid=key.verfer.qb64,
         version=Vrsn_2_0)
 
 
 def regery(hby, root):
+    """Open the persistent native registry environment beside one test identity.
+
+    Args:
+        hby (Habery): Caller-owned KEL evidence environment.
+        root (Path): Pytest-owned persistent registry directory.
+
+    Returns:
+        Regery: Caller-owned native registry manager; tests explicitly close it."""
     return Regery(hby=hby, name=hby.name,
         baser=RegBaser(name=hby.name, temp=False, headDirPath=str(root)))
 
 
 def receive(hby, raw, *, rgy=None, exc=None):
+    """Ingest real remote KEL/EXN/TEL bytes through ordinary protocol processors.
+
+    Args:
+        hby (Habery): Destination identity/evidence environment.
+        raw (bytes): Exact signed remote replay or native stream.
+        rgy (Regery | None): Native TEL owner, when the stream contains registry events.
+        exc (Exchanger | None): Shared exchange processor for IPEX route validation.
+
+    Returns:
+        None. Retries destination KEL escrows; accepted state is asserted separately."""
     remote = Kevery(db=hby.db, lax=False, local=False)
     Parser(version=Vrsn_2_0, local=False).parse(ims=bytearray(raw), kvy=remote, exc=exc,
         rgy=Rever(db=hby.db, reger=rgy.baser) if rgy else None)
@@ -46,11 +85,28 @@ def receive(hby, raw, *, rgy=None, exc=None):
 
 
 def anchored(hab, registry, event):
+    """Seal one native event in a real controller interaction and require acceptance.
+
+    Args:
+        hab (Hab): Registry controller creating the KEL seal.
+        registry (Registry): Concrete issuer-side registry engine.
+        event (SerderACDC): Candidate TEL event already staged by that engine.
+
+    Returns:
+        None. Assertion fails if the real KEL anchor cannot advance registry state."""
     hab.interact(data=[dict(i=registry.regk, s=event.sad['n'], d=event.said)])
     assert registry.anchorMsg(event.said)
 
 
 def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_path, capsys):
+    """Reopen encrypted custody, reproduce future openings, enforce protected export/import, and recover AEID mismatch only by explicit rewrap.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+        capsys: Pytest output capture used to prove exported salt is absent from logs.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     issuerKey, holderKey = Signer(transferable=False), Signer(transferable=False)
     export = tmp_path / 'private-custody.json'
     issuerInfo = holderInfo = None
@@ -154,11 +210,26 @@ def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_
 
 
 def signed(acdc, hab):
+    """Build current-establishment issuer evidence over exact credential bytes.
+
+    Args:
+        acdc (SerderACDC): Disclosed credential view to authenticate.
+        hab (Hab): Issuer habitat whose current keys sign the view.
+
+    Returns:
+        bytearray: Native node stream with a real transferable signature group."""
     return messagize(acdc, tsgs=[(hab.kever.prefixer, Number(sn=hab.kever.lastEst.s),
         Diger(qb64=hab.kever.lastEst.d), hab.sign(ser=acdc.raw))], framed=False, gvrsn=Vrsn_2_0)
 
 
 def test_real_partial_and_full_grants_retain_separate_explicit_admissions(tmp_path):
+    """Keep two actual signed partial/full Grants as separate explicit admissions without expanding the earlier retained view.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     senderKey, holderKey = Signer(transferable=False), Signer(transferable=False)
     with (encrypted('inventory-issuer', tmp_path, senderKey) as issuer,
           encrypted('inventory-holder', tmp_path, holderKey) as holder):
@@ -227,6 +298,13 @@ def test_real_partial_and_full_grants_retain_separate_explicit_admissions(tmp_pa
 
 
 def test_unencrypted_keeper_cannot_create_private_custody(tmp_path):
+    """Refuse private custody with an unencrypted Keeper while ordinary inventory remains usable.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='unencrypted-custody', temp=True, version=Vrsn_2_0) as hby:
         rgy = regery(hby, tmp_path)
         wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
@@ -240,6 +318,13 @@ def test_unencrypted_keeper_cannot_create_private_custody(tmp_path):
 
 
 def test_handlerless_retention_cannot_become_wallet_admission_after_registration_and_reopen(tmp_path):
+    """Revalidate retained bodies through the concrete semantic context; registering an arbitrary accepting route object cannot grant admission.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     issuerKey, holderKey = Signer(transferable=False), Signer(transferable=False)
     with (encrypted('unverified-issuer', tmp_path, issuerKey) as issuer,
           encrypted('unverified-holder', tmp_path, holderKey) as holder):
@@ -290,6 +375,15 @@ def test_handlerless_retention_cannot_become_wallet_admission_after_registration
 @pytest.mark.parametrize('kind', [Kinds.cbor, Kinds.mgpk])
 @pytest.mark.parametrize('history', ['public', 'mixed', 'blinded'])
 def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, kind, history):
+    """Retain exact non-JSON credential bytes and accepted public/blinded issuer history across wallet reopen.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+        kind: Binary/non-JSON credential serialization encoding.
+        history: Public or blinded accepted issuer-update history.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     key = Signer(transferable=False)
     name = f'binary-{kind}-{history}'
     with encrypted(name, tmp_path, key) as issuer:
@@ -343,6 +437,13 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
 
 
 def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_path):
+    """Retain explicit historical bound coordinates and validate them after the Issuee key state advances and stores reopen.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     key = Signer(transferable=False)
     with encrypted('bound-wallet', tmp_path, key) as hby:
         issuer, issuee = hby.makeHab(name='issuer'), hby.makeHab(name='issuee')
@@ -387,7 +488,15 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
 @pytest.mark.parametrize('arrival', ['before', 'after', 'restart'])
 @pytest.mark.parametrize('schemaUse', ['own', 'edge'])
 def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arrival, schemaUse):
-    """The actual peer parser resolves schemas without widening the grant view."""
+    """Use actual Peer parsing for schema-before/schema-after Grant arrival and retained revalidation without widening the partial view.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+        arrival: Whether the independent schema arrives before or after the Grant.
+        schemaUse: Whether the schema constrains the node itself or a disclosed edge.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from copy import deepcopy
     from keri.acdc import messaging
     from keri.acdc.sectioning import SectionBaser
@@ -495,22 +604,52 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
 
 @pytest.mark.parametrize('operator', ['AVG', 'WAVG'])
 def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, operator):
-    """Explicit AVG/WAVG policy survives restart; default/refusal keeps only history."""
+    """Share explicit AVG/WAVG policy across intake/admission and reopen; unavailable/refusing policy preserves history but cannot freshly admit.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+        operator: AVG or WAVG requiring the explicit score policy.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc.ipexing import NativeVerification
     from keri.app import ipexing as dispatching
 
     class ScorePolicy:
         """Concrete test application rule: average disclosed scores at least 80."""
         def __init__(self, permitted=True):
-            """Select whether this application permits the credential graph."""
+            """Choose this application's graph acceptance rule.
+
+            Args:
+                permitted (bool): Whether local policy permits the otherwise valid graph.
+
+            Returns:
+                None. Retains the explicit local permission, with no default trust inference."""
             self.permitted = permitted
 
         def value(self, *, near, edge, far):
-            """Use the far node's disclosed score as the numeric edge value."""
+            """Select the disclosed far-node score for this application.
+
+            Args:
+                near (SerderACDC): Near node, unused by this example rule.
+                edge (Mapping): Edge metadata, unused by this example rule.
+                far (SerderACDC): Authenticated disclosed node carrying score.
+
+            Returns:
+                number: Exact disclosed score; a missing property raises KeyError rather than
+                silently assigning a protocol numeric meaning."""
             return far.sad['a']['score']
 
         def accept(self, *, near, group, average):
-            """Return whether the computed mean meets the configured rule."""
+            """Interpret the engine-computed mean under the explicit local rule.
+
+            Args:
+                near (SerderACDC): Near node, unused by this example rule.
+                group (Mapping): Arithmetic group, unused by this example rule.
+                average (float): Mean computed by the graph engine.
+
+            Returns:
+                bool: Whether this policy permits the graph and its mean is at least 80."""
             return self.permitted and average >= 80
 
     key = Signer(transferable=False)
