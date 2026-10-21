@@ -1,6 +1,7 @@
 """Legacy IPEX negotiation composed from existing v1 protocol constructors.
 
-This fills the former apply/offer/agree CLI stubs. Native disclosure plans and
+This fills the former apply/offer/agree CLI stubs and provides explicit direct
+admission through the existing legacy credential verifier. Native disclosure plans and
 registry openings stay in the native command path; v1 uses protocoling's schema,
 attributes, metadata credential, and prior-message contracts.
 """
@@ -15,11 +16,11 @@ from keri.app import GroupHab, Notifier, StreamPoster, serialize
 from keri.app.keeping import Keeper
 from keri.app.notifying import Noter
 from keri.cli.common import setupHby, cesr_sending
-from keri.core import Kevery, Parser
+from keri.core import Kevery, Parser, SerderKERI, SerderACDC
 from keri.kering import ConfigurationError
 from keri.peer import exchanging
 from keri.vc import protocoling
-from keri.vdr import credentialing
+from keri.vdr import credentialing, Verifier
 
 
 class Negotiation(doing.DoDoer):
@@ -30,7 +31,7 @@ class Negotiation(doing.DoDoer):
 
         Args:
             args (Namespace): Existing individual identity and public CLI selections.
-            verb (str): apply, offer, or agree from the concrete legacy command adapter.
+            verb (str): apply, offer, agree, or admit from the concrete legacy adapter.
 
         Returns:
             None. Retains arguments and schedules run; opens no identity or transport yet."""
@@ -76,7 +77,8 @@ class Negotiation(doing.DoDoer):
         Raises:
             ConfigurationError: Invalid timeout/options/identity, missing schema or saved
             v1 credential, mismatched thread roles/schema, or authored EXN stays unaccepted.
-            TimeoutError: Transport/mailbox delivery exceeds the finite deadline.
+            TimeoutError: Credential dependency verification or transport/mailbox delivery
+                exceeds the finite command deadline.
             OSError, ValueError: Exclusive output, input-file, or attribute JSON handling fails.
 
         Owned Habery, optional legacy Regery/Noter, and delivery child work close on every
@@ -89,7 +91,9 @@ class Negotiation(doing.DoDoer):
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
         unsupported = ('plan', 'observer', 'registry', 'proposal', 'proposal_output',
-                       'from_grant', 'disclose', 'time')
+                       'from_grant', 'disclose')
+        if self.verb != 'admit' and args.time:
+            raise ConfigurationError('explicit negotiation timestamps require --v2')
         if any(getattr(args, key, None) for key in unsupported):
             raise ConfigurationError('native disclosure options and explicit timestamps require --v2')
         keeper = Keeper(name=args.name, base=args.base, reopen=True)
@@ -110,7 +114,12 @@ class Negotiation(doing.DoDoer):
             exc = exchanging.Exchanger(hby, handlers=[])
             noter = Noter(name=hby.name, base=hby.base, temp=hby.temp)
             protocoling.loadHandlers(hby, exc, Notifier(hby, noter=noter))
+            verifier = None
+            if self.verb == 'admit':
+                rgy = credentialing.Regery(hby=hby, name=hby.name, base=hby.base)
+                verifier = Verifier(hby=hby, reger=rgy.reger)
             parser = Parser(kvy=Kevery(db=hby.db, lax=False, local=False), exc=exc,
+                            tvy=rgy.tvy if rgy else None, vry=verifier,
                             version=Vrsn_1_0)
             if args.input:
                 parser.parse(ims=bytearray(Path(args.input).read_bytes()))
@@ -138,7 +147,7 @@ class Negotiation(doing.DoDoer):
                     raise ConfigurationError('credential schema does not match application')
                 exn, attachment = protocoling.ipexOfferExn(hab, args.message,
                     serialize(creder, prefixer, seqner, saider), apply=prior, version=Vrsn_1_0)
-            else:
+            elif self.verb == 'agree':
                 offer = self.prior(hby, args.said, '/ipex/offer')
                 if offer.sad['p']:
                     application = self.prior(hby, offer.sad['p'], '/ipex/apply')
@@ -146,6 +155,32 @@ class Negotiation(doing.DoDoer):
                         raise ConfigurationError('offer is not a response to this local application')
                 recipient = offer.pre
                 exn, attachment = protocoling.ipexAgreeExn(hab, args.message, offer, version=Vrsn_1_0)
+            elif self.verb == 'admit':
+                grant = self.prior(hby, args.said, '/ipex/grant')
+                if grant.sad['a'].get('i') != hab.pre:
+                    raise ConfigurationError('legacy grant is addressed to another recipient')
+                exchanging.verify(hby, grant)
+                _, pathed = exchanging.cloneMessage(hby, grant.said)
+                # Follow legacy AdmitDoer: normal processors verify the embedded
+                # anchor, TEL event, and credential before an admission is signed.
+                for label in ('anc', 'iss', 'acdc'):
+                    klass = SerderACDC if label == 'acdc' else SerderKERI
+                    embedded = klass(sad=grant.sad['e'][label])
+                    parser.parseOne(ims=bytearray(embedded.raw) + pathed[label])
+                credential = grant.sad['e']['acdc']['d']
+                deadline = self.tyme + args.timeout
+                while rgy.reger.saved.get((credential,)) is None:
+                    parser.kvy.processEscrows()
+                    rgy.processEscrows()
+                    verifier.processEscrows()
+                    if self.tyme >= deadline:
+                        raise TimeoutError('legacy admission requires verified credential dependencies')
+                    yield tock
+                recipient = grant.pre
+                exn, attachment = protocoling.ipexAdmitExn(hab, args.message, grant,
+                    dt=args.time, version=Vrsn_1_0)
+            else:
+                raise ConfigurationError('unsupported legacy negotiation operation')
             raw = bytes(exn.raw + attachment)
             # The ordinary Exchanger verifies and persists our authored message.
             parser.parse(ims=bytearray(raw))

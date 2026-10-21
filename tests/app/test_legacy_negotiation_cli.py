@@ -23,7 +23,7 @@ PASSCODE = '0123456789abcdefghijk'  # public fixture only
 
 
 def test_legacy_apply_offer_agree_across_cli_processes(tmp_path, seeder):
-    """Complete installed v1 negotiation and authenticate the resulting legacy Grant.
+    """Complete installed v1 negotiation, verified admission, and authenticated return.
 
     Args:
         tmp_path (Path): Pytest-owned exact apply/offer/agree/grant transfer files.
@@ -33,8 +33,10 @@ def test_legacy_apply_offer_agree_across_cli_processes(tmp_path, seeder):
     Returns:
         None. Actual CLI processes reopen separate persistent stores, using ordinary
         v1 verifiers to issue and receive the credential. Assertions require correct
-        prior/recipient/credential links, and wrong accepted-agreement selections
-        must raise ConfigurationError. No --v2 opt-in or synthetic native alias is used."""
+        prior/recipient/credential links. An authenticated grant without its schema
+        must remain unadmitted without an output file; importing that real dependency
+        permits admission. Wrong accepted-agreement selections raise ConfigurationError.
+        No --v2 opt-in or synthetic native alias is used."""
     base = 'legacy-negotiation-' + uuid.uuid4().hex
     names = {role: role + '-' + uuid.uuid4().hex for role in ('issuer', 'holder')}
     prefixes = {}
@@ -71,16 +73,18 @@ def test_legacy_apply_offer_agree_across_cli_processes(tmp_path, seeder):
         finally:
             rgy.close()
 
-    def invoke(role, verb, *options):
+    def invoke(role, verb, *options, okay=True):
         """Run one bounded installed legacy IPEX command over its persistent role store.
 
         Args:
             role (str): Issuer or holder selecting the existing identity and alias.
             verb (str): Actual KLI IPEX command to invoke.
             *options: Public command tokens and exact input/output file selections.
+            okay (bool): Require success, or return the actual expected refusal.
 
         Returns:
-            dict: First JSON result emitted by a successful installed command.
+            dict | str: First JSON result on success, or actual diagnostic text for
+            an explicitly expected refusal.
 
         Raises:
             AssertionError: Exit status or KLI's textual ERR fallback reports failure.
@@ -90,6 +94,9 @@ def test_legacy_apply_offer_agree_across_cli_processes(tmp_path, seeder):
             '--name', names[role], '--base', base, '--alias', role, *options],
             env=dict(os.environ, KLI_KEYSTORE_PASSCODE=PASSCODE), capture_output=True,
             text=True, timeout=20)
+        if not okay:
+            assert result.returncode != 0 or 'ERR:' in result.stdout, result.stdout + result.stderr
+            return result.stdout + result.stderr
         assert result.returncode == 0 and 'ERR:' not in result.stdout, result.stdout + result.stderr
         return next(json.loads(line) for line in result.stdout.splitlines() if line.startswith('{'))
 
@@ -113,7 +120,6 @@ def test_legacy_apply_offer_agree_across_cli_processes(tmp_path, seeder):
         rgy = Regery(hby=hby, name=hby.name, base=base, temp=False)
         noter = Noter(name=hby.name, base=base, temp=False)
         try:
-            seeder.seedSchema(hby.db)
             exc = exchanging.Exchanger(hby, handlers=[])
             protocoling.loadHandlers(hby, exc, Notifier(hby, noter=noter))
             Parser(version=Vrsn_1_0, kvy=hby.kvy, tvy=rgy.tvy,
@@ -124,12 +130,50 @@ def test_legacy_apply_offer_agree_across_cli_processes(tmp_path, seeder):
             assert event.sad['p'] == agree['exchange']
             assert event.sad['e']['acdc']['d'] == cred.said
             exchanging.verify(hby, event)
+            assert rgy.reger.saved.get((cred.said,)) is None
         finally:
             noter.close()
             rgy.close()
 
+    admitted = tmp_path / 'admit.cesr'
+    wrong = tmp_path / 'wrong-admit.cesr'
+    assert 'another recipient' in invoke('issuer', 'admit', '--said', grant['exchange'],
+        '--output', str(wrong), okay=False)
+    assert not wrong.exists()
+    missing = tmp_path / 'missing-schema-admit.cesr'
+    # Grant authentication and TEL evidence alone do not satisfy credential
+    # verification: this recipient has deliberately never imported its schema.
+    assert 'verified credential dependencies' in invoke('holder', 'admit',
+        '--said', grant['exchange'], '--input', str(granted), '--output', str(missing),
+        '--timeout', '0.1', okay=False)
+    assert not missing.exists()
+    with openHby(name=names['holder'], base=base, temp=False, bran=PASSCODE,
+                 version=Vrsn_1_0) as hby:
+        rgy = Regery(hby=hby, name=hby.name, base=base, temp=False)
+        try:
+            exchanging.verify(hby, hby.db.exns.get((grant['exchange'],)))
+            assert rgy.reger.saved.get((cred.said,)) is None
+            assert rgy.reger.mse.get((cred.said,)) is not None
+            assert hby.db.erpy.get((grant['exchange'],)) is None
+            seeder.seedSchema(hby.db)
+        finally:
+            rgy.close()
+    admit = invoke('holder', 'admit', '--said', grant['exchange'],
+        '--input', str(granted), '--output', str(admitted))
+    assert admit['localAccepted'] and admit['recipient'] == prefixes['issuer']
+
     with openHby(name=names['issuer'], base=base, temp=False, bran=PASSCODE,
                  version=Vrsn_1_0) as hby:
+        noter = Noter(name=hby.name, base=base, temp=False)
+        try:
+            exc = exchanging.Exchanger(hby, handlers=[])
+            protocoling.loadHandlers(hby, exc, Notifier(hby, noter=noter))
+            Parser(version=Vrsn_1_0, kvy=hby.kvy, exc=exc).parse(
+                ims=bytearray(admitted.read_bytes()))
+            assert exc.complete(admit['exchange'])
+            assert hby.db.exns.get((admit['exchange'],)).sad['p'] == grant['exchange']
+        finally:
+            noter.close()
         # Inspect the same authenticated thread without opening another CLI owner.
         owner = SimpleNamespace(hby=hby, hab=hby.habByName('issuer'))
         with pytest.raises(ConfigurationError, match='recipient agreement'):

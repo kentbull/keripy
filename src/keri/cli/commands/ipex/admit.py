@@ -4,7 +4,7 @@ keri.app.cli.commands module
 
 """
 import argparse
-from ...common import native_exchange
+from ...common import native_exchange, legacy_negotiation
 
 from hio.base import doing
 
@@ -45,9 +45,13 @@ def handler(args):
     args supplies the local identity, retained grant SAID, message, and timestamp.
     Return lifecycle Doers; native admission revalidates the accepted grant before
     recording explicit wallet consent. Core/authentication errors propagate during
-    scheduled work. Omitting --v2 keeps the legacy command path."""
+    scheduled work. Omitting --v2 keeps legacy protocol behavior. Explicit
+    input/output/endpoint selects the bounded individual direct adapter; the
+    existing mailbox/group worker remains the default otherwise."""
     if args.native:
         return [native_exchange.ExchangeDoer(args, 'admit')]
+    if args.input or args.output or args.endpoint:
+        return [legacy_negotiation.Negotiation(args, 'admit')]
     ed = AdmitDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,
