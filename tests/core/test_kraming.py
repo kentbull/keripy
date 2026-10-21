@@ -5481,6 +5481,10 @@ def test_strict_monotonicity_existing_cache(mockHelpingNowUTC):
         senderIcp = senderHab.msgOwnEvent(sn=0, framed=True, gvrsn=V2)
         Parser(version=V2).parse(ims=bytearray(senderIcp), kvy=crossKvy)
         assert senderHab.pre in crossKvy.kevers
+        # This test intentionally removes sender state to expose whether the
+        # monotonicity check runs before key lookup. A cold RAM cache alone is
+        # not missing state: statedict can reload the verified persistent KEL.
+        receiverHby.db.states.rem(keys=senderHab.pre)
 
         with openCF(name="kram", base="test") as cf:
             cf.put(KRAM_INTEGRATION_CONFIG)
@@ -6191,3 +6195,39 @@ def test_partial_multisig_survives_an_anchor_during_collection(mockHelpingNowUTC
             assert receiverHby.db.kramPMKS.get(rotKey) == []
             assert receiverHby.db.kramPMSK.get(rotKey) is None
             assert receiverHby.db.kramMSGC.get(rotKey) is not None
+
+
+@pytest.mark.parametrize('transactioned', [False, True])
+@pytest.mark.parametrize('threshold', [1, 2])
+def test_kram_uses_persisted_sender_state_with_cold_cache(transactioned, threshold):
+    """Authenticate fresh/partial traffic from retained KEL state without replay.
+
+    Query and exchange caches each cover first delivery and accumulated two-key
+    signatures. Clearing only the in-memory Kever reproduces the foreign-sender
+    state after process restart; authenticated persistent KEL evidence remains.
+    """
+    with (openHby(name='cold-sender', temp=True) as sender,
+          openHby(name='cold-receiver', temp=True) as receiver,
+          openCF(name='cold-kram', base='test') as cf):
+        hab = sender.makeHab(name='sender', icount=threshold, isith=str(threshold), version=V2)
+        rec = receiver.makeHab(name='receiver', version=V2)
+        Parser(version=V2).parse(ims=bytearray(hab.msgOwnEvent(sn=0, gvrsn=V2)),
+            kvy=Kevery(db=receiver.db, lax=False, local=False))
+        cf.put(KRAM_INTEGRATION_CONFIG)
+        kramer = Kramer(db=receiver.db, cf=cf)
+        if transactioned:
+            msg = exchept(sender=hab.pre, receiver=rec.pre, route='/test/cold',
+                          stamp=helping.nowIso8601(), **EXN_KWA)
+        else:
+            msg = query(pre=hab.pre, route='ksn', query=dict(i=hab.pre, src=hab.pre),
+                        stamp=helping.nowIso8601(), pvrsn=V2)
+        sigers = hab.mgr.sign(ser=msg.raw, verfers=hab.kever.verfers, indexed=True)
+        receiver.db.kevers.pop(hab.pre)
+        assert receiver.db.kevers.get(hab.pre) is None
+        assert receiver.db.states.get(keys=hab.pre) is not None
+        result = kramer.kramit(msg, dict(lsgs=[(Prefixer(qb64=hab.pre), sigers[:1])]))
+        if threshold == 2:
+            assert result is None
+            receiver.db.kevers.pop(hab.pre)
+            result = kramer.kramit(msg, dict(lsgs=[(Prefixer(qb64=hab.pre), sigers[1:])]))
+        assert result is msg

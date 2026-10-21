@@ -251,3 +251,18 @@ and `registryOrigin`; inception/grant arguments; wallet/custody/CLI regressions.
   expanded documentation, then the optional composition and history checks.
   Twenty-six wallet/custody tests, seventeen CLI/custody tests, seven final author
   retry tests, and the selector test pass; scenario-level qualification remains.
+
+### KRAM sender state after process restart
+
+Dolly's installed-console restart test exposed four `Kramer.kramit` lookups
+using `statedict.get`, which only checks the in-memory Kever cache. Replace them
+with the existing Baser membership/index read-through idiom so already verified
+persistent KEL state can authenticate a new message after restart. This is a
+local integration repair using upstream Baser behavior, not a new KRAM timing
+rule. Unknown senders still require authenticated key-state evidence.
+
+Four cold-cache regressions cover query/exchange and single/multi-key delivery;
+all four fail with the previous lookup restored. The complete KRAM file plus
+native sender transport tests pass (60 cases). The existing monotonicity test
+now deliberately removes persistent sender state as well as RAM state, keeping
+its original assertion about rejection order without relying on the cache bug.
