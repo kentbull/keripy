@@ -189,3 +189,9 @@ fully witnessed issuee event without constructing a wallet or loading custody.
 The historical-reference validation is unchanged; authoring a new bound update
 still separately requires the known current issuee head. This is a local
 separation-of-concerns extraction, not a new protocol or timing rule.
+
+## Later source-review index
+
+The [community lineage supplement](community-lineage.md) maps changed symbols,
+moved predecessors and local decisions through 3e978775. Runtime qualification
+remains pinned separately; documentation-only successors do not change that pin.
