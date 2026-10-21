@@ -19,6 +19,7 @@ from keri.vdr import Regery, Tevery, Verifier
 
 @pytest.mark.parametrize("content_type", [CESR_CONTENT_TYPE, "application/cesr+json"])
 def test_parse_cesr_request(content_type):
+    """Require the same JSON body and attachment contract for both supported CESR media types."""
     req = helpers.create_req()
     with pytest.raises(falcon.HTTPError):
         parseCesrHttpRequest(req=req)
