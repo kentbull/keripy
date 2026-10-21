@@ -7,6 +7,12 @@ DOLLY_ROOT=${DOLLY_ROOT:-${DOLLY_SOURCE:?Set DOLLY_SOURCE to the standalone Doll
 IMAGE=${SCENARIO_IMAGE:-keripy-v2-scenarios:dev}
 BASE_IMAGE=${SCENARIO_BASE_IMAGE:-keripy-v2-scenarios:base}
 VOLUME=${SCENARIO_VOLUME:-keripy-v2-scenarios}
+PROFILE=${SCENARIO_SERVICE_PROFILE:-kli}
+case "$PROFILE" in kli|kf) ;; *) printf 'Unknown service profile: %s\n' "$PROFILE" >&2; exit 2;; esac
+if [[ $PROFILE == kf ]]; then
+    : "${KF_REGISTRAR_SOURCE:?Set the upgraded registrar checkout}"
+    : "${KF_OBSERVER_SOURCE:?Set the upgraded observer checkout}"
+fi
 KERIPY_DIRTY=false
 DOLLY_DIRTY=false
 [[ -z $(git -C "$ROOT" status --porcelain) ]] || KERIPY_DIRTY=true
@@ -21,8 +27,23 @@ docker build -t "$IMAGE" -f "$HERE/Dockerfile" \
     --build-arg "DOLLY_REVISION=$(git -C "$DOLLY_ROOT" rev-parse HEAD)" \
     --build-arg "KERIPY_WORKTREE_DIRTY=$KERIPY_DIRTY" \
     --build-arg "DOLLY_WORKTREE_DIRTY=$DOLLY_DIRTY" "$ROOT"
+if [[ $PROFILE == kf ]]; then
+    KF_REGISTRAR_DIRTY=false
+    KF_OBSERVER_DIRTY=false
+    [[ -z $(git -C "$KF_REGISTRAR_SOURCE" status --porcelain) ]] || KF_REGISTRAR_DIRTY=true
+    [[ -z $(git -C "$KF_OBSERVER_SOURCE" status --porcelain) ]] || KF_OBSERVER_DIRTY=true
+    docker build -t "$IMAGE-kf" -f "$HERE/Dockerfile.kf" \
+        --build-context "registrar-src=$KF_REGISTRAR_SOURCE" \
+        --build-context "observer-src=$KF_OBSERVER_SOURCE" --build-arg "SCENARIO_IMAGE=$IMAGE" \
+        --build-arg "REGISTRAR_REVISION=$(git -C "$KF_REGISTRAR_SOURCE" rev-parse HEAD)" \
+        --build-arg "OBSERVER_REVISION=$(git -C "$KF_OBSERVER_SOURCE" rev-parse HEAD)" \
+        --build-arg "REGISTRAR_DIRTY=$KF_REGISTRAR_DIRTY" \
+        --build-arg "OBSERVER_DIRTY=$KF_OBSERVER_DIRTY" "$ROOT"
 fi
+fi
+if [[ $PROFILE == kf ]]; then IMAGE="$IMAGE-kf"; fi
 docker run --rm --mount "type=volume,src=$VOLUME,dst=/tmp" \
     --mount "type=volume,src=$VOLUME-state,dst=/usr/local/var" \
+    -e "SCENARIO_SERVICE_PROFILE=$PROFILE" \
     -e "SCENARIO_TRANSPORT=${SCENARIO_TRANSPORT:-http}" "$IMAGE" \
     "/workspace/scripts/v2-e2e/scenarios/$SCENARIO"

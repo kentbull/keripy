@@ -66,3 +66,18 @@ observation/polling/query implementation with its docstrings, preserving legacy
 imports and behavior. It also removes surplus EOF blank lines from the previous
 shared modules. The 21 installed-core service, pruning and public-evidence CLI
 tests pass after extraction. Whole-profile qualification remains outstanding.
+
+### Actual KF process profile
+
+The scenario `common.sh` service selector, `run-linux.sh` image composition and
+new `Dockerfile.kf` are local integration work on the existing qualified Bash
+harness. Default `kli` execution is preserved; `SCENARIO_SERVICE_PROFILE=kf`
+launches actual installed fork binaries with explicit full-evidence flags.
+The only extra port is the registrar's separate local admin API. Three witness
+processes and quorum two remain unchanged. Fork revisions/dirty flags and wheel
+hashes join the existing result manifest.
+
+Development S1 (full holder, graduated HTTP) and S2 (partial holder, onward TCP)
+passed with two Dolly hooks each using registrar 7b77c08 and observer 27a7e0f.
+These runs used an uncommitted harness and do not close clean qualification,
+hosted-witness or Locksmith acceptance gates.

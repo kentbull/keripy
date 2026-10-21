@@ -50,3 +50,19 @@ recipient. The local protected custody importer separately checks the accepted
 registry controller and intended local designated discloser. Those guardrails
 are not signed delegation or authenticated transport. Operators supply the
 private-channel and provisioning authority arrangement explicitly.
+
+### Additive KF service profile
+
+Set `SCENARIO_SERVICE_PROFILE=kf`, `KF_REGISTRAR_SOURCE` and
+`KF_OBSERVER_SOURCE` to the upgraded fork checkouts, alongside `DOLLY_SOURCE`,
+then run the same dedicated story scripts through `run-linux.sh` or `run-all.sh`.
+The image installs real `kf-registrar` and `kf-observer` wheels. Their own binaries
+serve publication and independent observation; the default `kli` profile remains
+unchanged. `Dockerfile.kf` records fork revisions, dirty flags and wheel hashes
+in the public result manifest. Linux named volumes continue to own all LMDB.
+
+This selector currently replaces the two registry services only. Witnesses and
+wallet actors still use KLI; hosted witness and Locksmith profiles are subsequent
+gates. Development runs of the full-holder/HTTP and partial-holder/TCP stories
+passed with two Dolly webhooks each. They are integration evidence, not the final
+clean multi-component qualification.

@@ -92,12 +92,15 @@ prepare() {
     export KLI_KEYSTORE_PASSCODE
     KLI_KEYSTORE_PASSCODE=$(kli passcode generate)
     trap cleanup EXIT
+    SERVICE_PROFILE=${SCENARIO_SERVICE_PROFILE:-kli}
+    case "$SERVICE_PROFILE" in kli|kf) ;; *) printf 'Unknown service profile: %s\n' "$SERVICE_PROFILE" >&2; exit 2;; esac
+    printf '%s\n' "$SERVICE_PROFILE" > "$RUN_DIR/service-profile.txt"
     ROLES=(witness1 witness2 witness3 issuer holder registrar observer dolly)
     if [[ $SCENARIO == *selected-discloser* ]]; then ROLES+=(presenter); fi
-    python "$JSON" ports "${ROLES[@]}" witness1tcp witness2tcp witness3tcp dollytcp hook \
+    python "$JSON" ports "${ROLES[@]}" witness1tcp witness2tcp witness3tcp dollytcp hook registraradmin \
         > "$RUN_DIR/ports.json"
     local role
-    for role in "${ROLES[@]}" witness1tcp witness2tcp witness3tcp dollytcp hook; do
+    for role in "${ROLES[@]}" witness1tcp witness2tcp witness3tcp dollytcp hook registraradmin; do
         PORTS[$role]=$(value "$RUN_DIR/ports.json" "$role")
     done
     printf '{"transferable":false,"wits":[],"toad":0,"icount":1,"isith":"1","ncount":0,"nsith":"0"}\n' \
@@ -163,17 +166,29 @@ services() {
         k "$role" kel export -a "$role" --output "$RUN_DIR/$role-current.cesr"
         cat "$RUN_DIR/$role-current.cesr" >> "$RUN_DIR/bootstrap.cesr"
     done
+    if [[ $SERVICE_PROFILE == kf ]]; then
+        spawn registrar kf-registrar start --name "${NAMES[registrar]}" --base "$STORE_BASE" -a registrar \
+            --publisher "${AIDS[issuer]}" --observer "${AIDS[observer]}" --kel "$RUN_DIR/bootstrap.cesr" \
+            --full-evidence --http "${PORTS[registrar]}" --bootport "${PORTS[registraradmin]}" --no-prompt
+    else
     spawn registrar kli registrar start --name "${NAMES[registrar]}" --base "$STORE_BASE" \
         --publisher "${AIDS[issuer]}" --observer "${AIDS[observer]}" --kel "$RUN_DIR/bootstrap.cesr" \
         --port "${PORTS[registrar]}" --no-prompt
+    fi
     python "$JSON" ready "http://127.0.0.1:${PORTS[registrar]}/health" 15
     k issuer vc registry publish -a issuer --endpoint "http://127.0.0.1:${PORTS[registrar]}/ingest" --file "$RUN_DIR/public.cesr"
     local readers=(--reader "${AIDS[holder]}" --reader "${AIDS[dolly]}")
     if [[ -v AIDS[presenter] ]]; then readers+=(--reader "${AIDS[presenter]}"); fi
+    if [[ $SERVICE_PROFILE == kf ]]; then
+        spawn observer kf-observer start --name "${NAMES[observer]}" --base "$STORE_BASE" -a observer \
+            --registrar "http://127.0.0.1:${PORTS[registrar]}/" "${readers[@]}" --kel "$RUN_DIR/bootstrap.cesr" \
+            --full-evidence --poll 0.2 --maximum-age 3 --timeout 1 --http "${PORTS[observer]}" --no-prompt
+    else
     spawn observer kli observer start --name "${NAMES[observer]}" --base "$STORE_BASE" \
         -a observer --registrar "http://127.0.0.1:${PORTS[registrar]}/" "${readers[@]}" \
         --kel "$RUN_DIR/bootstrap.cesr" --interval 0.2 --maximum-age 3 --timeout 1 \
         --port "${PORTS[observer]}" --no-prompt
+    fi
     python "$JSON" ready "${OBSERVER_URL}health" 15
     poll k holder vc registry query -a holder --endpoint "$OBSERVER_URL" --registry "$REGISTRY" --output "$RUN_DIR/holder-public.cesr"
     python "$JSON" config "$RUN_DIR/dolly-policy.json" "${AIDS[issuer]}" "$SCHEMA" "$OBSERVER_URL" "http://127.0.0.1:${PORTS[hook]}/hook"

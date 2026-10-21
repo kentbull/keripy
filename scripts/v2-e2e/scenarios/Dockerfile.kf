@@ -1,0 +1,15 @@
+# syntax=docker/dockerfile:1
+# Add real external service wheels; never bind-mount host LMDB state.
+ARG SCENARIO_IMAGE=keripy-v2-scenarios:dev
+FROM ${SCENARIO_IMAGE}
+COPY --from=registrar-src pyproject.toml README.md LICENSE /opt/kf-registrar/
+COPY --from=registrar-src src /opt/kf-registrar/src
+COPY --from=observer-src pyproject.toml README.md LICENSE /opt/kf-observer/
+COPY --from=observer-src src /opt/kf-observer/src
+ARG REGISTRAR_REVISION
+ARG OBSERVER_REVISION
+ARG REGISTRAR_DIRTY=false
+ARG OBSERVER_DIRTY=false
+ENV SCENARIO_REGISTRAR_REVISION=${REGISTRAR_REVISION} SCENARIO_OBSERVER_REVISION=${OBSERVER_REVISION} SCENARIO_REGISTRAR_DIRTY=${REGISTRAR_DIRTY} SCENARIO_OBSERVER_DIRTY=${OBSERVER_DIRTY}
+RUN python -m pip wheel --no-deps --no-build-isolation /opt/kf-registrar /opt/kf-observer -w /artifacts && python -m pip install --no-deps /artifacts/kf_*.whl
+RUN python -c 'import os,json,hashlib,pathlib; p=pathlib.Path("/artifacts"); f=p/"manifest.json"; v=json.loads(f.read_text()); v.update(service_profile="kf", registrar_revision=os.environ["SCENARIO_REGISTRAR_REVISION"], observer_revision=os.environ["SCENARIO_OBSERVER_REVISION"], registrar_worktree_dirty=os.environ["SCENARIO_REGISTRAR_DIRTY"]=="true", observer_worktree_dirty=os.environ["SCENARIO_OBSERVER_DIRTY"]=="true"); v["wheels"].update({w.name:hashlib.sha256(w.read_bytes()).hexdigest() for w in p.glob("kf_*.whl")}); f.write_text(json.dumps(v,indent=2))'
