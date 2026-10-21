@@ -18,7 +18,7 @@ from keri.acdc import messaging
 from keri.acdc.regeventing import vetBlind, vetBound
 from keri.app import Receiptor, HaberyDoer, Keeper
 from keri.app.httping import CESR_CONTENT_TYPE
-from keri.app.registrar.serving import Context, KEL_DEPENDENCIES, signedQuery
+from keri.app.evidencing import EvidenceContext, KEL_DEPENDENCIES, signedQuery
 from keri.cli.common import native, setupHby
 from keri.core import Parser, SerderKERI, Number
 from keri.kering import ConfigurationError
@@ -215,7 +215,7 @@ class Request(doing.DoDoer):
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('unknown signing alias')
-            evidence = Context(hby, reger=rgy.baser)
+            evidence = EvidenceContext(hby, reger=rgy.baser)
             client = http.clienting.Client(scheme=target.scheme, hostname=target.hostname,
                 port=target.port or (443 if target.scheme == 'https' else 80))
             owner = http.clienting.ClientDoer(client=client)

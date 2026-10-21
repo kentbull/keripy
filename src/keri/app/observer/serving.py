@@ -15,8 +15,8 @@ from hio.core import http
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.app.indirecting import createHttpServer
 from keri.db.basing import BaserDoer
-from keri.app.registrar.serving import Context as EvidenceContext
-from keri.app.registrar.serving import HealthEnd, authenticate, signedQuery
+from keri.app.evidencing import EvidenceContext, signedQuery
+from keri.app.evidence_httping import HealthEnd, authenticate
 from keri.db import dbing, koming
 from keri.help import helping
 
@@ -75,6 +75,10 @@ class Context(EvidenceContext):
                 ConfigurationError: Shared service authentication policy is invalid."""
         if not isfinite(maximumAge) or maximumAge <= 0:
             raise ValueError('maximum observation age must be finite and positive')
+        # Preserve previously accepted service allowlist arguments on this
+        # application, without making shared evidence processing own HTTP roles.
+        self.publishers = set(kwa.pop('publishers', ()))
+        self.observers = set(kwa.pop('observers', ()))
         super().__init__(hby, **kwa)
         self.readers = set(readers)
         self.maximumAge = maximumAge

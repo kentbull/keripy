@@ -18,7 +18,7 @@ from keri.app import GroupHab, Notifier
 from keri.app.native_grouping import NativeGroup
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.app.indirecting import createHttpServer
-from keri.app.registrar.serving import Context as EvidenceContext, signedQuery, KEL_DEPENDENCIES
+from keri.app.evidencing import EvidenceContext, signedQuery, KEL_DEPENDENCIES
 from keri.core import Codens, Compactor, Counter, Diger, Number, Parser, SealEvent, SerderACDC, messagize
 from keri.kering import ConfigurationError, MissingChainError, MissingSchemaError
 from keri.peer import exchanging

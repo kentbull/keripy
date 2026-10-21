@@ -7,6 +7,7 @@ from hio.core import http
 from keri import Vrsn_2_0
 from keri.acdc import regcept, acdcmap, blindate
 from keri.app.habbing import openHby
+from keri.app.evidencing import EvidenceContext
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.app.registrar.serving import Context as Registrar, signedQuery, ServiceConfig
 from keri.app.observer.serving import Context as Observer, RegistrarPuller, ObservationBaser, Observation
@@ -61,8 +62,12 @@ def post(client, hab, route, query=None, path='/', suffix=b''):
                                 headers={'Content-Type': CESR_CONTENT_TYPE})
 
 
-def test_resolved_wrong_anchor_locator_is_not_dropped_at_service_intake():
-    """Reject a resolvably false supplied locator at service intake, then accept a clean authentic replay without retained poisoning.
+@pytest.mark.parametrize("contextType", [EvidenceContext, Registrar])
+def test_resolved_wrong_anchor_locator_is_not_dropped_at_service_intake(contextType):
+    """Reject a false locator through shared and legacy contextType entry points.
+
+    contextType selects neutral evidence processing or the compatible registrar
+    application. A clean authentic replay must still succeed without poisoning.
 
     Returns:
         None. Assertions check the stated evidence boundary."""
@@ -72,7 +77,7 @@ def test_resolved_wrong_anchor_locator_is_not_dropped_at_service_intake():
         rip, update = issue(hab)
         hab.interact(data=[{'unrelated': 'accepted KEL event'}])
         wrong = hab.kever.serder
-        ctx = Registrar(registrar)
+        ctx = contextType(registrar)
         try:
             assert not ctx.ingest(hab.replay(gvrsn=Vrsn_2_0) + native(rip))['rejected']
             supplied = messagize(update, bonds=[SealSource(s=wrong.snh, d=wrong.said)],
