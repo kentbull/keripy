@@ -264,5 +264,3 @@ class EvidenceContext(doing.DoDoer):
                 None. Habery remains caller-owned; scheduling cancellation must precede
                 this close so pruning/escrow work cannot access a closed environment."""
         self.reger.close()
-
-

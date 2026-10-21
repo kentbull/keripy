@@ -49,3 +49,20 @@ across `test_native_services`, `test_native_service_pruning`,
 `test_native_group_pruning` (61.85 seconds; existing pysodium deprecation).
 Source was copied into the image and LMDB stayed in named volumes. This closes
 the composition regression gate, not external service or UI acceptance.
+
+### Shared observation composition
+
+`evidence_observing.Observation`, `ObservationBaser`, `RegistrarPuller`, and
+`ObservedEvidence.observe/close` move from `app.observer.serving` at 4b1078e0.
+`evidence_querying.QueryEnd` moves from the same source. AST comparison confirms
+all those complete classes/methods are unchanged. `ObservedEvidence.__init__`
+retains evidence, freshness and persistence configuration while the compatible
+`observer.serving.Context.__init__` retains reader/legacy allowlists and routes.
+This is a local composition decision; original donor lineage remains
+kf-observer d6368aef, as recorded above. No query can schedule acquisition.
+
+This review unit exceeds the nominal line target because it moves a cohesive
+observation/polling/query implementation with its docstrings, preserving legacy
+imports and behavior. It also removes surplus EOF blank lines from the previous
+shared modules. The 21 installed-core service, pruning and public-evidence CLI
+tests pass after extraction. Whole-profile qualification remains outstanding.

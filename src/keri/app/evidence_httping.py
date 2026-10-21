@@ -70,5 +70,3 @@ class HealthEnd:
             Returns:
                 None. Health is not authorization, freshness, or a verification verdict."""
         rep.media = {'status': 'ok'}
-
-
