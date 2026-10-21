@@ -1,5 +1,10 @@
 # Qualification ledger
 
+The [2026-10-21 clean qualification](qualification-2026-10-21.md) closes the
+declared refactor gates and records the exact tested source pair, 1,014 passing
+Python tests, seven passing Bash workflows, and public evidence. Later result
+commits are documentation only; the source pair remains explicitly pinned.
+
 Run `scripts/v2-e2e/qualify.sh` from a fresh checkout of the exact handoff SHA.
 The final handoff reports that command's result for that commit. Python
 qualification is the gate for the TypeScript port. Optional bulk/Merkle

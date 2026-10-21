@@ -30,7 +30,12 @@ The installed wheel SHA-256 values were:
 - KERIpy: `9d57afd576146eec7d5d28de7f7021bbe5b89f5cd8e622780424f206cea59c2b`
 - Dolly: `79ea2727baa31dc5897e24f6f9df90d7d86f3ca52b884affbbcbaa8f11ed3956`
 
-Final acceptance requires another complete run from the exact clean published
-source pair, including the final proof-validation refinements and v1 changes.
-Record that pair and its public manifests/transcripts separately; do not relabel
-the developmental artifact as clean.
+Final acceptance completed on 2026-10-21 from clean published KERIpy
+`64e14e086f16a4fd02eb9fc02ce07a2236175ca7` and Dolly
+`8da5d718c0255ebd2541c719ca5c7046538d9483`. All six stories passed against one
+installed image, alternating HTTP/TCP, with isolated state and two real hooks
+each. The dedicated v1 Bash workflow, integrated core/application tests and
+actual released-peer matrix also passed. See the
+[final report](../../../docs/v2-e2e/qualification-2026-10-21.md) for exact
+manifests, transcripts, public proof archives and artifact hashes. The earlier
+dirty run above remains separately labeled developmental evidence.

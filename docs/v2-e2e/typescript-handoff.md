@@ -1,10 +1,10 @@
 # Python reference contract for keri-ts
 
-Port only after the branch's qualification gates close. This document specifies
+The declared gates closed for the exact source pair in the
+[2026-10-21 qualification](qualification-2026-10-21.md). Use that bounded
+provisional reference, not an arbitrary later branch tip. This document specifies
 responsibilities and observable contracts; it does not authorize changing the
-paused TypeScript checkout. The exact qualified commit is the SHA reported with
-the final qualification result. Resolve it with `git rev-parse HEAD` in the
-fresh checkout used for that run.
+paused TypeScript checkout. No TypeScript implementation was performed.
 
 ## Wire and evidence
 

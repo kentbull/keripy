@@ -1,9 +1,10 @@
 # Refactor qualification status
 
-The `e45f57fbf524ab0a9739baa4786dcbc5e6632ba2` branch is the R&D
-foundation, not yet the qualified TypeScript behavioral reference. The current
-work retains its useful protocol machinery while closing the adversarial review,
-optional-custody, standalone-Dolly, and operator-workflow gates.
+The declared refactor gates completed on 2026-10-21 against clean published
+KERIpy `64e14e08` and Dolly `8da5d71`. See the
+[final qualification and public evidence](qualification-2026-10-21.md). The
+earlier `e45f57fb` foundation and developmental checkpoints below are historical;
+only the exact final source pair is the qualified provisional reference.
 
 ## Baseline
 
@@ -75,18 +76,22 @@ normal EXN dependency escrow for an unknown self-verified target opening. Such
 an opening proves no newer ordinal or acceptance; known contradictions remain
 permanent refusals. No KRAM timing rule is added.
 
-## Remaining acceptance
+## Final acceptance
 
-The current implementation is not yet the qualified TypeScript reference.
-Rerun all six independent Bash stories against one clean published installed
-source pair, repeat the dedicated v1 Bash operator workflow, and run integrated
-and clean-published-checkout qualification. Pin the final dependency and record
-artifact hashes, public manifests, and actual transcripts.
+The unmodified composed qualifier exited zero from fresh published clones:
+986 KERIpy tests, 26 Dolly tests, two separately installed released-peer cases,
+the v1 Bash operator story and all six independent v2 Bash stories passed.
+The two skips in Dolly's default suite are the released-peer cases that passed
+in their separate installations. Every operator manifest records clean trees,
+exact wheel hashes and two real hooks; the v1 revoked grant produced no third.
 
-Dolly extraction and the operator-link update are committed. Complete final
-provenance reconciliation for all earlier and new contributions. Documentation-only source
-and test batches are checked for executable AST equality; a symbol inventory is
-not a substitute for substantive origin/review coverage. Optional custody,
-standalone application, CLI, provenance, and human documentation gates close only
-when their named evidence is reconciled here. Unknown historical authorship must
-remain explicit, never fabricated.
+The final provenance reconciliation covers 1,139 changed units across 155 files,
+including every selected live function's documentation and explained moves and
+removals. Unknown historical authorship remains explicit. Dolly-specific
+application code and its v1 operator evidence reside in Dolly; KERIpy retains
+shared protocol/application primitives and the cross-repository v2 scenarios.
+
+No required refactor gate remains open. The final report records exact source,
+artifacts, transcripts, limitations and the later documentation-only delta.
+It does not claim a production release, universal conformance or a completed
+TypeScript port. All checkpoint counts above describe their original runs.
