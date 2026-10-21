@@ -28,13 +28,14 @@ optional-custody, standalone-Dolly, and operator-workflow gates.
 | R2/R3-A shared configured admission and schema context | `V2_TEST_IMAGE=keripy-v2-refactor:context-final V2_TEST_VOLUME=keripy-v2-refactor-context-final scripts/v2-e2e/check.sh tests/app/test_native_wallet.py tests/app/test_native_ipex_cli.py tests/acdc/test_ipexing.py tests/acdc/test_ipex_verification_context.py` | 119 passed; independent review accepted concrete context and read-through lookup |
 | R1/R3-B/R4/R5-B Dolly composition | `V2_TEST_IMAGE=keripy-v2-refactor:dolly-sections V2_TEST_VOLUME=keripy-v2-refactor-dolly-sections scripts/v2-e2e/check.sh tests/app/test_dolly.py` | 16 passed, including six independent own/edge schema arrival/reopen cases, retained projection, actual hooks, pruner cancellation |
 | R3-C/R5-C group composition | `V2_TEST_IMAGE=keripy-v2-refactor:group-sections V2_TEST_VOLUME=keripy-v2-refactor-group-sections scripts/v2-e2e/check.sh tests/app/test_native_groups.py tests/app/test_native_group_pruning.py` | 12 passed: direct/mailbox sections, threshold approval, single pruner ownership, expiry/cancellation/reschedule |
+| R8 historical inspection/current reporting | `V2_TEST_IMAGE=keripy-v2-refactor:dolly-historical V2_TEST_VOLUME=keripy-v2-refactor-dolly-historical scripts/v2-e2e/check.sh tests/app/test_dolly_historical.py tests/app/test_dolly.py::test_native_partial_full_grants_observer_acquisition_and_real_webhooks tests/app/test_dolly.py::test_empty_grant_is_terminal_and_later_grants_report_after_reopen` | 5 passed: anchored bound history, revocation, reopen, invalid proof, hook silence |
 
 These targeted checks qualify the runner change, not the complete refactor.
 The historic 799-test result is not new evidence for the current changes.
 
 ## Remaining acceptance
 
-R6/R8 repairs, optional custody H1–H8, standalone Dolly/transport D1–D4,
+R6 repair, optional custody H1–H8, standalone Dolly/transport D1–D4,
 dual-version KLI and six independent Bash scenarios C1–C3, provenance P1,
 human-reviewable commits Q2, and documentation Q3 remain open until their
 concrete evidence is recorded. The provenance inventory is incomplete until

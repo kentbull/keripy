@@ -151,3 +151,20 @@ standalone group creates and schedules exactly one Pruner. Four real threshold
 approval cases cover independent schema arrival and unchanged partial views;
 two authenticated-cache cases cover expiry, cancellation, resumed scheduling,
 and retained EXNs. All 12 group tests pass in the installed Linux wheel.
+
+## R8: historical evidence inspection versus current reporting
+
+Targets: Dolly `_nativeDisclosure`, `_nativeCredential`, `inspectHistorical`,
+`_historicalSources`, and every helper/test in `test_dolly_historical.py`.
+The disclosure boundary extracts existing logic at `9cf8dcd6`; the historical
+test adapts `test_bound_state_profile.test_production_graph_bound_authority_uses_real_anchored_history`
+from `825229806db825fdce180cb2a11ec31ed66aee03`.
+
+Codex locally designed an explicit read-only inspection purpose. It reuses core
+verification and exact retained projections, returning authenticated bound TEL/KEL
+references and `currentStanding=not-evaluated`. It emits no hook, submission,
+timestamp, or freshness claim. Current reporting still applies its all-node
+standing and observer policy. This is application policy separation, not new
+KRAM or historical snapshot semantics. Five focused tests cover a real bound
+authority graph after revocation, current-reporting refusal, historical inspection
+across reopen, invalid proof refusal, retained privacy, and actual hook silence.

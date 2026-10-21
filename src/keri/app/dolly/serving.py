@@ -13,14 +13,14 @@ from hio.core import http
 
 from keri import Vrsn_1_0, Vrsn_2_0, Kinds
 from keri.acdc import Regery
-from keri.acdc.regeventing import issuerRegistry
+from keri.acdc.regeventing import issuerRegistry, vetBlind, vetBound
 from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import ipexing, agenting
 from keri.app.dolly.projecting import project
 from keri.app.httping import CESR_CONTENT_TYPE, CESR_ATTACHMENT_HEADER
 from keri.app.indirecting import createHttpServer
 from keri.app.registrar.serving import Context as EvidenceContext, signedQuery, KEL_DEPENDENCIES
-from keri.core import Parser, SerderACDC, SerderKERI, Serdery, GenDex, Revery
+from keri.core import Parser, SerderACDC, SerderKERI, Serdery, GenDex, Revery, BoundState, Diger
 from keri.db import dbing, koming
 from keri.db.basing import BaserDoer
 from keri.help import helping
@@ -214,14 +214,83 @@ class Context(doing.DoDoer):
         or current standing raises ValidationError. Selection never resolves a
         fuller cached disclosure in place of this grant's retained material.
         """
+        credential, nests = self._nativeDisclosure(exn)
+        if credential is not None:
+            self._nativeCurrentStanding(nests)
+        return credential
+
+    def _nativeDisclosure(self, exn):
+        """Return the core-verified retained origin and its disclosed graph nodes.
+
+        ``exn`` must name a retained native grant. Empty disclosures return
+        (None, []). Invalid semantics/proofs raise ValidationError; unavailable
+        dependencies retain their core exception. This boundary applies no
+        Dolly current-reporting or observation policy and never expands a view.
+        """
         if not self.native.verifyAccepted(exn.said):
             raise ValidationError('native IPEX proof or semantics failed')
         origins = exn.sad['a']['o']
         if not origins:
-            return None
+            return None, []
         nests = exchanging.loadParsedNestedSubstreams(self.hby, exn.said)
-        self._nativeCurrentStanding(nests)
-        return next(nest.serder for nest in nests if nest.serder.said == origins[0])
+        return next(nest.serder for nest in nests if nest.serder.said == origins[0]), nests
+
+    def inspectHistorical(self, grant):
+        """Inspect a retained authenticated native grant without reporting it.
+
+        ``grant`` is its EXN SAID. Return selected retained values, disclosure
+        facts, exact view references and authenticated bound-event references.
+        Empty grants have no credential or business projection. This explicit
+        historical-evidence purpose makes no current-standing, freshness, or
+        independent publication-time claim; it creates no submission, policy
+        acceptance, timestamp, or hook. Reporting allowlists and required fields
+        apply to current reporting; inspection uses only configured field paths.
+
+        Unknown/non-native grants or invalid proofs raise ValidationError;
+        unavailable dependencies retain their core exception. Core graph proof
+        verification remains authoritative, including its configured graphPolicy.
+        """
+        exn = self.hby.db.exns.get((grant,))
+        if exn is None or exn.pvrsn.major != 2 or exn.route != '/ipex/grant':
+            raise ValidationError('historical inspection requires a retained native grant')
+        credential, nests = self._nativeDisclosure(exn)
+        values, disclosure = project(credential, self.fields) if credential else ({}, {})
+        return dict(purpose='historical-evidence', proofValidity='valid',
+            currentStanding='not-evaluated', grant=grant,
+            credential=credential.said if credential else None,
+            business=values, disclosure=disclosure, sources=self._historicalSources(nests))
+
+    def _historicalSources(self, nests):
+        """Reference only exact retained node views and authenticated bound events.
+
+        ``nests`` are already core-verified grant nodes. Each result identifies
+        its node and serialized disclosure view. Bound references additionally
+        require a matching accepted TEL bup, its exact BLID opening, and the
+        accepted Issuee KEL event. Missing/invalid evidence raises the existing
+        core error. Never infer a reference from a receiver clock or a cache's
+        latest head, and never include opening nonces or cached fuller bodies.
+        """
+        sources = []
+        for nest in nests:
+            credential = nest.serder
+            bound = []
+            proofs = [proof for proof in self.native._blindProofs(nest)
+                      if proof.clan == BoundState and proof.acdc == credential.said]
+            if proofs and (regid := self.native._graphRegistry(credential, nest)):
+                _, events = self.native._registryEvidence(regid)
+                for event in events:
+                    for proof in proofs:
+                        if event.ilk != 'bup' or event.sad['b'] != proof.said:
+                            continue
+                        vetBlind(proof, blid=event.sad['b'])
+                        keyEvent = vetBound(proof, acdc=credential, db=self.hby.db)
+                        if keyEvent is not None:
+                            bound.append(dict(registry=regid, s=event.sad['n'], d=event.said,
+                                blid=proof.said, issuee=credential.iseaid,
+                                keyEvent=dict(s=proof.bnh, d=keyEvent.said)))
+            sources.append(dict(credential=credential.said,
+                view=Diger(ser=credential.raw).qb64, boundEvents=bound))
+        return sources
 
     def _nativeCurrentStanding(self, nests):
         """Require current standing for every node in retained parsed ``nests``.
