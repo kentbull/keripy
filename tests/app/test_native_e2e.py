@@ -20,6 +20,7 @@ from keri.app.dolly.serving import DollyBaser
 from keri.app.registrar.serving import signedQuery
 from keri.core import Noncer, SerderACDC
 from keri.db import openLMDB
+from keri.peer import exchanging
 
 
 PASSCODE = '0123456789abcdefghijk'  # public test fixture, never an operator secret
@@ -231,19 +232,76 @@ def test_independent_cli_witness_holder_observer_dolly_restart_and_revocation(tm
             '--observer', urls['observer'], '--registry', registry, '--port', str(ports['holder']))
         holder = processes.start('holder', *holderArgs)
         eventually(lambda: http(urls['holder'] + 'ingest', b'')[0] == 202)
-        granted = tmp_path / 'grant.cesr'
-        grant = processes.invoke('issuer', 'ipex', 'grant', '--native', '-a', 'issuer',
-            '-r', prefixes['holder'], '-s', said, '--endpoint', urls['holder'] + 'ingest',
-            '--output', str(granted))[0]['exchange']
-        processes.stop(holder)
-        admitted = processes.invoke('holder', 'ipex', 'admit', '--native', '-a', 'holder',
-            '-s', grant, '--observer', urls['observer'], '--registry', registry)[0]
-        assert admitted['admitted']
-        inventory = processes.invoke('holder', 'vc', 'list', '--native', '-a', 'holder')
-        assert any(item['grant'] == grant for item in inventory)
-        partial = processes.invoke('holder', 'ipex', 'grant', '--native', '-a', 'holder',
-            '-r', prefixes['dolly'], '-s', said, '--from-grant', grant,
-            '--disclose', 'a/status/', '--endpoint', urls['dolly'] + 'ingest')[0]['exchange']
+        issuer = processes.start('issuer', 'ipex', 'receive', '--native', '-a', 'issuer',
+                                 '--port', str(ports['issuer']))
+        eventually(lambda: http(urls['issuer'] + 'ingest', b'')[0] == 202)
+        dialogs = {}
+
+        def accepted(role, exchange):
+            with openHby(name=names[role], base=base, temp=False, bran=PASSCODE,
+                         version=Vrsn_2_0) as hby:
+                return hby.db.exns.get((exchange,))
+
+        def retained(role, exchange):
+            with openHby(name=names[role], base=base, temp=False, bran=PASSCODE,
+                         version=Vrsn_2_0) as hby:
+                return tuple(node.serder.raw for node in
+                             exchanging.loadParsedNestedSubstreams(hby, exchange))
+
+        def negotiate(sender, recipient, stage, *, fromGrant=None, partial=False):
+            """Every exchange is authored by KLI and received over real HTTP."""
+            plan = json.dumps([[[credential.schema['$id'], '/',
+                                 ['a/status/'] if partial else ['']]]])
+            source = ['--from-grant', fromGrant] if fromGrant else []
+            disclosure = ['--disclose', 'a/status/'] if partial else []
+            session = []
+
+            def exchange(role, verb, destination, *arguments):
+                path = tmp_path / f'{stage}-{verb}.cesr'
+                result = processes.invoke(role, 'ipex', verb, '--native', '-a', role,
+                    *arguments, '--endpoint', urls[destination] + 'ingest',
+                    '--output', str(path))[0]
+                assert result['accepted'] and result['transmitted']
+                message = eventually(lambda: accepted(destination, result['exchange']))
+                assert message.route == '/ipex/' + verb
+                assert message.sad['i'] == prefixes[role]
+                assert message.sad['ri'] == prefixes[destination]
+                assert message.sad['p'] == (session[-1].said if session else '')
+                assert message.sad['x']
+                if session:
+                    assert message.sad['x'] == session[0].sad['x']
+                session.append(message)
+                # Neither an offer nor a grant in stage one carries hidden data.
+                if partial:
+                    assert b'full-stage-only' not in path.read_bytes()
+                return result
+
+            application = exchange(recipient, 'apply', sender,
+                '-r', prefixes[sender], '--plan', plan)['exchange']
+            offered = exchange(sender, 'offer', recipient, '-r', prefixes[recipient],
+                '-s', said, '--prior', application, *source, *disclosure)['exchange']
+            agreement = exchange(recipient, 'agree', sender, '-s', offered)['exchange']
+            # Negotiation alone cannot produce an accepted-credential webhook.
+            hooksBefore = len(received())
+            assert hooksBefore == (0 if stage in ('holder-partial', 'dolly-partial') else 1)
+            granted = exchange(sender, 'grant', recipient, '-r', prefixes[recipient],
+                '-s', said, '--prior', agreement, *source, *disclosure)['exchange']
+            if recipient == 'dolly':
+                eventually(lambda: len(received()) == hooksBefore + 1)
+                eventually(lambda: delivered(granted))
+            admitted = exchange(recipient, 'admit', sender, '-s', granted,
+                '--observer', urls['observer'], '--registry', registry)
+            assert admitted['admitted']
+            assert len(received()) == hooksBefore + (recipient == 'dolly')
+            inventory = processes.invoke(recipient, 'vc', 'list', '--native', '-a', recipient)
+            assert any(item['grant'] == granted for item in inventory)
+            dialogs[granted] = session[0].sad['x']
+            return granted
+
+        grant = negotiate('issuer', 'holder', 'holder-partial', partial=True)
+        partial = negotiate('holder', 'dolly', 'dolly-partial', fromGrant=grant, partial=True)
+        holderPartial, dollyPartial = retained('holder', grant), retained('dolly', partial)
+        assert b'full-stage-only' not in b''.join(holderPartial + dollyPartial)
         eventually(lambda: len(received()) == 1)
         eventually(lambda: delivered(partial))
         first = received()[0]
@@ -252,20 +310,28 @@ def test_independent_cli_witness_holder_observer_dolly_restart_and_revocation(tm
         assert first['disclosure']['private'] == first['disclosure']['note'] == 'undisclosed'
         assert 'full-stage-only' not in json.dumps(first)
         # All three restart using their own persistent stores; the holder had
-        # already reopened for admission and now reopens for presentation.
+        # reopened for each command, and its intake also restarts here.
+        processes.stop(holder)
         processes.stop(observer)
         processes.stop(dolly)
         observer = processes.start('observer', *observerArgs)
         dolly = processes.start('dolly', *dollyArgs)
         eventually(lambda: http(urls['dolly'] + 'health')[0] == 200)
         eventually(lambda: http(urls['observer'], query())[0] == 200)
-        full = processes.invoke('holder', 'ipex', 'grant', '--native', '-a', 'holder',
-            '-r', prefixes['dolly'], '-s', said, '--from-grant', grant,
-            '--endpoint', urls['dolly'] + 'ingest')[0]['exchange']
+        holder = processes.start('holder', *holderArgs)
+        eventually(lambda: http(urls['holder'] + 'ingest', b'')[0] == 202)
+        fullGrant = negotiate('issuer', 'holder', 'holder-full')
+        assert fullGrant != grant
+        full = negotiate('holder', 'dolly', 'dolly-full', fromGrant=fullGrant)
         eventually(lambda: len(received()) == 2)
         eventually(lambda: delivered(full))
         second = received()[1]
         assert partial != full and second['grant'] == full and second['credential'] == said
+        assert len(set(dialogs.values())) == 4
+        assert b'full-stage-only' in b''.join(retained('holder', fullGrant))
+        assert retained('holder', grant) == holderPartial
+        assert retained('dolly', partial) == dollyPartial
+        assert received()[0] == first
         assert second['business'] == {'status': 'authorized', 'private': 'full-stage-only', 'note': None}
         assert second['disclosure']['note'] == 'disclosed_null'
         revoked = processes.invoke('issuer', 'vc', 'revoke', '--native', '-a', 'issuer',
@@ -281,7 +347,7 @@ def test_independent_cli_witness_holder_observer_dolly_restart_and_revocation(tm
         eventually(currentHead)
         time.sleep(2.1)  # require Dolly to obtain a new observation before this presentation
         rejected = processes.invoke('holder', 'ipex', 'grant', '--native', '-a', 'holder',
-            '-r', prefixes['dolly'], '-s', said, '--from-grant', grant,
+            '-r', prefixes['dolly'], '-s', said, '--from-grant', fullGrant,
             '--endpoint', urls['dolly'] + 'ingest')[0]['exchange']
         time.sleep(1.3)
         assert len(received()) == 2, received()

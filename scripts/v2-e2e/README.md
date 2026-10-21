@@ -15,9 +15,16 @@ The process demonstration starts three HTTP witnesses, registrar, independent bu
 observer, holder intake, Dolly, and a real HTTP webhook receiver. Separate KLI
 invocations create the registry and credential, obtain witness receipts with
 issuer and holder quorum thresholds of two,
-export public evidence, grant and admit, reopen the holder wallet, and present
-partial then full disclosure. Observer and Dolly restart between disclosure
-stages. Public revocation is published and observed before a new presentation;
+export public evidence, and negotiate partial then full disclosure through
+four complete Apply/Offer/Agree/Grant/Admit sessions: issuer to holder, then
+holder to Dolly, for each stage. Every exchange is authored by a KLI subprocess
+and delivered over HTTP. The holder presents only its corresponding admitted
+grant; it receives the fuller credential only in the second stage. Receiver
+acceptance, predecessor/session links, preserved partial views, explicit
+admission, and both actual webhook payloads are asserted. Negotiation before
+Grant produces no webhook, and Admit does not produce a duplicate.
+Holder intake, observer and Dolly restart between disclosure stages.
+Public revocation is published and observed before a new presentation;
 the issued-state policy emits no acceptance webhook. Stopping the registrar
 eventually makes observer queries return stale rather than current evidence.
 

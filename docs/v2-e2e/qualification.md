@@ -28,8 +28,13 @@ The existing atomic-store tests are part of the earlier integration commits.
 A/C/D/E: `test_native_e2e.py` starts independent issuer/holder/Dolly stores and
 processes, three witness processes with issuer/holder quorum two, registrar,
 independent observer and a real HTTP webhook receiver. It covers issuance,
-publication, grant/admit, two-stage disclosure, restart, independently observed
-revocation, no revoked acceptance webhook and stale observation refusal.
+publication and four full KLI-authored, HTTP-delivered IPEX negotiations:
+partial issuer-to-holder and holder-to-Dolly sessions, then fuller sessions
+along the same path after restart. It verifies all five messages' receiver
+acceptance, predecessor/session links, explicit admission, preserved first-stage
+views, and two actual webhook requests. Apply/Offer/Agree alone produce no
+webhook; Admit produces no duplicate. Independent revocation, no revoked
+acceptance webhook and stale observation refusal complete the scenario.
 
 B: both released peer installations generate real legacy credentials and signed
 IPEX grants. Current Dolly uses its existing legacy verifier/evidence machinery;
