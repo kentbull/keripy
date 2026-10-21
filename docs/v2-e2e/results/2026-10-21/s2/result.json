@@ -1,0 +1,150 @@
+{
+  "scenario": "holder-partial-then-onward",
+  "transport": "tcp",
+  "protocol": 2,
+  "topology": {
+    "witnesses": 3,
+    "quorum": 2
+  },
+  "roles": {
+    "witness1": {
+      "aid": "BBix0d2ILBdnB-1ULtEI12XDOi8FiIQtTdAPsM53zLTx"
+    },
+    "witness2": {
+      "aid": "BOckmPxm_1xjaA93xEZMBg-wL8FGuKGiGK5MUwxi04TV"
+    },
+    "witness3": {
+      "aid": "BIWW1JQAnZq-WOxy03nxlB6sqkEUsFn_2fBMWtwQUg9S"
+    },
+    "issuer": {
+      "aid": "EMLT52jN0AFvv_FtKtyDVCW1lD11S-kLBBwBcP1FyXny"
+    },
+    "holder": {
+      "aid": "EER52XvLU3bVt5poMk4n8IZm1L2b93OUeWSXgV6UV2ND"
+    },
+    "registrar": {
+      "aid": "EIgS5TgJ4FG6WApeAjkA5IdP59GK8_njJvrt7Mj_0tA1"
+    },
+    "observer": {
+      "aid": "ELKlRJdqVNPIVjIJXdQKLnhlu-yM-OLbTspAtU79DHlN"
+    },
+    "dolly": {
+      "aid": "EK30llFTCols0a3XbZhorWa6ivNrZoO8P8ZbBZ3WDbFv"
+    }
+  },
+  "artifacts": {
+    "keripy_revision": "64e14e086f16a4fd02eb9fc02ce07a2236175ca7",
+    "dolly_revision": "8da5d718c0255ebd2541c719ca5c7046538d9483",
+    "keripy_worktree_dirty": false,
+    "dolly_worktree_dirty": false,
+    "wheels": {
+      "keri-2.1.0.dev1-py3-none-any.whl": "3e5739f8b494033d56a1ddcd824d85d2650bee71f96cfbf0dacb18abc4e1751c",
+      "dolly-0.1.0.dev0-py3-none-any.whl": "6192f5070c82f18b40b48fab83dd3533561003aa46f5f4198eff7b0157c89d6b"
+    }
+  },
+  "held-grant": "EBitUYSqg1Qh2dFHyDfQYghLdOEKDzF7UrLqs472f5NV",
+  "full-grant": "EPxFaHMC3iVpDxR7kq3xuNWGzTvZ_knQAuDyaHWDInd9",
+  "issued-update": "EGZL_0Gm5B558sL3ZPyGMRydY2styFiaWH-GfbRneRsg",
+  "credential": "EJL0JUXA2UI24SeYio3XH7t30koaFw-RR-wIcm9rzE2c",
+  "partial-grant": "EI_1o-lYYAyQ-6fHma_bE68IIQZPp9KEAHLRxjmQ2fOm",
+  "registry": "EDTep9_u_oF_vAoJ6JVaiVaDU2Oxb869Hi65u_7BFujB",
+  "schema": "EPrsJF2BXyDUgDCVbGURsGNwCZjyrxD5M2qnBmhvoZYQ",
+  "versions": {
+    "kli": "Library version: 2.1.0-dev1",
+    "dolly": "0.1.0.dev0"
+  },
+  "authorizationProfile": "Issuer-controlled registry; holder presents admitted material; no holder derivation custody",
+  "actors": {
+    "credentialIssuer": "EMLT52jN0AFvv_FtKtyDVCW1lD11S-kLBBwBcP1FyXny",
+    "credentialRecipient": "EER52XvLU3bVt5poMk4n8IZm1L2b93OUeWSXgV6UV2ND",
+    "holder": "EER52XvLU3bVt5poMk4n8IZm1L2b93OUeWSXgV6UV2ND",
+    "presenter": "EER52XvLU3bVt5poMk4n8IZm1L2b93OUeWSXgV6UV2ND",
+    "verifier": "EK30llFTCols0a3XbZhorWa6ivNrZoO8P8ZbBZ3WDbFv",
+    "registryStateDiscloser": "EMLT52jN0AFvv_FtKtyDVCW1lD11S-kLBBwBcP1FyXny"
+  },
+  "expectedFields": {
+    "partial": [
+      "status"
+    ],
+    "fuller": [
+      "status",
+      "private",
+      "note"
+    ]
+  },
+  "publicEvidence": {
+    "bootstrap-initial.cesr": "ae9b96a5af043273204f3d37862ece3e610704b7c2ce8082ae20a604a99606bb",
+    "registrar-initial.cesr": "46f24695d76b1d31b24675ef24a518107b6315de37d226263279918e9fcab056",
+    "witness1-kel.cesr": "38ecd5c947fdf64380248273506c4e1a899b7b26ea24be8d8a6f285ff4a65163",
+    "observer-initial.cesr": "25bbb035d4c8e31e1ad0e517bd75736c95bd5277785230120b49b9fc07507ac1",
+    "witness2-kel.cesr": "7993d1604a9497868d046c36d030bd0f179ab598413171c6d85c16ca316b160a",
+    "witness-kels.cesr": "bd6ab88e14ee6d760e7fe4c49993a0af2075ccb1b695b6b6e1509f4bb3c21c45",
+    "issuer-current.cesr": "1126844c3aa6fab2ab66e5238291b22e8c49ab6621d7eb046b87b0e3da8cf6b5",
+    "observer-current.cesr": "25bbb035d4c8e31e1ad0e517bd75736c95bd5277785230120b49b9fc07507ac1",
+    "witness3-kel.cesr": "94875bfa968a95830c555a99a9a7f020fe859d3acdeed3678467cfc0ced37639",
+    "witness3.cesr": "b63bd529c3c30ac91a86b2cf127ac977c4d908d517c36eba632b7134bd72419a",
+    "witness2.cesr": "14e03ee9cd4f8ad29fc63820a6c7ff34c129538915760c72d411422f8cf8512c",
+    "holder-current.cesr": "fa4fbe7a2083a1cd3c72b8754d8278b6ab80057657418d73038a904e20e68091",
+    "holder-full.cesr": "38625f8571a38b061a5d8152110da858c445379b8c02ef3a06c784a56537e0e8",
+    "registrar-current.cesr": "46f24695d76b1d31b24675ef24a518107b6315de37d226263279918e9fcab056",
+    "dolly-current.cesr": "8607b41608cfacd920d1b853e9645b728eb4e8832e9bcd7d72df52c516a211b2",
+    "bootstrap.cesr": "c339a9a8274a311692e954aece84b7385d83c41e696ed61d2187ffb1b236784a",
+    "holder-public.cesr": "739aeb669812d8ec64e72945e0e0e4245f4150ddfea689729c26e6048430d66a",
+    "public.cesr": "33e944564e31453ea3ce8b61d6d3d10ac053f823f03f137601f05230b94d1b2f",
+    "witnesses.cesr": "6b1022d41776ebe4a98fcdbe69d6b39b0accc6df3e866e3190f916beee12cd2c",
+    "dolly-initial.cesr": "8607b41608cfacd920d1b853e9645b728eb4e8832e9bcd7d72df52c516a211b2",
+    "holder-initial.cesr": "fa4fbe7a2083a1cd3c72b8754d8278b6ab80057657418d73038a904e20e68091",
+    "issuer-initial.cesr": "b968bef23cb94d33e971284c2e42de55113810113b278091fada7bde914c22b7",
+    "witness1.cesr": "604eff46a436543099b04324b2d1ff841f652a07ac5d95266443f583c7421662",
+    "holder-partial.cesr": "20802b96bd2e0be856c03ceae6fbc3cb339cf2ea7b5942c676967db74c1be99a"
+  },
+  "hooks": [
+    {
+      "acceptedAt": "2026-10-21T07:29:42.962534+00:00",
+      "business": {
+        "note": null,
+        "private": null,
+        "status": "authorized"
+      },
+      "credential": "EJL0JUXA2UI24SeYio3XH7t30koaFw-RR-wIcm9rzE2c",
+      "credentialSchema": "EPrsJF2BXyDUgDCVbGURsGNwCZjyrxD5M2qnBmhvoZYQ",
+      "decision": "accepted",
+      "disclosure": {
+        "note": "undisclosed",
+        "private": "undisclosed",
+        "status": "disclosed"
+      },
+      "grant": "EI_1o-lYYAyQ-6fHma_bE68IIQZPp9KEAHLRxjmQ2fOm",
+      "issuer": "EMLT52jN0AFvv_FtKtyDVCW1lD11S-kLBBwBcP1FyXny",
+      "presenter": "EER52XvLU3bVt5poMk4n8IZm1L2b93OUeWSXgV6UV2ND",
+      "protocol": 2,
+      "schema": "dolly.accepted-credential/v1",
+      "standing": "issued",
+      "verifier": "EK30llFTCols0a3XbZhorWa6ivNrZoO8P8ZbBZ3WDbFv"
+    },
+    {
+      "acceptedAt": "2026-10-21T07:29:53.117342+00:00",
+      "business": {
+        "note": null,
+        "private": "full-stage-only",
+        "status": "authorized"
+      },
+      "credential": "EJL0JUXA2UI24SeYio3XH7t30koaFw-RR-wIcm9rzE2c",
+      "credentialSchema": "EPrsJF2BXyDUgDCVbGURsGNwCZjyrxD5M2qnBmhvoZYQ",
+      "decision": "accepted",
+      "disclosure": {
+        "note": "disclosed_null",
+        "private": "disclosed",
+        "status": "disclosed"
+      },
+      "grant": "EPxFaHMC3iVpDxR7kq3xuNWGzTvZ_knQAuDyaHWDInd9",
+      "issuer": "EMLT52jN0AFvv_FtKtyDVCW1lD11S-kLBBwBcP1FyXny",
+      "presenter": "EER52XvLU3bVt5poMk4n8IZm1L2b93OUeWSXgV6UV2ND",
+      "protocol": 2,
+      "schema": "dolly.accepted-credential/v1",
+      "standing": "issued",
+      "verifier": "EK30llFTCols0a3XbZhorWa6ivNrZoO8P8ZbBZ3WDbFv"
+    }
+  ],
+  "result": "passed"
+}
