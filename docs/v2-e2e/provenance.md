@@ -115,3 +115,25 @@ in `test_native_wallet.py` and `test_ipex_verification_context.py`.
   rejection with absent/changed policy, exact owner/type guards, independent own
   and edge schema arrival, and retained-view checks cover the shared boundary.
   Group and Dolly parser wiring have separate review units.
+
+## R1/R3-B/R4/R5-B: Dolly intake and evidence composition
+
+Targets: Dolly `Context.__init__`, `_parser`, `ingest`, `_nativeCredential`,
+`_nativeCurrentStanding`, `process`, `close`, `setup`; `IntakeEnd` methods;
+new/changed cases in `tests/app/test_dolly.py`. These files are temporary staging
+locations pending their move into the standalone Dolly repository.
+
+- Dolly baseline: `a17fdc0b4601d8527224d62e0b4212e48e12f973`, recorded Git author
+  Kent Bull, with Sally composition precedent retained in the module header.
+  Existing `Serdery` provides protocol-aware decoding; existing section ownership
+  derives from `825229806db825fdce180cb2a11ec31ed66aee03`.
+- Local Codex design: validate empty grants, then classify them non-reportable
+  without hooks; isolate current-standing policy; decode original HTTP bytes
+  without a KERI-only Serder assumption; share one section store between parser
+  and verifier; schedule the evidence owner and its pruner as one child.
+- Six real own/edge schema tests exercise arrival before/after grant and full
+  reopen, without schema preloading or KEL replay. Fuller section caching cannot
+  change retained disclosure or hooks. Raw and header-form JSON evidence tests,
+  malformed framing, legacy delivery, and pruner cancellation also pass.
+- All 16 Dolly module tests pass. R8 policy separation and repository extraction
+  remain separate work; these tests do not establish raw TCP support.

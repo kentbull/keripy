@@ -5,7 +5,6 @@ remains in Exchanger, native IPEX/Rever, and legacy Tevery/Verifier.
 """
 from dataclasses import asdict, dataclass, field
 import math
-import json
 from urllib.parse import urlsplit
 
 import falcon
@@ -15,16 +14,17 @@ from hio.core import http
 from keri import Vrsn_1_0, Vrsn_2_0, Kinds
 from keri.acdc import Regery
 from keri.acdc.regeventing import issuerRegistry
+from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import ipexing, agenting
 from keri.app.dolly.projecting import project
 from keri.app.httping import CESR_CONTENT_TYPE, CESR_ATTACHMENT_HEADER
 from keri.app.indirecting import createHttpServer
 from keri.app.registrar.serving import Context as EvidenceContext, signedQuery, KEL_DEPENDENCIES
-from keri.core import Parser, SerderACDC, SerderKERI, Revery
+from keri.core import Parser, SerderACDC, SerderKERI, Serdery, GenDex, Revery
 from keri.db import dbing, koming
 from keri.db.basing import BaserDoer
 from keri.help import helping
-from keri.kering import (ValidationError, MissingChainError, MissingSchemaError,
+from keri.kering import (ValidationError, ExtractionError, MissingChainError, MissingSchemaError,
                          MissingRegistryError, MissingAnchorError)
 from keri.peer import exchanging
 from keri.vdr import verifying, eventing as legacyEventing
@@ -77,7 +77,20 @@ class Notices:
 class Context(doing.DoDoer):
     def __init__(self, hby, hab, *, issuers, schemas, fields, required=(),
                  observer, webhook, maximumAge=15.0, timeout=5.0,
-                 db=None, evidence=None, legacy=None, legacySources=(), graphPolicy=None):
+                 db=None, evidence=None, legacy=None, legacySources=(), graphPolicy=None,
+                 sections=None):
+        """Compose verification, section evidence, reporting, and delivery owners.
+
+        ``hby`` and ``hab`` supply the identity; issuers/schemas and field paths
+        define reporting policy. Observer/webhook URLs and positive finite
+        maximumAge/timeout configure evidence freshness and HTTP delivery.
+        Optional db/evidence/legacy/sections stores support persistent reopen;
+        this context closes them. The shared SectionBaser feeds parser intake
+        and graphPolicy-aware native verification, without expanding retained
+        credential projections. EvidenceContext is scheduled once as a child,
+        owning its single KRAM pruner until cancellation. Invalid timeouts
+        raise ValueError.
+        """
         if any(not math.isfinite(value) or value <= 0 for value in (maximumAge, timeout)):
             raise ValueError('Dolly freshness and request timeouts must be finite and positive')
         self.hby, self.hab = hby, hab
@@ -98,22 +111,39 @@ class Context(doing.DoDoer):
         self.legacy.tvy.registerReplyRoutes(self.rvy.rtr)
         self.inquisitor = agenting.WitnessInquisitor(hby=hby)
         self.exc = exchanging.Exchanger(hby, handlers=[])
-        ipexing.loadHandlers(hby, self.exc, Notices(), self.rgy, graphPolicy=graphPolicy)
+        self.sections = sections if sections is not None else SectionBaser(
+            name=hby.name, base=hby.base, temp=hby.temp)
+        self.scy = Sectioner(db=hby.db, sections=self.sections)
+        ipexing.loadHandlers(hby, self.exc, Notices(), self.rgy,
+                            graphPolicy=graphPolicy, sections=self.sections)
         self.native = self.exc.routes['/ipex/grant'].native
         self.app = falcon.App()
         self.app.add_route('/ingest', IntakeEnd(self))
         self.app.add_route('/', IntakeEnd(self))
         self.app.add_route('/health', HealthEnd())
         self.clients = set()
-        super().__init__(doers=[self.inquisitor, doing.doify(self.workDo)])
+        super().__init__(doers=[self.evidence, self.inquisitor, doing.doify(self.workDo)])
 
     def _parser(self, version):
+        """Return a parser sharing this context's processors and section owner.
+
+        ``version`` selects the initial CESR stream genus; protocol dispatch and
+        version checks remain in Parser. Parsing does not imply acceptance.
+        """
         return Parser(kvy=self.evidence.kvy, rgy=self.evidence.rever,
             tvy=self.legacy.tvy, vry=self.legacy, exc=self.exc, rvy=self.rvy,
-            local=False, version=version)
+            scy=self.scy, local=False, version=version)
 
     def ingest(self, raw, version=Vrsn_2_0):
-        """Receive ordinary CESR; HTTP success only means intake, never acceptance."""
+        """Dispatch CESR evidence and return states for grants received in raw.
+
+        ``raw`` may contain consecutive KEL, registry, credential, section, or
+        EXN frames. ``version`` selects the initial stream genus. Independent
+        schema sections enter the same store used for live and retained native
+        verification; they never replace the grant's revealed view. Incomplete
+        framing or invalid evidence raises ValidationError; concrete processor
+        escrows retain retryable dependencies. HTTP success means intake only.
+        """
         parser, ims, received = self._parser(version), bytearray(raw), []
         while ims:
             size = len(ims)
@@ -137,7 +167,7 @@ class Context(doing.DoDoer):
                 received.append(serder.said)
             try:
                 parser.msgProcess(asdict(dom), kvy=self.evidence.kvy, rgy=self.evidence.rever,
-                    tvy=self.legacy.tvy, vry=self.legacy, exc=self.exc, rvy=self.rvy)
+                    tvy=self.legacy.tvy, vry=self.legacy, exc=self.exc, rvy=self.rvy, scy=self.scy)
             except KEL_DEPENDENCIES + (MissingChainError, MissingSchemaError):
                 # Concrete core processors retain dependencies in their escrows.
                 continue
@@ -176,11 +206,31 @@ class Context(doing.DoDoer):
         return True
 
     def _nativeCredential(self, exn):
-        # This reuses native semantic verification, including schema and graph.
+        """Return the retained origin credential, or None for an empty grant.
+
+        ``exn`` is the accepted native grant. Revalidate its proof and semantics
+        before making any application decision, then apply current standing to
+        every disclosed node. Missing evidence remains retryable; invalid proof
+        or current standing raises ValidationError. Selection never resolves a
+        fuller cached disclosure in place of this grant's retained material.
+        """
         if not self.native.verifyAccepted(exn.said):
             raise ValidationError('native IPEX proof or semantics failed')
+        origins = exn.sad['a']['o']
+        if not origins:
+            return None
         nests = exchanging.loadParsedNestedSubstreams(self.hby, exn.said)
-        origin = exn.sad['a']['o'][0]
+        self._nativeCurrentStanding(nests)
+        return next(nest.serder for nest in nests if nest.serder.said == origins[0])
+
+    def _nativeCurrentStanding(self, nests):
+        """Require current standing for every node in retained parsed ``nests``.
+
+        Historical bound-edge validity remains the native verifier's decision.
+        This additional application rule uses the configured current observer.
+        Return None after all nodes pass; raise MissingChainError for stale or
+        absent observations, or ValidationError for a node no longer issued.
+        """
         for nest in nests:
             credential = nest.serder
             declared = issuerRegistry(credential)
@@ -196,7 +246,6 @@ class Context(doing.DoDoer):
             for _, regid in self.native._presentationRegistries(credential) or []:
                 if not self.fresh(regid):
                     raise MissingChainError('presentation registry observation is missing or stale')
-        return next(nest.serder for nest in nests if nest.serder.said == origin)
 
     def _legacyCredential(self, exn):
         exchanging.verify(self.hby, exn)
@@ -278,12 +327,20 @@ class Context(doing.DoDoer):
                 self.db.legacyQueries.pin(keys, query)
 
     def process(self):
+        """Retry core dependencies and persist each pending reporting decision.
+
+        Return None. Missing chain/schema evidence keeps a submission pending;
+        invalid credentials become rejected, valid empty grants non-reportable,
+        and configured credential projections accepted. Terminal decisions are
+        skipped on later turns and reopen. HTTP delivery belongs to workDo.
+        """
         self.evidence.kvy.processEscrows()
         self.evidence.rever.processEscrows()
         self.legacy.tvy.processEscrows()
         self.legacy.processEscrows()
         self.rvy.processEscrowReply()
         self._legacyReports()
+        self.scy.processEscrows()
         self.exc.processEscrow()
         for keys, record in self.db.submissions.getTopItemIter():
             if record.state != 'pending' or not self.exc.complete(record.grant):
@@ -292,6 +349,12 @@ class Context(doing.DoDoer):
             try:
                 credential = (self._nativeCredential(exn) if exn.pvrsn.major == 2
                               else self._legacyCredential(exn))
+                if credential is None:
+                    # Protocol-valid empty disclosure is terminal reporting work,
+                    # so it cannot poison retries or enter credential delivery.
+                    record.state, record.reason = 'non-reportable', 'grant discloses no credential'
+                    self.db.submissions.pin(keys, record)
+                    continue
                 schema = credential.sad.get('s')
                 schema = schema.get('$id') if isinstance(schema, dict) else schema
                 if credential.israid not in self.issuers or schema not in self.schemas:
@@ -376,36 +439,65 @@ class Context(doing.DoDoer):
                 yield tock
 
     def close(self):
+        """Close HTTP clients and owned stores, including independent sections.
+
+        Reopening requires a fresh context over the same configured stores.
+        Habery ownership remains with the caller.
+        """
         for client in tuple(self.clients):
             client.close()
         self.db.close()
         self.evidence.close()
         self.legacy.reger.close()
+        self.sections.close()
 
 
 class IntakeEnd:
     def __init__(self, ctx):
+        """Bind the Dolly context that owns evidence verification and submissions."""
         self.ctx = ctx
 
+    @staticmethod
+    def decode(raw, attachment, genus):
+        """Return original evidence bytes and their initial parser genus version.
+
+        ``raw`` is the HTTP body; optional ``attachment`` and ``genus`` are the
+        CESR attachment and genus headers. Serdery selects the JSON protocol
+        from its serialized metadata. Header form requires exactly one body;
+        stream form retains consecutive messages and attachments untouched.
+        The core parser checks message/stream compatibility and authentication.
+        Malformed metadata, framing, or unsupported genus raises the decoder's
+        extraction/value error or ValidationError for the HTTP boundary.
+        """
+        first = None
+        if attachment is not None or raw.startswith(b'{'):
+            remaining = bytearray(raw)
+            first = Serdery().reap(ims=remaining, genus=GenDex.KERI, svrsn=Vrsn_2_0)
+            if attachment is not None:
+                if remaining:
+                    raise ValidationError('attachment-header body must contain exactly one message')
+                raw += attachment.encode('ascii')
+        default = str((first.gvrsn or first.pvrsn).major) if first else '2'
+        genus = genus if genus is not None else default
+        if genus not in ('1', '2'):
+            raise ValidationError('CESR-Genus must be 1 or 2')
+        return raw, Vrsn_1_0 if genus == '1' else Vrsn_2_0
+
     def on_post(self, req, rep):
+        """Acknowledge parsed intake with 202; map media/framing errors to HTTP.
+
+        ``req`` and ``rep`` are Falcon request/response objects. A successful
+        response describes submission states and never promises hook delivery.
+        Unsupported media produces 415; malformed evidence produces 400.
+        """
         if (req.content_type or '').split(';')[0] != CESR_CONTENT_TYPE:
             raise falcon.HTTPUnsupportedMediaType()
         raw = req.bounded_stream.read()
         try:
-            attachment = req.get_header(CESR_ATTACHMENT_HEADER)
-            first = None
-            if attachment is not None:
-                first = SerderKERI(sad=json.loads(raw))
-                raw = first.raw + attachment.encode()
-            elif raw.startswith(b'{'):
-                first = SerderKERI(raw=raw)
-            default = str((first.gvrsn or first.pvrsn).major) if first else '2'
-            genus = req.get_header('CESR-Genus', default=default)
-            if genus not in ('1', '2'):
-                raise ValidationError('CESR-Genus must be 1 or 2')
-            rep.media = self.ctx.ingest(raw,
-                version=Vrsn_1_0 if genus == '1' else Vrsn_2_0)
-        except (ValidationError, ValueError, TypeError) as error:
+            raw, version = self.decode(raw, req.get_header(CESR_ATTACHMENT_HEADER),
+                                       req.get_header('CESR-Genus'))
+            rep.media = self.ctx.ingest(raw, version=version)
+        except (ValidationError, ExtractionError, ValueError, TypeError) as error:
             raise falcon.HTTPBadRequest(description=str(error)) from error
         rep.status = falcon.HTTP_202
 
@@ -419,8 +511,15 @@ class HealthEnd:
 
 def setup(hby, hab, *, host='127.0.0.1', port=6644, keypath=None, certpath=None,
           cafilepath=None, **kwa):
+    """Return the Dolly context and service/store lifecycle Doers.
+
+    Host/port and optional TLS paths configure HTTP; remaining keyword options
+    pass to Context. Its independent section store participates in the same
+    startup/shutdown lifecycle as reporting and registry evidence stores.
+    """
     context = Context(hby, hab, **kwa)
     server = createHttpServer(host=host, port=port, app=context.app,
                               keypath=keypath, certpath=certpath, cafilepath=cafilepath)
     return context, [BaserDoer(baser=context.db), BaserDoer(baser=context.evidence.reger),
-                     BaserDoer(baser=context.legacy.reger), context, http.ServerDoer(server=server)]
+                     BaserDoer(baser=context.legacy.reger), BaserDoer(baser=context.sections),
+                     context, http.ServerDoer(server=server)]

@@ -17,7 +17,7 @@ from keri.app.httping import CESR_CONTENT_TYPE, CESR_ATTACHMENT_HEADER
 from keri.core import (Blinder, Noncer, Compactor, messagize, Counter, Codens, Number, Diger,
                        SealSource, SealEvent, SerderKERI, Schemer, Parser)
 from keri.peer import exchanging
-from keri.vdr import eventing as legacy
+from keri.vdr import eventing as legacy, verifying
 from keri.vc import proving, protocoling
 from keri.acdc import Regery, Registrar as NativeRegistrar, apply, offer, agree, admit, update
 from keri.acdc.sectioning import SectionBaser
@@ -29,6 +29,292 @@ from keri.help import helping
 def native(*events):
     empty = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
     return b''.join(event.raw + empty for event in events)
+
+
+def test_empty_grant_is_terminal_and_later_grants_report_after_reopen(tmp_path):
+    """Keep empty grants terminal and prove later hooks across a full reopen.
+
+    Independent sender and persistent verifier stores exercise real EXN/KRAM
+    verification. Each run sends an empty and reportable grant through the
+    normal intake/Doer path; only reportable grants may reach the HTTP hook.
+    """
+    from keri.acdc.regbasing import RegBaser
+    from keri.app.dolly.serving import DollyBaser
+
+    received = []
+
+    class Hook:
+        """Record webhook requests received by a real local HTTP server."""
+
+        def on_post(self, req, rep):
+            """Capture the delivered projection and acknowledge it to Dolly."""
+            received.append(req.media)
+            rep.media = {'received': True}
+
+    app = falcon.App()
+    app.add_route('/hook', Hook())
+    server = http.Server(servant=tcp.Server(ha=('127.0.0.1', 0)), app=app)
+    assert server.reopen()
+    server.servant.eha = server.servant.ha
+    url = f'http://127.0.0.1:{server.servant.ha[1]}/hook'
+    try:
+        with openHby(name='empty-grant-issuer', version=Vrsn_2_0) as issuer:
+            ihab = issuer.makeHab(name='issuer')
+            credential = acdcmap(israid=ihab.pre, attribute=dict(d='', status='authorized'))
+            proof = messagize(credential, tsgs=[(ihab.kever.prefixer,
+                Number(sn=ihab.kever.lastEst.s), Diger(qb64=ihab.kever.lastEst.d),
+                ihab.sign(credential.raw))], framed=False, gvrsn=Vrsn_2_0)
+            grants = []
+            for phase in range(2):
+                with openHby(name='empty-grant-dolly', temp=False,
+                             headDirPath=str(tmp_path), version=Vrsn_2_0) as verifier:
+                    dhab = verifier.habByName('dolly') or verifier.makeHab(name='dolly')
+                    evidence = Registrar(verifier, reger=RegBaser(name='empty-grant-dolly',
+                        headDirPath=str(tmp_path), temp=False))
+                    dolly = Dolly(verifier, dhab, issuers=[ihab.pre],
+                        schemas=[credential.schema['$id']], fields={'status': 'a/status'},
+                        observer='http://unused.test/', webhook=url, evidence=evidence,
+                        legacy=verifying.Verifier(
+                            verifier, reger=legacy.Reger(name='empty-grant-dolly',
+                                headDirPath=str(tmp_path), temp=False)),
+                        db=DollyBaser(name='empty-grant-dolly', headDirPath=str(tmp_path), temp=False))
+                    try:
+                        if phase:
+                            for empty, normal in grants:
+                                assert dolly.exc.complete(empty.said)
+                                assert dolly.db.submissions.get((empty.said,)).state == 'non-reportable'
+                                assert dolly.db.submissions.get((normal.said,)).delivered
+                        empty, eatc = grant(ihab, dhab.pre, f'empty {phase}', modifiers={'dp': [[]]})
+                        normal, natc = grant(ihab, dhab.pre, f'normal {phase}', origin=proof)
+                        result = dolly.ingest(ihab.replay(gvrsn=Vrsn_2_0)
+                            + empty.raw + eatc + normal.raw + natc)
+                        assert result == [dict(grant=empty.said, state='non-reportable'),
+                                          dict(grant=normal.said, state='accepted')]
+                        assert dolly.exc.complete(empty.said)
+                        assert dolly.native.verifyAccepted(empty.said)
+                        record = dolly.db.submissions.get((empty.said,))
+                        assert record.reason == 'grant discloses no credential'
+                        assert record.payload == {} and not record.delivered
+                        doing.Doist(real=True, tock=0.01, limit=0.4).do(
+                            doers=[http.ServerDoer(server=server), dolly])
+                        assert [item['grant'] for item in received] == [
+                            normal.said for _, normal in [*grants, (empty, normal)]]
+                        assert dolly.db.submissions.get((normal.said,)).delivered
+                        grants.append((empty, normal))
+                    finally:
+                        dolly.close()
+    finally:
+        server.close()
+
+
+@pytest.mark.parametrize('attachmentHeader', [False, True])
+def test_http_json_native_registry_first_and_invalid_framing(attachmentHeader):
+    """Accept JSON ACDC before KEL and reject malformed raw/header framing.
+
+    Both transport forms preserve serialized evidence exactly. Acknowledged
+    registry evidence remains unaccepted until the independently arriving KEL
+    anchors it; rejected framing cannot alter the accepted registry head.
+    """
+    from falcon import testing
+    from keri.app.dolly.serving import IntakeEnd
+
+    with (openHby(name='json-registry-issuer', version=Vrsn_2_0) as issuer,
+          openHby(name='json-registry-dolly', version=Vrsn_2_0) as verifier):
+        ihab, dhab = issuer.makeHab(name='issuer'), verifier.makeHab(name='dolly')
+        rip = regcept(israid=ihab.pre, kind=Kinds.json)
+        ihab.interact(data=[dict(s=rip.sad['n'], d=rip.said)])
+        issued = blindate(regid=rip.said, prior=rip.said,
+                         blid=Blinder.blind(acdc=Diger(ser=b'credential').qb64, state='issued').said)
+        ihab.interact(data=[dict(s=issued.sad['n'], d=issued.said)])
+        dolly = Dolly(verifier, dhab, issuers=[ihab.pre], schemas=[], fields={},
+                      observer='http://unused.test/', webhook='http://unused.test/')
+        try:
+            client = testing.TestClient(dolly.app)
+            headers = {'Content-Type': CESR_CONTENT_TYPE}
+            if attachmentHeader:
+                atc = native(rip)[len(rip.raw):].decode('ascii')
+                body, headers[CESR_ATTACHMENT_HEADER] = rip.raw, atc
+                decoded, version = IntakeEnd.decode(body, atc, None)
+                assert decoded == native(rip) and version == Vrsn_2_0
+            else:
+                body = native(rip, issued)
+                assert IntakeEnd.decode(body, None, None) == (body, Vrsn_2_0)
+            response = client.simulate_post('/ingest', body=body, headers=headers)
+            assert response.status_code == 202
+            assert dolly.rgy.store.head(rip.said) is None  # No KEL anchor yet.
+            if attachmentHeader:
+                assert client.simulate_post('/ingest', body=native(issued),
+                    headers={'Content-Type': CESR_CONTENT_TYPE}).status_code == 202
+            assert client.simulate_post('/ingest', body=ihab.replay(gvrsn=Vrsn_2_0),
+                headers={'Content-Type': CESR_CONTENT_TYPE}).status_code == 202
+            assert dolly.rgy.store.head(rip.said).qb64 == issued.said
+            invalid = [
+                (native(rip), {'CESR-Genus': '1'}),
+                (native(rip), {'CESR-Genus': '3'}),
+                (rip.raw[:-1], {}),
+                (b'{broken', {}),
+                (rip.raw, {CESR_ATTACHMENT_HEADER: '-???'}),
+                (native(rip, issued), {CESR_ATTACHMENT_HEADER: ''}),
+            ]
+            for body, extra in invalid:
+                response = client.simulate_post('/ingest', body=body,
+                    headers={'Content-Type': CESR_CONTENT_TYPE, **extra})
+                assert response.status_code == 400, (body, extra, response.text)
+            assert client.simulate_post('/ingest', body=native(rip),
+                headers={'Content-Type': 'application/json'}).status_code == 415
+            assert dolly.rgy.store.head(rip.said).qb64 == issued.said
+            assert list(dolly.db.submissions.getTopItemIter()) == []
+        finally:
+            dolly.close()
+
+
+@pytest.mark.parametrize('arrival', ['before', 'after', 'restart'])
+@pytest.mark.parametrize('schemaUse', ['own', 'edge'])
+def test_dolly_independent_schema_http_arrival_preserves_disclosure(tmp_path, arrival, schemaUse):
+    """Resolve own/edge schemas through HTTP and the reopened section owner.
+
+    Arrival selects schema-before-grant, schema-after-grant, or schema after a
+    full service/identity restart. The schema exists only in section messages;
+    no legacy schema-cache preload or accepted-state injection is involved.
+    A fuller cached attribute section must not enrich retained grants/hooks.
+    """
+    from copy import deepcopy
+    from falcon import testing
+    from keri.acdc import sectschema, sectattr
+    from keri.acdc.regbasing import RegBaser
+    from keri.app.dolly.serving import DollyBaser
+
+    name = f'dolly-sections-{schemaUse}-{arrival}'
+    schemaMessage = sectschema({'$id': '', 'version': '1.0.0',
+        'title': 'independently supplied Dolly schema', 'type': 'object'})
+    schema = schemaMessage.sad['s']['$id']
+    wrongSchema = sectschema({'$id': '', 'version': '1.0.0',
+        'title': 'different schema does not satisfy the reference', 'type': 'object'})
+    received = []
+
+    class Hook:
+        """Receive actual HTTP projections after the schema dependency clears."""
+
+        def on_post(self, req, rep):
+            """Capture the exact payload and acknowledge its delivery."""
+            received.append(req.media)
+            rep.media = {'received': True}
+
+    hookApp = falcon.App()
+    hookApp.add_route('/hook', Hook())
+    server = http.Server(servant=tcp.Server(ha=('127.0.0.1', 0)), app=hookApp)
+    assert server.reopen()
+    server.servant.eha = server.servant.ha
+    webhook = f'http://127.0.0.1:{server.servant.ha[1]}/hook'
+    try:
+        with openHby(name=f'{name}-issuer', version=Vrsn_2_0) as issuer:
+            ihab = issuer.makeHab(name='issuer')
+            child = acdcmap(israid=ihab.pre, attribute=dict(d='', role='member'))
+            edge = ({'d': '', 'member': {'d': '', 'n': child.said, 'o': 'NI2I', 's': schema}}
+                    if schemaUse == 'edge' else None)
+            full = acdcmap(israid=ihab.pre, uuid=Noncer().qb64,
+                schema=schema if schemaUse == 'own' else None, edge=edge,
+                attribute={'d': '', 'u': Noncer().qb64,
+                    'shown': {'d': '', 'value': 'visible'},
+                    'private': {'d': '', 'value': 'only-in-cached-section'}})
+            compact = Compactor(mad=deepcopy(full.sad['a']), makify=True, kind=Kinds.json)
+            compact.compact(paths=['a/shown/'], root='a')
+            partial = acdcmap(israid=full.israid, uuid=full.sad['u'], schema=full.schema,
+                edge=edge, attribute=compact.partials[('a/shown/',)].mad)
+            assert partial.said == full.said
+
+            def signed(credential):
+                """Attach a real independent issuer signature to one graph node."""
+                return messagize(credential, tsgs=[(ihab.kever.prefixer,
+                    Number(sn=ihab.kever.lastEst.s), Diger(qb64=ihab.kever.lastEst.d),
+                    ihab.sign(credential.raw))], framed=False, gvrsn=Vrsn_2_0)
+
+            for phase in range(2):
+                with openHby(name=name, temp=False, headDirPath=str(tmp_path),
+                             version=Vrsn_2_0) as verifier:
+                    dhab = verifier.habByName('dolly') or verifier.makeHab(name='dolly')
+                    sections = SectionBaser(name=name, headDirPath=str(tmp_path), temp=False)
+                    dolly = Dolly(verifier, dhab, issuers=[ihab.pre],
+                        schemas=[schema if schemaUse == 'own' else partial.schema['$id']],
+                        fields={'shown': 'a/shown/value', 'private': 'a/private/value'},
+                        required=['shown'], observer='http://unused.test/', webhook=webhook,
+                        evidence=Registrar(verifier, reger=RegBaser(name=name,
+                            headDirPath=str(tmp_path), temp=False)),
+                        legacy=verifying.Verifier(verifier, reger=legacy.Reger(name=name,
+                            headDirPath=str(tmp_path), temp=False)),
+                        db=DollyBaser(name=name, headDirPath=str(tmp_path), temp=False),
+                        sections=sections)
+                    try:
+                        client = testing.TestClient(dolly.app)
+
+                        def post(raw, attachment=None):
+                            """Pass raw/attachment-header evidence through actual WSGI intake."""
+                            headers = {'Content-Type': CESR_CONTENT_TYPE}
+                            if attachment is not None:
+                                headers[CESR_ATTACHMENT_HEADER] = attachment
+                            response = client.simulate_post('/ingest', body=raw, headers=headers)
+                            assert response.status_code == 202, response.text
+
+                        def section(message):
+                            """Exercise JSON-first section framing in both HTTP forms."""
+                            if schemaUse == 'edge':
+                                post(message.raw, native(message)[len(message.raw):].decode('ascii'))
+                            else:
+                                post(native(message))
+
+                        assert verifier.db.schema.get(schema) is None
+                        if phase == 0:
+                            post(ihab.replay(gvrsn=Vrsn_2_0))
+                            # Framing success cannot turn an incomplete section
+                            # or a wrong stream genus into schema evidence.
+                            for raw, extra in [(schemaMessage.raw[:-1], {}),
+                                    (native(schemaMessage), {'CESR-Genus': '1'})]:
+                                response = client.simulate_post('/ingest', body=raw,
+                                    headers={'Content-Type': CESR_CONTENT_TYPE, **extra})
+                                assert response.status_code == 400
+                            assert sections.messages.get(schemaMessage.said) is None
+                            section(wrongSchema)
+                            assert not list(sections.parts.getTopItemIter(('s', schema, '')))
+                            if arrival == 'before':
+                                section(schemaMessage)
+                            plan = [[schema if schemaUse == 'own' else partial.schema['$id'], '/', []]]
+                            if edge:
+                                plan.append([child.schema['$id'], '/e/member/_/', []])
+                            exn, atc = grant(ihab, dhab.pre, 'independent schema disclosure',
+                                origin=signed(partial), artifacts=[signed(child)] if edge else None,
+                                modifiers={'dp': [plan]})
+                            post(exn.raw + atc)
+                        if ((arrival != 'before' and phase == 0)
+                                or (arrival == 'restart' and phase == 1)):
+                            assert not dolly.exc.complete(exn.said)
+                            assert verifier.db.emse.get((exn.said, schema)) is not None
+                            assert dolly.db.submissions.get((exn.said,)).state == 'pending'
+                            assert received == []
+                            if arrival == 'after' or phase:
+                                section(schemaMessage)
+                        if arrival == 'restart' and phase == 0:
+                            continue
+                        assert dolly.exc.complete(exn.said)
+                        assert dolly.native.verifyAccepted(exn.said)
+                        before = dolly.db.submissions.get((exn.said,)).payload
+                        retained = exchanging.loadParsedNestedSubstreams(verifier, exn.said)[0].serder.raw
+                        section(sectattr(full.sad['a']))
+                        assert sections.messages.get(sectattr(full.sad['a']).said) is not None
+                        assert dolly.native.verifyAccepted(exn.said)
+                        assert exchanging.loadParsedNestedSubstreams(verifier, exn.said)[0].serder.raw == retained
+                        assert dolly.db.submissions.get((exn.said,)).payload == before
+                        doing.Doist(real=True, tock=0.01, limit=0.3).do(
+                            doers=[http.ServerDoer(server=server), dolly])
+                        assert received == [before]
+                        assert before['business'] == {'shown': 'visible', 'private': None}
+                        assert before['disclosure']['private'] == 'undisclosed'
+                        assert 'only-in-cached-section' not in json.dumps(before)
+                        assert verifier.db.schema.get(schema) is None
+                    finally:
+                        dolly.close()
+                        assert not sections.opened
+    finally:
+        server.close()
 
 
 def test_reopened_dolly_requires_active_observer_observation(tmp_path):
@@ -90,6 +376,12 @@ def test_reopened_dolly_requires_active_observer_observation(tmp_path):
 
 @pytest.mark.parametrize('binding', ['top', 'inner', 'oneway'])
 def test_native_partial_full_grants_observer_acquisition_and_real_webhooks(binding):
+    """Preserve actual disclosure hooks while the evidence child owns pruning.
+
+    Each registry-binding form uses independently acquired observer evidence.
+    The real scheduler must start exactly one KRAM pruner and cancel it with
+    Dolly, while replay cannot enrich an earlier retained disclosure.
+    """
     with (openHby(name='dolly-issuer', version=Vrsn_2_0) as issuer,
           openHby(name='dolly-registrar', version=Vrsn_2_0) as registrar,
           openHby(name='dolly-observer', version=Vrsn_2_0) as observer,
@@ -166,7 +458,16 @@ def test_native_partial_full_grants_observer_acquisition_and_real_webhooks(bindi
             puller = RegistrarPuller(ohab, obs, [urls[0]], interval=10, timeout=1)
             doers = [http.ServerDoer(server=server) for server in servers]
             doers.extend([http.clienting.ClientDoer(client), puller, dolly])
+            assert dolly.doers.count(dolly.evidence) == 1
+            assert dolly.evidence.doers.count(dolly.evidence.pruner) == 1
+            assert dolly.evidence.pruner.kramer is dolly.evidence.kvy.kramer
+            assert dolly.evidence.pruner not in dolly.doers
             doing.Doist(real=True, tock=0.01, limit=2.5).do(doers=doers)
+            # The child actually ran; forced parent cancellation drains its
+            # scheduler and closes the pruner generator before stores close.
+            assert dolly.evidence.pruner.tymth is not None
+            assert not dolly.deeds and not dolly.evidence.deeds
+            assert dolly.evidence.pruner.done is False
             assert client.responses.popleft()['status'] == 202
             assert len(received) == 2
             payloads = {item['grant']: item for item in received}
@@ -226,8 +527,13 @@ def test_native_partial_full_grants_observer_acquisition_and_real_webhooks(bindi
             reg.close()
 
 
-def test_legacy_current_source_tsn_and_same_real_webhook_contract():
-    """Old issuance embeds authenticate history; a new signed TSN gates delivery."""
+@pytest.mark.parametrize('attachmentHeader', [False, True])
+def test_legacy_current_source_tsn_and_same_real_webhook_contract(attachmentHeader):
+    """Require a fresh signed TSN before legacy raw/header EXN webhook delivery.
+
+    Old issuance embeds authenticate history. Parameterized HTTP framing also
+    proves that version inference handles a v1 EXN body without a KEL prefix.
+    """
     with (openHby(name='dolly-old-issuer', version=Vrsn_1_0) as issuer,
           openHby(name='dolly-old-verifier', version=Vrsn_1_0) as verifier):
         ihab = issuer.makeHab(name='issuer', version=Vrsn_1_0)
@@ -299,8 +605,11 @@ def test_legacy_current_source_tsn_and_same_real_webhook_contract():
             ingress.servant.eha = ingress.servant.ha
             servers.append(ingress)
             client = http.clienting.Client(hostname='127.0.0.1', port=ingress.servant.ha[1])
-            client.request(method='POST', path='/ingest', body=grantExn.raw + atc,
-                headers={'Content-Type': CESR_CONTENT_TYPE, 'CESR-Genus': '1'})
+            headers = {'Content-Type': CESR_CONTENT_TYPE}
+            if attachmentHeader:
+                headers[CESR_ATTACHMENT_HEADER] = atc.decode('ascii')
+            client.request(method='POST', path='/ingest',
+                body=grantExn.raw if attachmentHeader else grantExn.raw + atc, headers=headers)
             replyClient = http.clienting.Client(hostname='127.0.0.1', port=ingress.servant.ha[1])
 
             def replies(tymth=None, tock=0.01, **kwa):
