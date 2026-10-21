@@ -44,6 +44,12 @@ parser.add_argument('--with-custody', action='store_true',
 
 
 def registryIncept(args):
+    """Select native registry authoring or the established legacy inception worker.
+
+    args supplies controller alias, registry name, witnesses/backers and CLI policy.
+    Return lifecycle Doers; native custody is provisioned only with --with-custody.
+    The legacy conflicting no-backers/backers check retains its printed error and
+    -1 return. Core authoring/authentication failures propagate from scheduled work."""
     if getattr(args, 'native', False):
         return [native.NativeAuthor(args, 'incept')]
     name = args.name

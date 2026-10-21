@@ -40,6 +40,12 @@ parser.add_argument("--time", help="timestamp", required=False, default=None)
 native_exchange.options(parser, send=True)
 
 def handler(args):
+    """Select explicit native admission or the established legacy admit worker.
+
+    args supplies the local identity, retained grant SAID, message, and timestamp.
+    Return lifecycle Doers; native admission revalidates the accepted grant before
+    recording explicit wallet consent. Core/authentication errors propagate during
+    scheduled work. Omitting --v2 keeps the legacy command path."""
     if args.native:
         return [native_exchange.ExchangeDoer(args, 'admit')]
     ed = AdmitDoer(name=args.name,

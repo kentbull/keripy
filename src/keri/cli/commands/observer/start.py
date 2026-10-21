@@ -24,6 +24,14 @@ parser.set_defaults(handler=lambda args: handler(args))
 
 
 def handler(args):
+    """Authenticate and compose the configured observer service's lifecycle Doers.
+
+    args supplies an existing encrypted identity/alias, fixed registrar URLs,
+    authorized reader AIDs, polling/freshness limits, listener, and optional signed
+    KEL files. Return identity/OOBI/service owners for scheduling. Missing identity,
+    alias, encryption, or rejected bootstrap raises ConfigurationError. Startup
+    errors close any constructed context and identity before propagating; normal
+    scheduler cancellation owns the returned service shutdown."""
     keeper = Keeper(name=args.name, base=args.base, reopen=True)
     try:
         if not keeper.gbls.get('aeid'):

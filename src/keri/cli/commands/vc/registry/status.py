@@ -23,6 +23,12 @@ native.options(parser)
 
 
 def registryStatus(args):
+    """Return native accepted-head status work or the legacy status worker.
+
+    args supplies identity, registry name and verbosity. Native status includes
+    pending anchor/prior dependencies without deriving private openings. Return
+    lifecycle Doers; unknown registry and authentication failures are reported by
+    the selected worker, not converted into accepted state."""
     if getattr(args, 'native', False):
         return native.read(args, 'status')
     name = args.name

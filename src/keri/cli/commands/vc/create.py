@@ -55,6 +55,13 @@ parser.add_argument('--unblinded', action='store_true', help='use an explicit na
 
 
 def issueCredential(args):
+    """Route credential creation to explicit native authoring or legacy issuance.
+
+    args carries identity/registry, credential data, schema, edges/rules and CLI
+    controls. Return lifecycle Doers. --v2 selects NativeAuthor, including its
+    explicit public/blinded policy; otherwise retain legacy JSON/data validation
+    and issuance. Invalid input or core/authentication failures propagate without
+    being interpreted as accepted issuance."""
     if getattr(args, 'native', False):
         return [native.NativeAuthor(args, 'create')]
     name = args.name

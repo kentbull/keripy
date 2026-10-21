@@ -19,6 +19,14 @@ parser.set_defaults(handler=lambda args: handler(args))
 
 
 def handler(args):
+    """Authenticate and compose the registrar with fixed publication/query policy.
+
+    args identifies an existing encrypted Keeper, authorized publisher/observer
+    AIDs, listener, and optional signed KEL bootstrap files. Return identity and
+    service lifecycle Doers. Missing encryption or rejected bootstrap raises
+    ConfigurationError; startup failures close constructed context and identity.
+    Returning workers does not accept unverified TEL evidence or bypass signed
+    route authorization."""
     keeper = Keeper(name=args.name, base=args.base, reopen=True)
     try:
         if not keeper.gbls.get('aeid'):

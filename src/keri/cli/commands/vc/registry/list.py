@@ -26,9 +26,12 @@ native.options(parser)
 
 
 def list_registries(args):
-    """ Command line list credential registries handler
+    """Return registry-listing work for the explicitly selected protocol profile.
 
-    """
+    args identifies the existing identity and native flag. Native reads print
+    accepted-head metadata without custody; legacy reads keep their ordinary
+    name/registry/controller output. Return hio Doers whose read contexts own
+    store cleanup; scheduling is not a freshness claim."""
     if getattr(args, 'native', False):
         return native.read(args, 'registries')
     kwa = dict(args=args)

@@ -22,11 +22,11 @@ from ...peer import Exchanger
 
 
 def options(parser, *, author=False):
-    """Add explicit v2 selection and optional authoring controls to ``parser``.
+    """Add explicit v2 selection and optional authoring controls to parser.
 
-    ``author`` enables anchor timeout and exact group/bound-evidence options.
-    Existing v1 command behavior stays the default; --native aliases --v2.
-    """
+    Mutate the argument parser and return None. author adds anchor timeout and
+    exact group/bound-evidence options. --native aliases --v2; v1 remains the
+    command default. These flags never toggle the core's authentication policy."""
     parser.add_argument('--v2', '--native', dest='native', action='store_true',
                         help='use v2 ACDC registries and IPEX (--native is an alias)')
     if author:
@@ -38,6 +38,11 @@ def options(parser, *, author=False):
 
 
 def load(value):
+    """Decode an inline JSON value or an explicit @file; preserve None.
+
+    value is a CLI string or None. Return the decoded JSON object/value without
+    coercing its shape; each operation validates its own contract. File I/O and
+    JSON decoding failures propagate before the caller authors protocol data."""
     if value is None:
         return None
     return json.loads(Path(value[1:]).read_text() if value.startswith('@') else value)
@@ -78,6 +83,11 @@ def opened(args, *, custody=False):
 
 
 def registry(rgy, name, hab=None):
+    """Resolve one named native registry and optionally require its controller.
+
+    rgy owns the registry inventory; name selects its local alias. If hab is
+    provided, its AID must control that registry. Return the registry object or
+    raise ConfigurationError for an unknown name or a different controller."""
     reg = rgy.registryByName(name)
     if reg is None:
         raise ConfigurationError(f'unknown native registry {name}')
@@ -87,12 +97,15 @@ def registry(rgy, name, hab=None):
 
 
 def standing(wallet, reg, acdc, *, derive=False):
-    """Return known current state, or unknown when a blinded head cannot be opened.
+    """Return known current state, or unknown if the accepted head cannot be opened.
 
-    Public ``upd`` state needs no custody. Ordinary inventory supplies a Wallet
-    without derivation capability. ``derive`` opts in only after fresh authoring;
-    enumeration and historical retries never load a secret to infer standing.
-    """
+    wallet supplies issued inventory and optionally explicit custody; reg supplies
+    accepted registry history; acdc is the exact credential being queried. Public
+    upd state needs no secret. derive permits event-specific derivation only when
+    custody is composed; ordinary enumeration/historical retries do not load it.
+    Return issued/revoked only when the current head binds this credential; a
+    missing/nonmatching head or unavailable capability returns unknown. Core bound
+    or derivation failures propagate rather than becoming a freshness claim."""
     head = reg.store.headEvent(reg.regk)
     if head is not None and head.ilk == 'upd':
         return head.sad['ts'] if head.sad['td'] == acdc.said else 'unknown'
@@ -111,13 +124,31 @@ def standing(wallet, reg, acdc, *, derive=False):
 
 
 class NativeAuthor(doing.DoDoer):
-    """Author individual native registry events and await their real KEL receipts."""
+    """Author exact native registry events through individual or group controllers.
+
+    Staging, KEL anchoring, authenticated receipt acceptance, and issued inventory
+    recording are separate steps. Ordinary public updates need no custody; blinded
+    authoring explicitly composes that capability. Exact retries preserve history."""
     def __init__(self, args, operation):
+        """Schedule one native inception, credential creation, or revocation.
+
+        args is the parsed command namespace and operation selects the action.
+        Initialize pending group/anchor/opening references and one cooperative run
+        child. This constructor opens no identity, registry, or custody store."""
         self.args, self.operation = args, operation
         self.group = self.proposedEvent = self.proposedAnchor = self.blinder = None
         super().__init__(doers=[doing.doify(self.run)])
 
     def anchor(self, hby, reg, event, receiptor):
+        """Yield until the exact event is accepted through authenticated anchoring.
+
+        hby owns KEL evidence, reg owns the target registry, event is the already
+        staged native event, and receiptor is the scheduled individual receipt worker.
+        Group work instead approves the exact proposed anchor and waits for member
+        and witness evidence. Reuse an existing sealing event on retry; do not author
+        a second anchor merely to poll. Return None only after accepted event equality;
+        raise TimeoutError when the configured wall-clock deadline expires. Proposal
+        file creation and core authentication failures propagate to run's cleanup."""
         if self.group is not None:
             accepted = reg.store.seqEvent(reg.regk, Number(numh=event.sad['n']).num)
             if accepted is not None and accepted.said == event.said:
@@ -191,7 +222,11 @@ class NativeAuthor(doing.DoDoer):
         bound = wallet.boundEvent(acdc, boundEvent) if boundEvent else {}
 
         def opening(ordinal):
-            """Derive the explicitly requested blinded update at ordinal."""
+            """Derive and retain one explicitly requested event-specific opening.
+
+            ordinal is the target registry sequence number. Return its Blinder and retain
+            it on this author for inventory recording; raise ConfigurationError when the
+            caller did not compose custody. The derivation salt never leaves its owner."""
             if wallet.custody is None:
                 raise ConfigurationError('blinded authoring requires provisioned registry custody')
             self.blinder = wallet.custody.derive(reg.regk, ordinal, acdc.said, state, **bound)
@@ -232,13 +267,14 @@ class NativeAuthor(doing.DoDoer):
         return event
 
     def run(self, tymth, tock=0.03125, **kwa):
-        """Run the selected authoring operation and yield to cooperative workers.
+        """Execute one selected native authoring operation through normal acceptance.
 
-        ``tymth`` supplies scheduler time and ``tock`` the recurrence interval.
-        CLI arguments choose identity, registry, public/blinded state, and
-        explicit custody provisioning. Children stop before stores close;
-        reported acceptance requires the normal verified registry transition.
-        """
+        tymth/tock/kwa supply cooperative scheduling. args selects identity/registry,
+        public or blinded state, explicit custody provisioning, and optional group
+        proposal. Print JSON acceptance only after the verified registry transition,
+        and return None on completion. Unknown aliases, inconsistent flags/proposals,
+        invalid credential/schema data, missing capability, and timeout fail normally.
+        Cancel scheduled receipt/group workers before opened stores leave scope."""
         self.wind(tymth)
         self.tock = tock
         yield self.tock
@@ -359,15 +395,25 @@ class NativeAuthor(doing.DoDoer):
 
 
 def read(args, operation):
-    """Return doers for inventory/evidence reads or explicit plaintext handoff.
+    """Return scheduled native inventory/evidence reads or explicit handoff work.
 
-    ``args`` carries CLI options; ``operation`` selects the read/import/export.
-    Ordinary listing never enables custody. Full blinded evidence export and
-    explicit custody import/export may use the optional derivation owner.
-    """
+    args carries identity, filters, registry, file, and capability options;
+    operation chooses registries/status/inventory/export/import. Return a list of
+    hio-compatible generator functions. Ordinary listing never enables custody;
+    explicit custody import/export and full blinded-evidence export may do so.
+    The worker prints results or writes an exclusive destination, propagating
+    invalid option, authentication, proof, and file errors with store cleanup."""
     def run(tymth, tock=0.0, **kwa):
-        """Yield once, perform the selected operation, then close its owners."""
+        """Execute one selected read/handoff after the scheduler's initial yield.
+
+        tymth/tock/kwa follow hio's generator contract; args and operation come from
+        the enclosing read adapter. Print JSON inventory/evidence results or write the
+        explicit export file; return None on completion. Validation, authentication,
+        file-exclusivity, and custody failures propagate. The opened context closes
+        wallet, registry, and identity owners even when the operation fails."""
         yield tock
+        # Plain inventory/status never composes derivation capability; only
+        # the explicit handoff/export operations below may request it.
         with opened(args, custody=(operation == 'import' or operation == 'export'
                     and (args.custody or args.full))) as (hby, rgy, wallet):
             if operation == 'registries':

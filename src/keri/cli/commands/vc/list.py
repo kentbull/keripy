@@ -42,9 +42,12 @@ native.options(parser)
 
 
 def list_credentials(args):
-    """ Command line list credential registries handler
+    """Return native inventory read work or the existing legacy listing worker.
 
-    """
+    args selects identity, optional owner/schema filters, issued/held inventory,
+    and output verbosity. Native listing reads retained references without custody
+    or automatic admission; unopened blinded standing may remain unknown. Return
+    scheduled Doers; filtering/authentication errors propagate during their work."""
     if getattr(args, 'native', False):
         return native.read(args, 'inventory')
     ld = ListDoer(name=args.name,

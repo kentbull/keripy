@@ -36,6 +36,12 @@ parser.add_argument('--unblinded', action='store_true', help='use an explicit na
 
 
 def revokeCredential(args):
+    """Select explicit native revocation or the established legacy revoke worker.
+
+    args identifies controller/registry and credential plus timestamp/publication
+    controls. Return lifecycle Doers. NativeAuthor requires issued inventory and
+    normal accepted anchoring; public versus derived blinded updates follow the
+    explicit CLI options. Core/authentication failures propagate during work."""
     if getattr(args, 'native', False):
         return [native.NativeAuthor(args, 'revoke')]
     name = args.name

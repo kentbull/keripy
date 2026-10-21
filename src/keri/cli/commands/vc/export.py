@@ -41,9 +41,13 @@ parser.add_argument('--output', default=None, help='native export destination (c
 
 
 def export_credentials(args):
-    """ Command line list credential registries handler
+    """Return native evidence/handoff work or the existing legacy export worker.
 
-    """
+    args chooses identity, credential, registry, destination, and evidence flags.
+    Native export requires registry-name and an explicit output path or raises
+    ConfigurationError. Native read owns store cleanup and exclusive file creation;
+    plaintext custody export is an explicit capability, never implied by listing.
+    Legacy export behavior remains the default."""
     if getattr(args, 'native', False):
         if not args.output or not args.registry_name:
             raise ConfigurationError('native export requires --output and --registry-name')
