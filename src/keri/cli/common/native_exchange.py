@@ -137,12 +137,18 @@ class ExchangeDoer(doing.DoDoer):
             if hab is None:
                 raise ConfigurationError('unknown native IPEX alias')
             peer = Peer(hby, rgy, wallet, sections)
+            # This command owns KRAM maintenance, including when a group shares
+            # the peer's Kramer. Stop child work before the stores leave scope.
+            self.extend([peer.evidence])
+            activity.callback(self.remove, [peer.evidence])
             if getattr(args, 'refresh', False) and not args.from_grant:
                 raise ConfigurationError('--refresh requires an admitted --from-grant')
             group = None
             if isinstance(hab, GroupHab):
+                # Group proposal/mailbox intake resolves the same schema evidence
+                # as the peer's verifier without expanding retained disclosures.
                 group = NativeGroup(hby, rgy, hab, peer.exc, Notifier(hby=hby),
-                                    kramer=peer.evidence.kvy.kramer)
+                                    kramer=peer.evidence.kvy.kramer, scy=peer.scy)
                 self.extend([group])
                 activity.callback(self.remove, [group])
             elif args.proposal or args.proposal_output:

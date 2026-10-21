@@ -3,7 +3,7 @@ from hio.base import doing
 
 from .. import Vrsn_2_0
 from ..acdc.regeventing import Rever
-from ..core import (Codens, Counter, Diger, Kramer, Number, Parser, Prefixer,
+from ..core import (Codens, Counter, Diger, Kramer, Number, Parser, Prefixer, Pruner,
                     SerderKERI, messagize)
 from ..kering import ConfigurationError, Ilks, ValidationError
 from ..peer.exchanging import serializeParsedSubstream
@@ -23,23 +23,55 @@ class NativeGroup(doing.DoDoer):
     Incoming proposals are retained until this member approves the exact body.
     No custody secret is generated, shared, or embedded by this coordinator.
     """
-    def __init__(self, hby, rgy, ghab, exc, notifier, *, kramer=None):
+    def __init__(self, hby, rgy, ghab, exc, notifier, *, kramer=None, scy=None):
+        """Compose group approval with shared registry and section evidence.
+
+        Args:
+            hby (Habery): Local member's KEL/EXN evidence owner.
+            rgy (Regery): Native registry evidence owner.
+            ghab (GroupHab): Accepted local group identity requiring approvals.
+            exc (Exchanger): Shared router with configured native IPEX semantics.
+            notifier: Receiver of group proposal notices.
+            kramer (Kramer | None): Shared replay/liveness owner, or create one.
+                A supplied Kramer must have caller-owned scheduled pruning. When
+                omitted, this coordinator schedules one Pruner for its own Kramer;
+                removing the coordinator cancels that child maintenance work.
+            scy (Sectioner | None): Caller-owned independent section processor.
+                Its store must also be supplied to native IPEX handlers. Both
+                direct proposals and mailbox intake use this same processor;
+                caching sections never changes a retained grant disclosure.
+
+        Returns:
+            None
+
+        Raises:
+            ConfigurationError: GroupHab is absent or not locally accepted.
+            ValidationError: The Exchanger already has conflicting group handlers.
+        """
         if not isinstance(ghab, GroupHab) or not ghab.accepted:
             raise ConfigurationError('native group requires an accepted local GroupHab')
         self.hby, self.rgy, self.ghab, self.exc = hby, rgy, ghab, exc
+        self.scy = scy
         self.rever = Rever(db=hby.db, reger=rgy.baser)
         self.mux = Multiplexor(hby, notifier, exc=exc, rgy=self.rever)
         self.mux.kvy.kramer = kramer if kramer is not None else Kramer(
             db=hby.db, cf=ServiceConfig(), cues=self.mux.kvy.cues)
+        # Maintenance follows cache ownership. Shared caches are pruned by their
+        # existing runtime owner, rather than once per coordinator using them.
+        self.pruner = Pruner(self.mux.kvy.kramer, tock=1.0) if kramer is None else None
         loadHandlers(exc, self.mux)
         self.counselor = Counselor(hby=hby, version=Vrsn_2_0)
         self.mailbox = MailboxDirector(hby=hby,
             topics=['/receipt', '/multisig', '/replay', '/credential'],
             kvy=self.mux.kvy, exc=exc, version=Vrsn_2_0, gvrsn=Vrsn_2_0)
         self.mailbox.parser.rgy = self.rever
-        self.parser = Parser(kvy=self.mux.kvy, rgy=self.rever, exc=exc,
+        self.mailbox.parser.scy = scy
+        self.parser = Parser(kvy=self.mux.kvy, rgy=self.rever, exc=exc, scy=scy,
                              version=Vrsn_2_0, local=True)
-        super().__init__(doers=[self.counselor, self.mailbox, doing.doify(self.escrowDo)])
+        doers = [self.counselor, self.mailbox, doing.doify(self.escrowDo)]
+        if self.pruner is not None:
+            doers.append(self.pruner)
+        super().__init__(doers=doers)
 
     def process(self):
         self.mux.kvy.processEscrows()

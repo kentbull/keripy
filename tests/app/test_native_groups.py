@@ -25,7 +25,21 @@ def members():
 
 
 @contextmanager
-def groupMembers(label):
+def groupMembers(label, *, sectioned=False):
+    """Yield independent 2-of-3 group peers with optional real section stores.
+
+    Args:
+        label (str): Isolated test identity namespace.
+        sectioned (bool): Share one caller-owned Sectioner per peer between
+            native verification, direct proposal intake, and mailbox parsing.
+
+    Yields:
+        tuple: Haberies, group identities, registry owners, and coordinators.
+        ExitStack closes all evidence stores after the caller's assertions.
+    """
+    from keri.acdc.sectioning import SectionBaser, Sectioner
+    from keri.db import openLMDB
+
     with ExitStack() as stack:
         hbys = [stack.enter_context(openHby(name=f'native-group-{label}-{n}', version=Vrsn_2_0))
                 for n in range(3)]
@@ -50,9 +64,12 @@ def groupMembers(label):
             rgy = Regery(hby=hby, temp=True)
             stack.callback(rgy.close)
             exc = Exchanger(hby, handlers=[])
-            loadHandlers(hby, exc, Notices(), rgy=rgy)
+            sections = (stack.enter_context(openLMDB(cls=SectionBaser, name=hby.name))
+                        if sectioned else None)
+            scy = Sectioner(db=hby.db, sections=sections) if sectioned else None
+            loadHandlers(hby, exc, Notices(), rgy=rgy, sections=sections)
             rgys.append(rgy)
-            coordinators.append(NativeGroup(hby, rgy, group, exc, Notices()))
+            coordinators.append(NativeGroup(hby, rgy, group, exc, Notices(), scy=scy))
         yield hbys, groups, rgys, coordinators
 
 
@@ -386,3 +403,94 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             assert all(wallet.heldCredential(original.said)['grant'].said == original.said
                        for wallet in wallets[3:])
             assert all(endpoint.requests > 0 for endpoint in endpoints)
+
+
+@pytest.mark.parametrize('arrival', ['before', 'after'])
+@pytest.mark.parametrize('intake', ['direct', 'mailbox'])
+def test_group_ipex_independent_schema_preserves_approved_disclosure(arrival, intake):
+    """Real group approvals resolve standalone schema evidence through either intake.
+
+    Args:
+        arrival (str): Deliver the matching section before the grant or after
+            threshold approval has escrowed the grant for its missing schema.
+        intake (str): Exercise the coordinator or its actual mailbox parser.
+
+    Returns:
+        None. Assertions cover independent section lookup, missing-schema escrow,
+        real 2-of-3 approval, and exact retained disclosure after fuller caching.
+    """
+    from copy import deepcopy
+    from keri import Kinds
+    from keri.acdc.messaging import sectattr, sectschema
+    from keri.core import Codens, Compactor, Counter, Noncer
+    from keri.peer.exchanging import loadParsedNestedSubstreams, serializeMessage
+
+    with groupMembers(f'schema-{arrival}-{intake}', sectioned=True) as members:
+        hbys, groups, _, owners = members
+        holder = hbys[0].makeHab(name='holder')
+        section = sectschema({'$id': '', 'version': '1.0.0', 'type': 'object',
+                              'title': 'group standalone schema'})
+        schema = section.sad['s']['$id']
+        full = acdcmap(israid=groups[0].pre, iseaid=holder.pre,
+            uuid=Noncer().qb64, schema=schema,
+            attribute={'d': '', 'u': Noncer().qb64,
+                'shown': {'d': '', 'value': 'approved'},
+                'private': {'d': '', 'value': 'never disclosed by this grant'}})
+        compact = Compactor(mad=deepcopy(full.sad['a']), makify=True, kind=Kinds.json)
+        compact.compact(paths=['a/shown/'], root='a')
+        partial = acdcmap(israid=full.israid, iseaid=holder.pre, uuid=full.sad['u'],
+                           schema=schema, attribute=compact.partials[('a/shown/',)].mad)
+        assert partial.said == full.said
+        signatures = [group.sign(partial.raw)[0] for group in groups[:2]]
+        origin = messagize(partial, tsgs=[(groups[0].kever.prefixer,
+            Number(num=groups[0].kever.lastEst.s), Diger(qb64=groups[0].kever.lastEst.d),
+            signatures)], gvrsn=Vrsn_2_0)
+        exn, atc = grant(groups[0], holder.pre, 'group partial disclosure', origin=origin)
+
+        def receiveSection(owner, message):
+            """Feed a standalone section through the selected production parser."""
+            wire = message.raw + Counter(Codens.AttachmentGroup, count=0,
+                                         version=Vrsn_2_0).qb64b
+            assert owner.parser.scy is owner.scy
+            assert owner.mailbox.parser.scy is owner.scy
+            if intake == 'direct':
+                owner.receive(wire)
+            else:
+                owner.mailbox.parser.parse(ims=bytearray(wire))
+                owner.process()
+
+        assert all(hby.db.schema.get(schema) is None for hby in hbys)
+        if arrival == 'before':
+            for owner in owners:
+                receiveSection(owner, section)
+        first, fatc = owners[0].approveExchange(exn.raw + atc)
+        assert not owners[0].completeExchange(exn.said)
+        owners[1].receive(first.raw + fatc)
+        owners[2].receive(first.raw + fatc)
+        exact = owners[1].exchangeProposal(first.raw + fatc)
+        second, satc = owners[1].approveExchange(exact)
+        owners[0].receive(second.raw + satc)
+        owners[2].receive(second.raw + satc)
+        # Receiving two approvals does not substitute for this member's consent.
+        assert not owners[2].completeExchange(exn.said)
+        if arrival == 'after':
+            for owner in owners[:2]:
+                assert not owner.completeExchange(exn.said)
+                assert owner.hby.db.emse.get((exn.said, schema)) is not None
+            for owner in owners:
+                receiveSection(owner, section)
+        assert all(owner.completeExchange(exn.said) for owner in owners[:2])
+        owners[2].approveExchange(exact)
+        for owner in owners:
+            assert owner.completeExchange(exn.said)
+            assert owner.hby.db.emse.get((exn.said, schema)) is None
+            assert owner.scy.sections.messages.get(section.said).raw == section.raw
+            context = owner.exc.routes['/ipex/grant'].verification
+            assert context.verifyAccepted(exn.said, '/ipex/grant')
+            before = serializeMessage(owner.hby, exn.said)
+            receiveSection(owner, sectattr(full.sad['a']))
+            assert serializeMessage(owner.hby, exn.said) == before
+            retained = loadParsedNestedSubstreams(owner.hby, exn.said)[0].serder
+            assert retained.raw == partial.raw
+            assert isinstance(retained.sad['a']['private'], str)
+            assert owner.hby.db.schema.get(schema) is None

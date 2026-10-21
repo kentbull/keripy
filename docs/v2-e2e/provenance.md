@@ -137,3 +137,17 @@ locations pending their move into the standalone Dolly repository.
   malformed framing, legacy delivery, and pruner cancellation also pass.
 - All 16 Dolly module tests pass. R8 policy separation and repository extraction
   remain separate work; these tests do not establish raw TCP support.
+
+## R3-C/R5-C: group section intake and runtime ownership
+
+Targets: `NativeGroup.__init__`, `ExchangeDoer.run` composition, group fixture
+and schema cases in `test_native_groups.py`, and `test_native_group_pruning.py`.
+NativeGroup and fixtures derive from `93fef663f53ee49187747caf207bc9173c9b6fc1`;
+Pruner lineage is recorded under R5-A. New composition/tests are Codex-authored.
+
+Both direct and mailbox parsers receive the verifier's Sectioner. The command
+schedules its evidence owner; a group sharing that Kramer adds no pruner. A
+standalone group creates and schedules exactly one Pruner. Four real threshold
+approval cases cover independent schema arrival and unchanged partial views;
+two authenticated-cache cases cover expiry, cancellation, resumed scheduling,
+and retained EXNs. All 12 group tests pass in the installed Linux wheel.
