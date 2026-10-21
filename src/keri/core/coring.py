@@ -4776,7 +4776,7 @@ class Tholder:
         Parameters:
             indices: list of indices (offsets into key list) of verified signatures"""
         try:
-            if self.thold > 0 and len(indices) >= self.thold:  # at least one
+            if self.thold > 0 and len(set(indices)) >= self.thold:  # distinct keys
                 return True
 
         except Exception as ex:
