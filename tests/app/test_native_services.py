@@ -10,7 +10,7 @@ from keri.app.habbing import openHby
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.app.registrar.serving import Context as Registrar, signedQuery, ServiceConfig
 from keri.app.observer.serving import Context as Observer, RegistrarPuller, ObservationBaser, Observation
-from keri.core import Blinder, Counter, Codens, Parser, Diger, SerderKERI, SealSource, messagize
+from keri.core import Blinder, Counter, Codens, Parser, Diger, SerderKERI, SerderACDC, SealSource, messagize
 from keri.kering import ConfigurationError
 
 
@@ -326,6 +326,98 @@ def test_conflicting_supplied_sibling_is_rejected_after_escrow_resolution():
             assert list(ctx.reger.ooes.getTopItemIter()) == []
         finally:
             ctx.close()
+
+
+def test_occupied_slot_rival_is_pending_until_signed_anchor_arrives():
+    """Report delayed authentication without serving the rival as accepted.
+
+    Uses real independent issuer/service KEL processors and delayed signed
+    evidence. Returns None; assertion failures identify premature rejection,
+    a lost conflict proof, or conflicting TEL bytes in accepted-only cloning.
+    """
+    with (openHby(name='service-delayed-conflict-issuer', version=Vrsn_2_0) as issuer,
+          openHby(name='service-delayed-conflict-receiver', version=Vrsn_2_0) as receiver):
+        controller = issuer.makeHab(name='controller')
+        rip, first = issue(controller)
+        rival = blindate(regid=rip.said, prior=rip.said,
+                         blid=Diger(ser=b'competing state').qb64)
+        ctx = Registrar(receiver)
+        try:
+            assert not ctx.ingest(controller.replay(gvrsn=Vrsn_2_0)
+                                  + native(rip, first))['rejected']
+            result = ctx.ingest(native(rival))
+            assert result == dict(accepted={}, pending={rip.said: 1}, rejected={}, heads={})
+            assert ctx.reger.conflicts.get((rip.said, '1')) is None
+            assert ctx.store.head(rip.said).qb64 == first.said
+
+            controller.interact(data=[dict(s=rival.sad['n'], d=rival.said)])
+            result = ctx.ingest(controller.msgOwnEvent(sn=controller.kever.sn,
+                                                       gvrsn=Vrsn_2_0))
+            assert not result['pending'] and not result['rejected']
+            assert ctx.reger.conflicts.get((rip.said, '1')).raw == rival.raw
+            assert ctx.store.head(rip.said).qb64 == first.said
+            assert ctx.ingest(native(rival))['rejected']
+
+            # A KEL seal may mention the rival; accepted TEL cloning must not
+            # include the rival's body or manufacture an accepted ordinal.
+            remaining, accepted = bytearray(ctx.clone([rip.said])), []
+            parser = Parser(version=Vrsn_2_0)
+            while remaining:
+                dom = parser.parseOne(ims=remaining, processive=False)
+                assert dom is not None
+                if isinstance(dom.serder, SerderACDC):
+                    accepted.append(dom.serder.said)
+            assert accepted == [rip.said, first.said]
+        finally:
+            ctx.close()
+
+
+def test_old_unanchored_rival_does_not_monopolize_observer_freshness():
+    """Allow clean pulls past raw rivals while retaining missing-prefix gates.
+
+    Uses an independent observer and real signed issuer KEL. Returns None;
+    assertions expose ignored current-batch dependencies, junk monopolization,
+    or false freshness while a genuinely unaccepted ordinal remains pending.
+    """
+    url = 'http://registrar.test/'
+    with (openHby(name='observer-rival-issuer', version=Vrsn_2_0) as issuer,
+          openHby(name='observer-rival-receiver', version=Vrsn_2_0) as receiver):
+        controller = issuer.makeHab(name='controller')
+        rip, first = issue(controller)
+        public = controller.replay(gvrsn=Vrsn_2_0) + native(rip, first)
+        obs = Observer(receiver, urls=[url])
+        try:
+            assert not obs.observe(url, public)['rejected']
+            stale = Observation('2000-01-01T00:00:00.000000+00:00', {rip.said: first.said})
+            obs.observations.observations.pin((url,), stale)
+            rival = blindate(regid=rip.said, prior=rip.said,
+                             blid=Diger(ser=b'unanchored rival').qb64)
+            supplied = obs.observe(url, native(rival))
+            assert supplied['pending'] == {rip.said: 1}
+            assert obs.observations.observations.get((url,)) == stale
+
+            clean = obs.observe(url, public)
+            assert not clean['pending'] and not clean['rejected']
+            fresh = obs.observations.observations.get((url,))
+            assert fresh.completed != stale.completed and fresh.heads == stale.heads
+            assert obs.reger.maes.get(keys=rip.said, on=1) == [(rival.said,)]
+            assert obs.reger.conflicts.get((rip.said, '1')) is None
+
+            # A later event with an unaccepted predecessor remains a real
+            # dependency even if the current pull contains an accepted prefix.
+            future = blindate(regid=rip.said, prior=Diger(ser=b'missing predecessor').qb64,
+                              blid=Diger(ser=b'future state').qb64, sn=3)
+            controller.interact(data=[dict(s=future.sad['n'], d=future.said)])
+            waiting = obs.ingest(controller.msgOwnEvent(sn=controller.kever.sn,
+                                                       gvrsn=Vrsn_2_0) + native(future))
+            assert waiting['pending'] == {rip.said: 1}
+            assert obs.reger.ooes.get(keys=rip.said, on=3) == [(future.said,)]
+            obs.observations.observations.pin((url,), stale)
+            assert not obs.observe(url, public)['rejected']
+            assert obs.observations.observations.get((url,)) == stale
+            assert obs.store.head(rip.said).qb64 == first.said
+        finally:
+            obs.close()
 
 
 @pytest.mark.parametrize('value', [float('nan'), float('inf'), -float('inf'), 0, -1])

@@ -198,3 +198,19 @@ assertion in `test_observing.py`.
   with the pre-repair engine substituted. The new cases and existing registry/
   observer modules pass 78 tests. An old assertion now correctly treats an
   unanchored disagreement as pending rather than proven.
+
+## R6-B: service conflict outcomes and observer availability
+
+Targets: registrar `Context.ingest`, observer `Context.observe`, and
+`test_occupied_slot_rival_is_pending_until_signed_anchor_arrives` /
+`test_old_unanchored_rival_does_not_monopolize_observer_freshness`.
+Existing service lineage is `66cbec1b088175246a25aa599b479cacf2031f00`; module
+headers retain the upstream registrar/observer adaptation references.
+
+The locally designed integration reports actual pending rivals even at occupied
+slots, and never clones their TEL bodies as accepted. An old unanchored rival
+cannot block a later clean observer pull at an already accepted ordinal. The
+current supplied batch and genuine missing-prefix dependencies still block
+freshness. Freshness describes the selected accepted chain and observation; it
+does not certify absence of competing issuer evidence. Both regressions fail
+with the previous service methods, and all 24 conflict/service cases pass.

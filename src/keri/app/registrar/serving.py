@@ -121,7 +121,14 @@ class Context(doing.DoDoer):
         super().__init__(doers=[self.pruner, doing.doify(self.escrowDo)])
 
     def ingest(self, raw):
-        """Parse public evidence; all native commits go through the shared Rever."""
+        """Parse public evidence and summarize the shared Rever's final state.
+
+        raw is a CESR stream of KEL/native TEL evidence. Returns accepted,
+        pending and rejected counts with accepted heads. An occupied TEL slot
+        does not reject a rival whose independent anchor is still pending;
+        authenticated conflicts and invalid evidence remain rejected. Intake
+        errors are reported in the rejected stream entry rather than raised.
+        """
         ims = bytearray(raw)
         summary = dict(accepted={}, pending={}, rejected={}, heads={})
         events = []
@@ -164,9 +171,11 @@ class Context(doing.DoDoer):
             regk = event.said if event.ilk == 'rip' else event.sad['rd']
             sn = Number(numh=event.sad['n']).num
             accepted = self.store.seqEvent(regk, sn)
-            if accepted is not None:
-                bucket = 'accepted' if accepted.said == event.said else 'rejected'
+            if accepted is not None and accepted.said == event.said:
+                bucket = 'accepted'
             else:
+                # Escrow membership distinguishes an unauthenticated rival from
+                # a proven conflict even when another event occupies this slot.
                 pending = any(event.said == said for escrow in (self.reger.maes, self.reger.ooes)
                               for (said,) in escrow.get(keys=regk, on=sn))
                 bucket = 'pending' if pending else 'rejected'

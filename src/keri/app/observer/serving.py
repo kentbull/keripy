@@ -53,10 +53,20 @@ class Context(EvidenceContext):
         self.app.add_route('/health', HealthEnd())
 
     def observe(self, url, raw):
-        """Advance observation only after an independently acquired complete scope."""
+        """Advance observation after independently acquiring a complete scope.
+
+        url selects the configured registrar; raw is its public evidence
+        stream. Returns the shared intake summary. Current-batch pending or
+        rejected evidence, and retained work at unaccepted ordinals, block
+        freshness. An old unanchored rival at an accepted slot cannot block
+        a later clean pull. Intake errors remain in the returned summary.
+        """
         result = self.ingest(raw)
-        pending = any(True for escrow in (self.reger.maes, self.reger.ooes)
-                      for _ in escrow.getTopItemIter())
+        # Only unresolved acceptance dependencies block subsequent clean pulls.
+        # A raw rival cannot displace or monopolize its already accepted slot.
+        pending = any(self.store.seqSaider(keys[0], sn) is None
+                      for escrow in (self.reger.maes, self.reger.ooes)
+                      for keys, sn, _ in escrow.getTopItemIter())
         previous = self.observations.observations.get((url,))
         heads = result['heads']
         complete = (not previous or set(previous.heads).issubset(heads))

@@ -30,13 +30,14 @@ optional-custody, standalone-Dolly, and operator-workflow gates.
 | R3-C/R5-C group composition | `V2_TEST_IMAGE=keripy-v2-refactor:group-sections V2_TEST_VOLUME=keripy-v2-refactor-group-sections scripts/v2-e2e/check.sh tests/app/test_native_groups.py tests/app/test_native_group_pruning.py` | 12 passed: direct/mailbox sections, threshold approval, single pruner ownership, expiry/cancellation/reschedule |
 | R8 historical inspection/current reporting | `V2_TEST_IMAGE=keripy-v2-refactor:dolly-historical V2_TEST_VOLUME=keripy-v2-refactor-dolly-historical scripts/v2-e2e/check.sh tests/app/test_dolly_historical.py tests/app/test_dolly.py::test_native_partial_full_grants_observer_acquisition_and_real_webhooks tests/app/test_dolly.py::test_empty_grant_is_terminal_and_later_grants_report_after_reopen` | 5 passed: anchored bound history, revocation, reopen, invalid proof, hook silence |
 | R6-A authenticated conflict policy | `V2_TEST_IMAGE=keripy-v2-refactor:conflict V2_TEST_VOLUME=keripy-v2-refactor-conflict scripts/v2-e2e/check.sh tests/acdc/test_registry_conflict_policy.py tests/acdc/test_registraring.py tests/acdc/test_regeventing.py tests/acdc/test_observing.py` | 78 passed; all nine new cases fail under the old event engine |
+| R6-B service outcomes and availability | `V2_TEST_IMAGE=keripy-v2-refactor:conflict-services V2_TEST_VOLUME=keripy-v2-refactor-conflict-services scripts/v2-e2e/check.sh tests/acdc/test_registry_conflict_policy.py tests/app/test_native_services.py` | 24 passed; independent review accepted core/service contract |
 
 These targeted checks qualify the runner change, not the complete refactor.
 The historic 799-test result is not new evidence for the current changes.
 
 ## Remaining acceptance
 
-R6 repair, optional custody H1–H8, standalone Dolly/transport D1–D4,
+Optional custody H1–H8, standalone Dolly/transport D1–D4,
 dual-version KLI and six independent Bash scenarios C1–C3, provenance P1,
 human-reviewable commits Q2, and documentation Q3 remain open until their
 concrete evidence is recorded. The provenance inventory is incomplete until
