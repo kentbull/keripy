@@ -1,63 +1,62 @@
-# Local lifecycle walkthrough
+# Installed CLI disclosure scenarios
 
-Run from a fresh checkout with Docker available:
+Set `DOLLY_SOURCE` to the standalone [Dolly repository](https://github.com/kentbull/dolly)
+and run from this KERIpy checkout with Docker available:
 
 ```sh
+export DOLLY_SOURCE=/absolute/path/to/dolly
 ./scripts/v2-e2e/walkthrough.sh
 ```
 
-`check.sh` builds the pinned Python image, mounts source read-only, and places
-temporary and persistent KLI state in separate Docker named volumes. Set
-`V2_TEST_VOLUME` to choose their shared name prefix. No companion checkout is
-required.
+The entry point runs six independently executable Bash stories. It builds actual
+KERIpy and Dolly wheels from copied source and uses a separate Linux-owned named
+volume for each story. Neither source nor LMDB state is bind-mounted from macOS.
+Each story drives installed `kli` and `dolly` commands; Python companions handle
+fixture JSON, HTTP capture, and assertions, not hidden protocol authoring.
 
-The process demonstration starts three HTTP witnesses, registrar, independent bulk
-observer, holder intake, Dolly, and a real HTTP webhook receiver. Separate KLI
-invocations create the registry and credential, obtain witness receipts with
-issuer and holder quorum thresholds of two,
-export public evidence, and negotiate partial then full disclosure through
-four complete Apply/Offer/Agree/Grant/Admit sessions: issuer to holder, then
-holder to Dolly, for each stage. Every exchange is authored by a KLI subprocess
-and delivered over HTTP. The holder presents only its corresponding admitted
-grant; it receives the fuller credential only in the second stage. Receiver
-acceptance, predecessor/session links, preserved partial views, explicit
-admission, and both actual webhook payloads are asserted. Negotiation before
-Grant produces no webhook, and Admit does not produce a duplicate.
-Holder intake, observer and Dolly restart between disclosure stages.
-Public revocation is published and observed before a new presentation;
-the issued-state policy emits no acceptance webhook. Stopping the registrar
-eventually makes observer queries return stale rather than current evidence.
+| Story | Material and authority boundary |
+|---|---|
+| `holder-full-then-graduated.sh` | Holder admits full material once, then presents partial and fuller disclosures without further issuer messages or salt provisioning. |
+| `holder-partial-then-onward.sh` | Holder first receives partial material, cannot reveal withheld leaves, then admits a fuller issuer disclosure before onward disclosure. |
+| `holder-supplied-state-opening.sh` | Holder receives event-specific openings; no derivation salt or authority to update registry state is transferred. |
+| `holder-provisioned-state-derivation.sh` | Holder explicitly imports per-registry custody and derives an opening for a genuinely later accepted event. |
+| `holder-selected-discloser-openings.sh` | Separate presenter admits holder-signed disclosure material and receives specific openings; holder selection does not invent a delegation protocol. |
+| `holder-selected-discloser-derivation.sh` | Separate presenter explicitly receives scoped custody; the holder can remain without it. |
 
-The focused Dolly socket demonstration additionally checks same-grant replay
-privacy, nested and one-way issuer registry references, and a legacy grant
-whose conventional TEL replay and signed source TSNs reach the same webhook
-contract. An issuance embed alone does not establish current legacy standing.
-The source report must be core-authenticated, match the accepted TEL head,
-postdate the outstanding request, and remain inside the configured age limit.
-These observation facts are application policy, not historical protocol truth.
-Only currently configured registrar URLs can establish observer freshness.
-Dolly likewise requires an observation from its current observer URL. Reopening
-with changed endpoints preserves accepted evidence and old observations, but
-requires a new observation from the active endpoint before acceptance.
-The two-node graph case runs Apply/Offer/Agree/Grant/Admit over the service
-sockets, binds an unchanged grant body into the holder's declared presentation
-registry, and verifies ordinary issuer and holder rotations. The application
-uses the shared protocol graph evaluator and keeps the unnegotiated block hidden.
+Run one story independently:
 
-The fixture identities and passcode are public test data. These commands do
-not establish release readiness, group-flow coverage, or compatibility with
-separately installed v1.2.14/v1.3.6 peers; those require their own checks.
-Some protocol-rejected submissions remain labelled pending by Dolly's small
-application tracker; they produce no acceptance webhook. Advanced graph and
-presentation-registry proof authoring in this demonstration uses the Python
-APIs; the minimal CLI does not expose every constructor option.
+```sh
+./scripts/v2-e2e/scenarios/run-linux.sh holder-full-then-graduated.sh
+```
 
-For the full declared profile, including the separately installed old peers:
+`SCENARIO_TRANSPORT=http` or `tcp` selects direct Dolly delivery. The aggregate
+runner alternates transports, shares one installed image, and isolates each
+story's identities and databases. Scripts use bounded polling, retain failure
+logs, and assert actual webhook content. Their manifests record public artifacts,
+exact credential/disclosure paths, actors, registry events, and observed results.
+The test passcode and identities are public fixtures. Secret provisioning files
+are not public artifacts and must not appear in transcripts or webhooks.
+
+A full-disclosure assertion enumerates the expected leaf paths and values.
+The provisional empty-string disclosure request alone cannot distinguish an
+arbitrary digest-valued scalar from a compacted nested block.
+
+The original witnessed Python integration remains supplementary regression
+coverage in Dolly's `tests/test_native_e2e.py`. Dolly also owns its application,
+HTTP/TCP process tests, pinned schemas, and separately installed released-peer
+matrix. There is no Dolly application compatibility package in KERIpy.
+
+For the declared core, standalone application, released-peer, and Bash gates:
 
 ```sh
 ./scripts/v2-e2e/qualify.sh
 ```
 
-The capability map and explicit limits are in
-[qualification.md](../../docs/v2-e2e/qualification.md); the exact old-peer source
-adapter is described in [legacy-peers.md](../../docs/v2-e2e/legacy-peers.md).
+`check.sh` is the smaller installed-wheel pytest runner. `V2_TEST_IMAGE` and
+`V2_TEST_VOLUME` select isolated image/state names. Qualification results and
+remaining gates are recorded in [refactor-status.md](../../docs/v2-e2e/refactor-status.md);
+commands being present does not imply every current gate has passed.
+See [qualification.md](../../docs/v2-e2e/qualification.md) and
+[legacy-peers.md](../../docs/v2-e2e/legacy-peers.md) for capability limits. Registry
+observation freshness is configured application policy, and HTTP/TCP delivery
+alone is not authenticated recipient acceptance or a production-readiness claim.

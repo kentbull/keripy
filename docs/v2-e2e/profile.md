@@ -110,7 +110,8 @@ reference environment until the host resource issue is resolved.
 
 Run `scripts/v2-e2e/qualify.sh` from a fresh checkout to execute the complete
 selected protocol/application suite and the separately installed released-peer
-matrix. `scripts/v2-e2e/walkthrough.sh` runs the shorter process/socket lifecycle.
+matrix. `scripts/v2-e2e/walkthrough.sh` drives the six installed-CLI Bash stories with
+standalone Dolly (set `DOLLY_SOURCE`).
 The [released-peer profile](legacy-peers.md) records the necessary old-source
 TSN adapter and its exact interoperability boundary.
 

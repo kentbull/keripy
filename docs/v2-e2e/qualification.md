@@ -12,15 +12,20 @@ profiles (V34) are outside this declared profile; no required gate is waived.
 | V07–V11, C1: schema, selective disclosure, aggregate/independent sections | `test_native_forms_profile.py`, `test_scheming.py`, existing messaging/Compactor/Aggor tests: exact schema/AGID commitments, persistent missing-section requests, explicit ambiguous-view selection and no automatic disclosure merge. |
 | V12–V14/V37, C2: graphs and explicit policy | `test_native_graph_profile.py`, `test_bound_state_profile.py`, Dolly two-node HTTP negotiation: specified logical/relationship operators, declared arithmetic policy, real accepted delegation, missing/invalid far evidence. |
 | V15–V18, P1/C1: native TEL acceptance | `test_regbasing.py`, `test_registering.py`, `test_regeventing.py`, `test_native_registry_profile.py`, `test_registry_arbitration.py`, `test_observing.py`: atomic accepted body/ordinal/head, mixed histories, conflicting occupied ordinal, restart and real dependency arrival. |
-| V19/V29, P3a: custody and inventory | `test_native_wallet.py`: encrypted Keeper, protected explicit provisioning, binary bytes, designated discloser, future derivation, explicit consent, handlerless EXN rejection, immutable per-grant disclosure, bound coordinates after rotation/reopen. |
+| V19/V29, P3a: custody and inventory | `test_native_wallet.py`: optional encrypted custody, explicit plaintext operator provisioning, binary bytes, designated discloser, future derivation, explicit consent, handlerless EXN rejection, immutable per-grant disclosure, bound coordinates after rotation/reopen. |
 | V20–V22, C1/C2/P4: binding and historical presentation | `test_registry_binding_forms.py`, `test_bound_state_profile.py`, `test_historical_evidence.py`, Dolly and group presentation-registry tests: hidden/one-way binding, exact event reference, backdated/resealed counterexamples, immutable grant body before holder binding. |
 | V23–V26, P2: registrar/observer | `test_native_services.py`, `test_native_e2e.py`: authorized foreign hosting, independent bulk polling, cache-only verifier queries, replay/conflict/stale reporting, cancellation and reopen. |
 | V27–V28, P3b: actual IPEX/KRAM | `test_ipexing.py`, `test_native_ipex_cli.py`, Dolly negotiated two-node test: apply/offer/agree/grant/admit/spurn semantics, actual sender/recipient proofs, source evidence and existing KRAM gates. |
 | V30–V32, P3/P4/P5: operator lifecycle | `test_native_cli.py`, `test_native_ipex_cli.py`, `test_native_e2e.py`: real subprocesses, receipts, custody, admission, retained and refreshed presentations, independent revocation and no stale acceptance hook. |
 | V33/V35, C3: groups/delegation | `test_native_groups.py`, `test_native_delegated_controller.py`, existing grouping/group-persistence tests, graph DI2I vectors: explicit missing approval, real HTTP fanout, six issuer/holder member stores, threshold convergence, presentation registry, consent and revocation. |
-| V35–V36, P5: legacy peers and reproducibility | `test_legacy_peer_profiles.py`, `scripts/v2-e2e/legacy-peers/check.sh`, process walkthrough: actual separately installed 1.2.14/1.3.6 peers, same webhook decision, replay and fresh revoked state. See exact source-adapter limit in `legacy-peers.md`. |
+| V35–V36, P5: legacy peers and reproducibility | `test_legacy_peer_profiles.py`, Dolly `scripts/legacy-peers/check.sh`, process walkthrough: actual separately installed 1.2.14/1.3.6 peers, same webhook decision, replay and fresh revoked state. See exact source-adapter limit in `legacy-peers.md`. |
 
-Test names above are under `tests/acdc`, `tests/core`, or `tests/app` as appropriate.
+Core test names above are under `tests/acdc`, `tests/core`, or `tests/app`.
+Dolly application tests, `test_native_e2e.py`, and `test_legacy_peer_profiles.py`
+now reside in the standalone Dolly repository under `tests/`. The six Bash
+operator stories live in `scripts/v2-e2e/scenarios/`; see their
+[operator guide](../../scripts/v2-e2e/README.md). Final refactor qualification
+status is tracked separately in [refactor-status.md](refactor-status.md).
 The existing atomic-store tests are part of the earlier integration commits.
 
 ## Application demonstrations
@@ -65,7 +70,8 @@ uses real group approvals and HTTP fanout with six distinct member stores.
   in Dolly's submission table. They do not pass policy or produce a webhook.
 - Webhook retries can duplicate delivery across a crash after remote receipt
   but before local acknowledgement. No distributed exactly-once claim is made.
-- Protected group/discloser secret handoff is operator-assisted. Signing
+- Per-registry secret handoff uses an optional plaintext, mode-0600 operator
+  adapter; it is not an encrypted IPEX transfer envelope. Signing
   approval never implies secret distribution or credential admission.
 - Wire interoperability is tested separately from LMDB compatibility. No
   cross-version or Python/TypeScript database-opening promise is made.

@@ -90,7 +90,8 @@ Port the vectors from `tests/acdc/test_native_registry_profile.py`,
 
 Use `tests/app/test_native_wallet.py` and `test_native_ipex_cli.py` for explicit
 consent, retained proofs and reopen behavior. Use the actual socket/process
-checks in `test_native_services.py`, `test_dolly.py` and `test_native_e2e.py` as
+checks in KERIpy `test_native_services.py` and standalone Dolly
+`tests/test_dolly.py` and `tests/test_native_e2e.py` as
 acceptance oracles. Test real old peer releases separately from newly generated
 protocol-v1 messages.
 

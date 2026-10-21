@@ -1,7 +1,9 @@
 #!/bin/sh
-# Qualify the declared Python profile and both separately installed legacy peers.
+# Qualify protocol core, the standalone Dolly application, and released peers.
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+: "${DOLLY_SOURCE:?Set DOLLY_SOURCE to the standalone Dolly checkout}"
+keri_source=$(CDPATH= cd -- "$here/../.." && pwd)
 "$here/check.sh" \
     tests/acdc \
     tests/core/test_native_registry_framing.py \
@@ -11,9 +13,15 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
     tests/db/test_basing.py tests/peer/test_exchanging.py \
     tests/app/test_native_wallet.py tests/app/test_native_services.py \
     tests/app/test_native_cli.py tests/app/test_native_ipex_cli.py tests/app/test_native_groups.py \
-    tests/app/test_dolly.py tests/app/test_native_e2e.py \
+    tests/app/test_registry_custody.py tests/app/test_public_evidence_cli.py \
+    tests/app/test_native_ipex_transport.py tests/app/test_legacy_negotiation_cli.py \
+    tests/app/test_tcp_stream_delivery.py \
+    tests/app/test_native_group_pruning.py tests/app/test_native_service_pruning.py \
+    tests/core/test_kraming.py \
     tests/app/test_forwarding.py tests/app/test_indirecting.py \
     tests/app/test_grouping.py tests/app/test_group_persistence.py \
     tests/vdr/test_eventing.py tests/vdr/test_credentialing.py \
     tests/cli/test_kli_commands.py tests/cli/commands/vc/test_vc_schema_validation.py
-exec "$here/legacy-peers/check.sh"
+KERI_SOURCE="$keri_source" "$DOLLY_SOURCE/scripts/check.sh"
+"$DOLLY_SOURCE/scripts/legacy-peers/check.sh"
+exec "$here/scenarios/run-all.sh"

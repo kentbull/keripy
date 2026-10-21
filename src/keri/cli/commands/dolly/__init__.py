@@ -1,1 +1,0 @@
-"""Dolly verifier application commands."""
