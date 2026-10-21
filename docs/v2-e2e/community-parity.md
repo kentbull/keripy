@@ -114,3 +114,13 @@ scenario profile remains supported.
 Development S1 passed against witness-hk cafe3f2, registrar 7b77c08, observer
 27a7e0f and the authored KLI authorization changes. This result has two actual
 Dolly hooks, but does not close all-six/released-peer/restart/clean-artifact gates.
+
+`EvidenceProcessor` separates borrowed verification from `EvidenceContext`'s
+service lifecycle. Its ingestion, pending classification and export methods are
+moved unchanged from the context at `9ca869f6` (AST compared). Callers supply
+strict Kevery and Rever instances for one Habery. The adapter opens no store,
+creates no Kramer/pruner, and has no scheduler or close method; the vault or
+service remains the lifecycle owner. This composition boundary is a local
+implementation decision needed by the external wallet, not a protocol change.
+Nineteen installed tests cover borrowed ownership and existing service
+acceptance/pruning, including restart and cancellation.

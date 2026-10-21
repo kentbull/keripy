@@ -103,8 +103,76 @@ class EvidenceContext(doing.DoDoer):
             name=hby.name, base=hby.base, temp=hby.temp)
         self.rever = Rever(db=hby.db, reger=self.reger)
         self.store = self.rever.store
-        self.parser = Parser(kvy=self.kvy, rgy=self.rever, local=False, version=Vrsn_2_0)
+        self.evidence = EvidenceProcessor(hby, kvy=self.kvy, rever=self.rever)
+        self.parser = self.evidence.parser
         super().__init__(doers=[self.pruner, doing.doify(self.escrowDo)])
+
+    def ingest(self, raw):
+        """Delegate public evidence intake to the borrowed-processor adapter."""
+        return self.evidence.ingest(raw)
+
+    def registries(self):
+        """Return accepted registry identifiers from the shared evidence store."""
+        return self.evidence.registries()
+
+    def clone(self, regks=None, sn=0):
+        """Export accepted scoped evidence; see EvidenceProcessor.clone."""
+        return self.evidence.clone(regks=regks, sn=sn)
+
+    def escrowDo(self, tymth=None, tock=0.0, **kwa):
+        """Retry concrete KEL/TEL dependencies while this service is scheduled.
+
+            Args:
+                tymth: HIO scheduler clock injected on entry.
+                tock (float): Cooperative recurrence delay.
+                **kwa: Scheduler metadata unused by this loop.
+
+            Yields:
+                float: Delay between bounded processor passes. Cancellation stops retries;
+                the sibling Pruner owns cache expiration rather than deleting evidence."""
+        self.wind(tymth)
+        yield tock
+        while True:
+            self.kvy.processEscrows()
+            self.rever.processEscrows()
+            yield tock
+
+    def close(self):
+        """Close the native registry store after child doers have stopped.
+
+            Returns:
+                None. Habery remains caller-owned; scheduling cancellation must precede
+                this close so pruning/escrow work cannot access a closed environment."""
+        self.reger.close()
+
+
+class EvidenceProcessor:
+    """Process public evidence using borrowed core verifiers, with no lifecycle.
+
+    Services compose this with their KRAM/pruning owner; applications can reuse
+    it alongside an existing vault scheduler. It never opens or closes stores,
+    creates a Kramer, schedules a pruner, or implements a second TEL acceptor.
+    """
+
+    def __init__(self, hby, *, kvy, rever):
+        """Bind the caller's strict KEL verifier and native TEL verifier.
+
+        Args:
+            hby: Caller-owned Habery whose database receives verified evidence.
+            kvy: Existing nonlocal, nonlax Kevery for that database.
+            rever: Existing Rever for the same KEL database and registry store.
+
+        Raises:
+            ConfigurationError: Verifier ownership or strictness does not match.
+
+        The caller owns escrow scheduling and KRAM maintenance. Methods are
+        moved unchanged from EvidenceContext at 9ca869f6.
+        """
+        if kvy.db is not hby.db or kvy.lax or kvy.local or rever.db is not hby.db:
+            raise ConfigurationError('public evidence requires strict verifiers for one Habery')
+        self.hby, self.kvy, self.rever = hby, kvy, rever
+        self.reger, self.store = rever.reger, rever.store
+        self.parser = Parser(kvy=kvy, rgy=rever, local=False, version=Vrsn_2_0)
 
     def ingest(self, raw):
         """Process public evidence and summarize final shared-processor outcomes.
@@ -239,28 +307,3 @@ class EvidenceContext(doing.DoDoer):
                 tel.extend(Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
         return bytes(kel + tel)
 
-    def escrowDo(self, tymth=None, tock=0.0, **kwa):
-        """Retry concrete KEL/TEL dependencies while this service is scheduled.
-
-            Args:
-                tymth: HIO scheduler clock injected on entry.
-                tock (float): Cooperative recurrence delay.
-                **kwa: Scheduler metadata unused by this loop.
-
-            Yields:
-                float: Delay between bounded processor passes. Cancellation stops retries;
-                the sibling Pruner owns cache expiration rather than deleting evidence."""
-        self.wind(tymth)
-        yield tock
-        while True:
-            self.kvy.processEscrows()
-            self.rever.processEscrows()
-            yield tock
-
-    def close(self):
-        """Close the native registry store after child doers have stopped.
-
-            Returns:
-                None. Habery remains caller-owned; scheduling cancellation must precede
-                this close so pruning/escrow work cannot access a closed environment."""
-        self.reger.close()
