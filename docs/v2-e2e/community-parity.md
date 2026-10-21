@@ -133,3 +133,25 @@ selection. Missing history now raises a precise configuration error. This local
 composition change lets Locksmith reuse the qualified proof selection without
 importing CLI code. Twenty-nine installed native CLI, wallet and custody tests
 pass, including retained presentation and supplied/derived refresh boundaries.
+
+### Order-independent hosted quorum and restart
+
+`Receiptor._collectReceipts` was extracted unchanged at `d74c83f1` from
+`Receiptor.receipt` at `325f2507`. The subsequent local scheduling change sends
+all receipt requests before polling responses, allowing the ordinary habitat
+parser to verify later witnesses while an earlier endpoint is offline. It does
+not change signature verification, quorum policy or the caller's deadline.
+`receipt` now releases its client Doers on cancellation as well as completion.
+This is local corrective design, not an upstream protocol requirement invented
+by this fork. Catch-up for newly added witnesses and completion of all-witness
+receipt propagation retain their existing behavior.
+
+The dedicated `hosted-quorum-restart.sh` uses three real provider processes and
+quorum two. It stops the first configured witness, successfully anchors a
+registry with the remaining two, then stops a second and checks refusal. It
+restarts that provider against its retained store and successfully retries the
+same pending registry inception, then checks the first provider's original OOBI.
+The sequential collector failed this test before the change. The development
+composition passes afterward; five focused installed-wheel receipt tests also
+pass, including genuine v1/v2 signatures and cancellation cleanup. Final clean
+artifact qualification remains separate.
