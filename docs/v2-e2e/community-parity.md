@@ -168,3 +168,15 @@ of the upstream parser, grounded in those released source distributions.
 All six HTTP helper tests pass; the hosted released-peer matrix subsequently
 verifies registration, unauthorized refusal and authentic indexed receipts in
 both unmodified released interpreters. Its harness lives in witness-hk.
+
+### Additional application-issuer scenario options
+
+The optional `SCENARIO_ISSUER_PROFILE=locksmith` grants the configured issuer
+reader access to the independent observer and records its application role in
+the public manifest. The default remains KLI. `SCENARIO_DOLLY_SCHEMA` explicitly
+selects an already verified packaged Dolly schema; it does not alter acceptance
+policy. These narrow harness options support Locksmith's separate
+`issuer-through-holder.sh`, which passed public-state issuance with hosted
+receipts, full holder admission, issuer shutdown and two graduated Dolly hooks.
+The test retains exact earlier proof/hook hashes. Original six scripts remain
+unchanged. These are local scenario-composition choices, not protocol changes.

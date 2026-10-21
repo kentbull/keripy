@@ -165,7 +165,8 @@ if __name__ == '__main__':
             dolly=(folder / 'dolly-version.txt').read_text().strip())
         value['walletProfile'] = (folder / 'wallet-profile.txt').read_text().strip()
         if value['walletProfile'] == 'locksmith':
-            value['applicationRoles'] = dict(issuer='kli', holder='locksmith',
+            value['applicationRoles'] = dict(issuer=(folder / 'issuer-profile.txt').read_text().strip()
+                if (folder / 'issuer-profile.txt').exists() else 'kli', holder='locksmith',
                 presenter='locksmith' if 'presenter' in roles else 'locksmith holder', verifier='dolly')
         value['authorizationProfile'] = (folder / 'authorization.txt').read_text().strip()
         value['actors'] = dict(credentialIssuer=value['roles']['issuer']['aid'],

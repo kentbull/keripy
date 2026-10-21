@@ -131,6 +131,9 @@ prepare() {
     trap cleanup EXIT
     WITNESS_PROFILE=${SCENARIO_WITNESS_PROFILE:-kli}
     case "$WITNESS_PROFILE" in kli|hk) ;; *) printf 'Unknown witness profile: %s\n' "$WITNESS_PROFILE" >&2; exit 2;; esac
+    ISSUER_PROFILE=${SCENARIO_ISSUER_PROFILE:-kli}
+    case "$ISSUER_PROFILE" in kli|locksmith) ;; *) printf 'Unknown issuer profile: %s\n' "$ISSUER_PROFILE" >&2; exit 2;; esac
+    printf '%s\n' "$ISSUER_PROFILE" > "$RUN_DIR/issuer-profile.txt"
     WALLET_PROFILE=${SCENARIO_WALLET_PROFILE:-kli}
     case "$WALLET_PROFILE" in kli|locksmith) ;; *) printf 'Unknown wallet profile: %s\n' "$WALLET_PROFILE" >&2; exit 2;; esac
     printf '%s\n' "$WALLET_PROFILE" > "$RUN_DIR/wallet-profile.txt"
@@ -236,6 +239,7 @@ services() {
     k issuer vc registry publish -a issuer --endpoint "http://127.0.0.1:${PORTS[registrar]}/ingest" --file "$RUN_DIR/public.cesr"
     local readers=(--reader "${AIDS[holder]}" --reader "${AIDS[dolly]}")
     if [[ -v AIDS[presenter] ]]; then readers+=(--reader "${AIDS[presenter]}"); fi
+    if [[ ${SCENARIO_ISSUER_PROFILE:-kli} == locksmith ]]; then readers+=(--reader "${AIDS[issuer]}"); fi
     if [[ $SERVICE_PROFILE == kf ]]; then
         spawn observer kf-observer start --name "${NAMES[observer]}" --base "$STORE_BASE" -a observer \
             --registrar "http://127.0.0.1:${PORTS[registrar]}/" "${readers[@]}" --kel "$RUN_DIR/bootstrap.cesr" \
@@ -260,8 +264,10 @@ services() {
     python "$JSON" config "$RUN_DIR/dolly-policy.json" "${AIDS[issuer]}" "$SCHEMA" "$OBSERVER_URL" "http://127.0.0.1:${PORTS[hook]}/hook"
     spawn hook python -u "$JSON" hook "${PORTS[hook]}" "$RUN_DIR/hooks.jsonl"
     python "$JSON" ready "http://127.0.0.1:${PORTS[hook]}/" 15
+    local schema_options=()
+    if [[ -n ${SCENARIO_DOLLY_SCHEMA:-} ]]; then schema_options+=(--packaged-schema "$SCENARIO_DOLLY_SCHEMA"); fi
     spawn dolly dolly server start --direct --name "${NAMES[dolly]}" --base "$STORE_BASE" -a dolly \
-        --config "$RUN_DIR/dolly-policy.json" --kel "$RUN_DIR/bootstrap.cesr" \
+        --config "$RUN_DIR/dolly-policy.json" --kel "$RUN_DIR/bootstrap.cesr" "${schema_options[@]}" \
         --http "${PORTS[dolly]}" --tcp "${PORTS[dollytcp]}" --no-prompt
     python "$JSON" ready "http://127.0.0.1:${PORTS[dolly]}/health" 15
     for role in issuer holder presenter; do
