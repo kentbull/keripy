@@ -15,11 +15,25 @@ from keri.peer import Exchanger
 
 class Notices:
     def add(self, attrs):
+        """Ignore accepted-notification attributes for this verifier-only test.
+
+        Args:
+            attrs (dict): Notification payload deliberately unused by the test.
+
+        Returns:
+            None. No notification side effects are needed to observe acceptance."""
         pass
 
 
 @pytest.mark.parametrize('form', ['attribute', 'aggregate', 'oneway'])
 def test_issuer_registry_forms_use_actual_anchored_tel(form):
+    """Authenticate protected attribute/aggregate or explicit one-way issuer registries; refuse wrong source digest, ordinal, and target.
+
+    Parameters:
+        form: Protected attribute, protected aggregate, or explicit one-way binding form.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with (openHby(name='binding-author', version=Vrsn_2_0) as author,
           openHby(name='binding-receiver', version=Vrsn_2_0) as receiver,
           openLMDB(cls=RegBaser, name='binding-tel') as reger):

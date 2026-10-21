@@ -11,6 +11,10 @@ from keri.kering import ValidationError
 
 
 def test_mixed_history_uses_one_acceptance_and_binding_path():
+    """Accept one real anchored mixed bup/upd history, verify selected public/blinded heads, and prevent replay rollback.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='mixed-profile', version=Vrsn_2_0) as hby, \
             openLMDB(cls=RegBaser, name='mixed-profile', temp=True) as reger:
         hab = hby.makeHab(name='issuer')
@@ -42,12 +46,23 @@ def test_mixed_history_uses_one_acceptance_and_binding_path():
     '2026-13-20T12:00:00.000000+00:00',
 ])
 def test_timestamp_profile_refuses_noncanonical_received_body(stamp):
+    """Refuse noncanonical or impossible received timestamps even when the registry event SAID recomputes.
+
+    Parameters:
+        stamp: Noncanonical or invalid received timestamp vector.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     event = messaging.regcept(israid=Diger(ser=b'issuer').qb64, stamp=stamp)
     with pytest.raises(ValidationError, match='timestamp'):
         regeventing.vetRip(event)
 
 
 def test_ordinal_profile_refuses_leading_zero():
+    """Refuse a leading-zero ordinal in a correctly re-SAIDed inception rather than mistaking it for digest corruption.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     event = messaging.regcept(israid=Diger(ser=b'issuer').qb64)
     sad = dict(event.sad, n='00', d='')
     # Recompute the digest so this checks the ordinal, not accidental corruption.

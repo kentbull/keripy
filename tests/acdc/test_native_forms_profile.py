@@ -19,6 +19,14 @@ ISSUER = Diger(ser=b'native-profile-issuer').qb64
 
 
 def credential(kind, form='explicit'):
+    """Author one native detailed-type credential with deterministic visible content.
+
+    Args:
+        kind (str): JSON, CBOR, MessagePack, or CESR body encoding.
+        form (str): Explicit/implicit map, map aggregate, fixed attribute, or aggregate.
+
+    Returns:
+        SerderACDC: Credential with section commitments computed in that encoding."""
     attribute = Compactor(mad=dict(d='', name='Alice', score=96), makify=True, kind=kind).mad
     aggregate = Aggor(ael=['', dict(d='', name='Alice'), dict(d='', score=96)], makify=True, kind=kind).ael
     if form == 'attribute':
@@ -32,12 +40,27 @@ def credential(kind, form='explicit'):
 
 
 def wire(event):
+    """Complete one native body with the prescribed empty attachment-group foot.
+
+    Args:
+        event (SerderACDC): Body whose bytes to frame.
+
+    Returns:
+        bytes: Exact body followed by a v2 zero-count AttachmentGroup."""
     return event.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
 
 
 @pytest.mark.parametrize('kind', KINDS)
 @pytest.mark.parametrize('form', FORMS)
 def test_native_form_roundtrip_and_dispatch(kind, form):
+    """Round-trip every supported detailed form and route its exact received bytes to Sectioner, including binary CESR.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+        form: Selected native detailed credential form.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     event = credential(kind, form)
     assert event.verify()
     assert SerderACDC(raw=event.raw).sad == event.sad
@@ -62,6 +85,13 @@ def test_native_form_roundtrip_and_dispatch(kind, form):
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_native_aggregate_selective_disclosure_preserves_agid(kind):
+    """Preserve aggregate/credential commitments when hiding members; reject member permutation under the old AGID.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     expanded = credential(kind, 'aggregate')
     selective = copy.deepcopy(expanded.sad)
     hidden = selective['A'][2]['d']
@@ -89,6 +119,16 @@ def test_native_aggregate_selective_disclosure_preserves_agid(kind):
     (messaging.sectrule, 'r', {'d': '', 'usage': {'l': 'For the intended verifier'}}),
 ])
 def test_standalone_section_roundtrip(kind, builder, field, value):
+    """Check standalone section field order, native detailed type, commitment, and binary CESR round-trip.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+        builder: Standalone section builder under test.
+        field: Normative section label carried by that builder.
+        value: Expanded section content before commitment computation.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     value = (Aggor(ael=copy.deepcopy(value), makify=True, kind=kind).ael if field == 'A'
              else Compactor(mad=copy.deepcopy(value), makify=True, kind=kind,
                             strict=False if field == 's' else True,
@@ -105,6 +145,13 @@ def test_standalone_section_roundtrip(kind, builder, field, value):
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_native_schema_verifies_actual_encoding_without_rewriting(kind):
+    """Validate the schema in its actual received encoding and reject altered content without rewriting credential bytes.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     schema = {'$id': '', 'version': '1.0.0', 'type': 'object',
               'properties': {'a': {'type': 'object', 'required': ['name']}}}
     with openHby(name='native-schema-kind', version=Vrsn_2_0) as hby:
@@ -121,6 +168,14 @@ def test_native_schema_verifies_actual_encoding_without_rewriting(kind):
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_sections_arrive_after_restart_with_explicit_resolution(kind, tmp_path):
+    """Persist missing section requests across reopen, resolve only matching sections, and retain the original compact view.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+        tmp_path: Pytest-owned persistent LMDB directory for close/reopen evidence.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     schema = {'$id': '', 'version': '1.0.0', 'type': 'object',
               'properties': {'a': {'type': 'object', 'required': ['name']}}}
     compact, sch, att, _, edg, rul = messaging.sectionate(
@@ -168,6 +223,10 @@ def test_sections_arrive_after_restart_with_explicit_resolution(kind, tmp_path):
 
 
 def test_fixed_acm_is_rejected_by_native_detailed_type_profile():
+    """Reject the obsolete fixed-body acm spelling rather than interpreting it as a supported detailed type.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     event = credential(Kinds.cesr, 'attribute')
     obsolete = event.raw.replace(Ilker(ilk='act').qb64b, Ilker(ilk='acm').qb64b, 1)
     with pytest.raises(DeserializeError):
@@ -177,6 +236,14 @@ def test_fixed_acm_is_rejected_by_native_detailed_type_profile():
 @pytest.mark.parametrize('kind', KINDS)
 @pytest.mark.parametrize('form', FORMS)
 def test_native_hidden_and_one_way_registry_construction(kind, form):
+    """Preserve hidden inner registry declarations across all native forms and compact representations.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+        form: Selected native detailed credential form.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     registry = Diger(ser=b'native-hidden-registry').qb64
     if form in ('aggregate', 'map-aggregate'):
         kwargs = dict(aggregate=['', {'d': '', 'rd': registry, 'name': 'Alice'}])
@@ -196,6 +263,13 @@ def test_native_hidden_and_one_way_registry_construction(kind, form):
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_native_bundled_schema_commitment_uses_section_encoding(kind):
+    """Validate bundled schema resource commitments in the enclosing section encoding and reject content tampering.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     child = SerderACDC.saidifySection(
         {'$id': '', 'version': '1.0.0', 'type': 'string'}, 's', kind)
     schema = {'$id': '', 'version': '1.0.0', 'type': 'object',
@@ -218,6 +292,14 @@ def test_native_bundled_schema_commitment_uses_section_encoding(kind):
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_standalone_schema_dependency_retries_and_distinguishes_invalid(kind, tmp_path):
+    """Distinguish pending missing schema from invalid schema after actual independent section arrival and reopen.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+        tmp_path: Pytest-owned persistent LMDB directory for close/reopen evidence.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     dependency = messaging.sectschema(
         {'$id': '', 'version': '1.0.0', 'type': 'string'}, kind=kind)
     schema = {'$id': '', 'version': '1.0.0', 'type': 'object',
@@ -262,13 +344,28 @@ def test_standalone_schema_dependency_retries_and_distinguishes_invalid(kind, tm
      'EEL7OTDzXjYoaDE8g8064thOpKdxsJWaG8DhRyOB58qW'),
 ])
 def test_pinned_acdc_agid_worked_vectors(kind, members, expected):
-    """ACDC f0bd097 section 'Computation of the AGID', worked examples."""
+    """Match pinned ACDC f0bd097 AGID worked examples independently of the credential builder.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+        members: Pinned ordered aggregate-member input vector.
+        expected: Pinned normative AGID expected for that vector.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     assert Aggor(ael=[''] + members, makify=True, kind=kind).agid == expected
     assert Aggor.verifyDisclosure([expected] + members, kind=kind)
 
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_required_aggregate_does_not_expand_an_already_disclosed_view(kind):
+    """Keep a partial aggregate view immutable when a fuller matching aggregate arrives independently.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     full = credential(kind, 'aggregate')
     partial = copy.deepcopy(full.sad)
     partial['A'][2] = full.sad['A'][2]['d']
@@ -285,6 +382,10 @@ def test_required_aggregate_does_not_expand_an_already_disclosed_view(kind):
 
 
 def test_fragmented_mixed_native_stream_routes_to_concrete_owners():
+    """Route fragmented interleaved native TEL and section messages through their distinct concrete owners.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc.regeventing import Rever
     from keri.acdc.regbasing import RegBaser
     from tests.acdc.test_observing import _copy_kel, _events, _seal
@@ -327,6 +428,16 @@ def test_fragmented_mixed_native_stream_routes_to_concrete_owners():
     (messaging.sectrule, 'r', {}),
 ])
 def test_standalone_empty_section_wire_has_prescribed_container(kind, builder, field, empty):
+    """Use the mandated empty container for standalone section wire bodies in each encoding.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+        builder: Standalone section builder under test.
+        field: Normative section label carried by that builder.
+        empty: Prescribed empty section container.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     event = builder(empty, kind=kind)
     assert event.sad[field] == empty
     parsed = Parser().parseOne(ims=bytearray(wire(event)), processive=False)
@@ -335,6 +446,13 @@ def test_standalone_empty_section_wire_has_prescribed_container(kind, builder, f
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_independent_sections_in_credential_attachment_foot(kind):
+    """Retain independent nested section messages through the ordinary credential attachment parser.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='native-nested-sections', version=Vrsn_2_0) as hby, \
             openLMDB(cls=SectionBaser, name='native-nested-sections') as sections:
         hab = hby.makeHab(name='issuer')
@@ -356,6 +474,13 @@ def test_independent_sections_in_credential_attachment_foot(kind):
 
 @pytest.mark.parametrize('kind', KINDS)
 def test_ambiguous_section_views_require_explicit_source_selection(kind):
+    """Require a named section-message source when one commitment has several disclosed candidate views.
+
+    Parameters:
+        kind: Selected body/section serialization encoding.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     full = messaging.acdcmap(ISSUER, attribute={'d': '', 'profile': {'d': '', 'name': 'Alice'}}, kind=kind)
     partial = copy.deepcopy(full.sad['a'])
     partial['profile'] = partial['profile']['d']

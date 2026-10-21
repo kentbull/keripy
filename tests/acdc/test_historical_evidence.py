@@ -13,6 +13,10 @@ from keri.kering import ValidationError, MisbindingError
 
 
 def test_later_registry_binding_does_not_establish_earlier_observation():
+    """Reject receiver-time cutoffs as historical proof; an explicitly anchored TEL prefix remains stable across later bindings.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='history-holder', version=Vrsn_2_0) as holderHby, \
             openHby(name='history-verifier', version=Vrsn_2_0) as verifierHby, \
             openLMDB(cls=RegBaser, name='history-registry', temp=True) as reger:

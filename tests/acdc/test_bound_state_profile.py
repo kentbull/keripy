@@ -10,10 +10,24 @@ from keri.kering import MisanchorError, MisbindingError, MissingAnchorError
 
 
 def opening(acdc='', state='', *, sn=0, dig=''):
+    """Build a real bound opening with explicit historical Issuee coordinates.
+
+    Args:
+        acdc (str): Target credential SAID; empty for a placeholder.
+        state (str): Transaction state; empty for a placeholder.
+        sn (int): Issuee KEL ordinal, including zero for inception.
+        dig (str): Exact Issuee event digest, empty only for a placeholder.
+
+    Returns:
+        Blinder: Serialized BoundState whose digest commits to all supplied fields."""
     return Blinder.blind(acdc=acdc, state=state, bound=True, bsn=sn, bd=dig)
 
 
 def test_bound_historical_interaction_survives_issuee_rotation():
+    """Verify an exact historical interaction after Issuee rotation; distinguish conflicting digest from missing ordinal.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='bound-historical', version=Vrsn_2_0) as hby:
         issuer = hby.makeHab(name='issuer')
         issuee = hby.makeHab(name='issuee')
@@ -33,6 +47,10 @@ def test_bound_historical_interaction_survives_issuee_rotation():
 
 
 def test_bound_requires_same_credential_and_its_actual_issuee_kel():
+    """Reject substituted credential, foreign KEL, absent Issuee, and incomplete nonvacuous bound coordinates.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='bound-identity', version=Vrsn_2_0) as hby:
         issuer = hby.makeHab(name='issuer')
         issuee = hby.makeHab(name='issuee')
@@ -55,6 +73,10 @@ def test_bound_requires_same_credential_and_its_actual_issuee_kel():
 
 
 def test_bound_placeholders_are_strict_and_unbound_openings_are_unchanged():
+    """Allow only zero/empty bound placeholders while preserving the existing unbound opening contract.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='bound-placeholder', version=Vrsn_2_0) as hby:
         assert vetBound(opening(), acdc=None, db=hby.db) is None
         assert vetBound(Blinder.blind(), acdc=None, db=hby.db) is None
@@ -69,6 +91,10 @@ def test_bound_placeholders_are_strict_and_unbound_openings_are_unchanged():
 
 
 def test_bound_key_event_requires_actual_witness_receipt():
+    """Keep accepted local Issuee events retryable until their real witness receipt quorum is present.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name='bound-receipt-issuer', version=Vrsn_2_0) as ihby, \
             openHby(name='bound-receipt-witness', version=Vrsn_2_0) as whby:
         witness = whby.makeHab(name='witness', transferable=False)
@@ -89,6 +115,13 @@ def test_bound_key_event_requires_actual_witness_receipt():
 
 @pytest.mark.parametrize('valid', [True, False])
 def test_shared_vet_and_ipex_validate_bound_issuee_reference(valid):
+    """Apply the same bound-reference checks in common TEL verification and signed Grant intake.
+
+    Parameters:
+        valid: Whether the bound digest names the real Issuee event or another controller event.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc import Regery, Registrar, blindate, grant, loadHandlers
     from keri.acdc.regeventing import vet, vetBinds
     from keri.core import messagize
@@ -96,6 +129,13 @@ def test_shared_vet_and_ipex_validate_bound_issuee_reference(valid):
 
     class Notices:
         def add(self, attrs):
+            """Ignore accepted-notification attributes for this verifier-only test.
+
+            Args:
+                attrs (dict): Notification payload deliberately unused by the test.
+
+            Returns:
+                None. No notification side effects are needed to observe acceptance."""
             pass
 
     with openHby(name='bound-production', version=Vrsn_2_0) as hby:
@@ -200,6 +240,14 @@ def test_exact_bound_reference_does_not_prove_current_at_publication():
 @pytest.mark.parametrize('sn,expected', [(0, False), (1, False), (2, True),
                                            (7, True), (8, True), (9, False)])
 def test_bound_interval_has_strict_issuance_and_inclusive_revocation(sn, expected):
+    """Check strict issuance and inclusive revocation bounds at their exact ordinal boundaries.
+
+    Parameters:
+        sn: Near issuance KEL ordinal relative to the authenticated bounds.
+        expected: Expected authority validity at that ordinal.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc.regeventing import boundStateAt
     result = boundStateAt([('issued', 1), ('revoked', 8)],
                           issuee='same', issuer='same', sn=sn)
@@ -208,6 +256,10 @@ def test_bound_interval_has_strict_issuance_and_inclusive_revocation(sn, expecte
 
 
 def test_bound_interval_does_not_compare_different_kels_or_inconsistent_history():
+    """Keep cross-KEL ordinals and contradictory bound histories unknown rather than inventing a temporal ordering.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc.regeventing import boundStateAt
     assert boundStateAt([('issued', 1)], issuee='a', issuer='b', sn=99).valid is None
     for transitions in ([('issued', 8), ('revoked', 1)], [('issued', -1)],
@@ -219,12 +271,28 @@ def test_bound_interval_does_not_compare_different_kels_or_inconsistent_history(
                                           ('after-revoked', False), ('partial', False)])
 @pytest.mark.parametrize('registryNear', [False, True])
 def test_production_graph_bound_authority_uses_real_anchored_history(when, expected, registryNear):
+    """Evaluate bound authority using actual signed KEL/TEL history through direct and registry-backed near issuance.
+
+    Parameters:
+        when: Placement of the near issuance relative to authorization/revocation bounds.
+        expected: Expected authority validity at that ordinal.
+        registryNear: Whether near issuance is authenticated through a registry rather than a direct KEL seal.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     from keri.acdc import Regery, Registrar, blindate, grant, loadHandlers, update
     from keri.core import Codens, Counter, Number, SealSource, messagize
     from keri.peer import Exchanger
 
     class Notices:
         def add(self, attrs):
+            """Ignore accepted-notification attributes for this verifier-only test.
+
+            Args:
+                attrs (dict): Notification payload deliberately unused by the test.
+
+            Returns:
+                None. No notification side effects are needed to observe acceptance."""
             pass
 
     with openHby(name='bound-graph-interval', version=Vrsn_2_0) as hby:
@@ -251,6 +319,13 @@ def test_production_graph_bound_authority_uses_real_anchored_history(when, expec
                            edge=dict(d='', authority=dict(n=far.said)))
 
             def publish(state):
+                """Publish an actual bound authority update at the Issuee's current KEL event.
+
+                Args:
+                    state (str): issued/revoked authority state to commit for the far credential.
+
+                Returns:
+                    Blinder: Exact opening after the authority TEL and its real KEL anchor accept."""
                 bound = issuee.kever.serder
                 proof = opening(far.said, state, sn=bound.sn, dig=bound.said)
                 event = blindate(registry.regk, registry.regd, proof.said, sn=registry.sn + 1)
@@ -260,6 +335,11 @@ def test_production_graph_bound_authority_uses_real_anchored_history(when, expec
                 return proof
 
             def anchorNear():
+                """Anchor near issuance in its real issuer KEL, optionally through its TEL.
+
+                Returns:
+                    SealSource: Exact near-issuance anchor coordinates used by graph verification.
+                    Assertions require an optional near-registry update to accept before return."""
                 event = None
                 if nearReg:
                     event = update(nearReg.regk, nearReg.regd, near.said, 'issued', sn=nearReg.sn + 1)
