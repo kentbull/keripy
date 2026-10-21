@@ -182,8 +182,7 @@ class Parser:
     def __init__(self, ims=None, framed=True, piped=False, kvy=None,
                  tvy=None, exc=None, rvy=None, vry=None, local=False,
                  version=Vrsn_2_0, rgy=None, scy=None):
-        """
-        Initialize instance:
+        """Initialize instance:
 
         Parameters:
             ims (bytearray): incoming message stream
@@ -201,7 +200,11 @@ class Parser:
             local (bool): True means event source is local (protected) for validation
                 False means event source is remote (unprotected) for validation
             version (Versionage): instance of version portion of genus version code
-                for default code table"""
+                for default code table
+
+        Returns:
+            None. Retains caller-owned processors and mutable input stream; construction
+            starts no processing loop and opens/closes no processor stores."""
         self.ims = ims if ims is not None else bytearray()
         self.framed = True if framed else False  # extract until end-of-stream
         self.piped = True if piped else False  # use pipeline processor
@@ -385,7 +388,19 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Returns:
+            object: Final allParsator result: last dispatch result when processive,
+            otherwise the last parsed group's MsgParseDom list; None for empty input.
+            A parser return value is not a semantic acceptance receipt. Extraction and
+            handler Exceptions are logged by the underlying generator; interrupts propagate."""
         local = local if local is not None else self.local
         local = True if local else False
 
@@ -443,7 +458,19 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Returns:
+            MsgParseDom | bool | None: Parsed message when processive=False; True once
+            dispatch was attempted, including logged handler failure; None on extraction
+            failure. Call the protocol owner's accepted-state API to determine acceptance.
+            BaseException interruption propagates and must never be reported as success."""
         local = local if local is not None else self.local
         local = True if local else False
 
@@ -501,7 +528,22 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Yields:
+            None: Cooperative progress while input/dependencies are parsed.
+
+        Returns:
+            object: Last processed group's dispatch result, or its parsed MsgParseDom
+            list when processive=False; None for an empty stream. Ordinary extraction
+            failures are logged/flushed at their frame boundary; handler Exceptions are
+            logged without treating the remaining stream as malformed."""
         if ims is not None:  # needs bytearray not bytes since deletes as processes
             if not isinstance(ims, bytearray):
                 ims = bytearray(ims)  # so make bytearray copy
@@ -592,7 +634,22 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Yields:
+            None: Cooperative waits while the selected message is incomplete.
+
+        Returns:
+            MsgParseDom | bool | None: Parsed message in parse-only mode, otherwise True
+            after a dispatch attempt (even a logged handler Exception), or None after
+            extraction failure. This is parser progress rather than protocol acceptance.
+            BaseException cancellation/termination propagates."""
         if ims is not None:  # needs bytearray not bytes since deletes as processes
             if not isinstance(ims, bytearray):
                 ims = bytearray(ims)  # so make bytearray copy
@@ -705,7 +762,20 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Yields:
+            None: Cooperative progress/waits indefinitely, including while input is empty.
+
+        The caller owns cancellation and processors. Ordinary extraction/handler failures
+        are logged and isolated using the same group boundaries as allParsator; this loop
+        has no ordinary completion or durable-acceptance return contract."""
         if ims is not None:  # needs bytearray not bytes since deletes as processes
             if not isinstance(ims, bytearray):
                 ims = bytearray(ims)  # so make bytearray copy
@@ -794,7 +864,26 @@ class Parser:
                 None means do not change default
             processive (bool): True means process messages as they are parsed
                 False means do not process parse only, useful for
-                    testing and debugging"""
+                    testing and debugging
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Yields:
+            None: Cooperative waits while extracting complete nested counted groups.
+
+        Returns:
+            object: Last synchronous dispatch result when processive, otherwise a list of
+            exact parsed MsgParseDom instances in this group.
+
+        Raises:
+            SizedGroupError: Extraction failed within a preflushed counted group.
+            ExtractionError: Unbounded extraction failed and the caller must flush its
+            stream. Handler Exceptions are logged per message; group version state is
+            restored on every exit, including cancellation."""
         if ims is None:
             ims = self.ims
         rgy = rgy if rgy is not None else self.rgy
@@ -996,7 +1085,15 @@ class Parser:
                 sniff for counter
                 if group counter extract and discard but keep track of count
                 so if error while processing attachments then only need to flush
-                attachment count not full stream."""
+                attachment count not full stream.
+
+        Framing contract:
+            With framed=True, the supplied frame must contain the complete declared
+            attachment group: a short group raises ShortageError rather than waiting for
+            bytes outside the frame. An explicitly empty attachment group is a complete
+            unsigned foot, permitted for KEL-anchor-authenticated native registry events.
+            With framed=False, the generator yields for more bytes. It returns parsed
+            structure only; dispatch/authentication is performed separately."""
         if ims is None:
             ims = self.ims
 
@@ -1338,13 +1435,10 @@ class Parser:
 
 
     def msgProcess(self, exts, kvy, tvy, exc, rvy, vry, rgy=None, scy=None):
-        """Processes message + attachemnts contained in exts with respect to
-        contexts in kvy, tvy,exc, rvy, and vry.
+        """Synchronously dispatch one already parsed message and its attachments.
 
-        Uses .ims when ims is not provided.
-
-        Iterator yields when not enough bytes in ims to finish one msg plus
-        attachments. Returns (which raises StopIteration) when finished.
+        This method performs no input extraction and never yields. Processor selection
+        depends on protocol/version/ilk; parsing alone does not establish acceptance.
 
         Parameters:
             exts (dict): parsed msg+attachments substream. Result is suitable
@@ -1390,7 +1484,25 @@ class Parser:
                 sniff for counter
                 if group counter extract and discard but keep track of count
                 so if error while processing attachments then only need to flush
-                attachment count not full stream."""
+                attachment count not full stream.
+
+        Processor parameters:
+            kvy (Kevery | None): KEL and v2 KRAM dispatcher.
+            tvy (Tevery | None): Legacy TEL processor.
+            exc (Exchanger | None): Exchange route processor.
+            rvy (Revery | None): Reply processor.
+            vry (Verifier | None): Legacy credential verifier.
+            rgy (Rever | None): Native rip/upd/bup intake; required for these messages.
+            scy (Sectioner | None): Native credential/section intake; required for these
+            v2 messages. Retaining a section neither admits it nor expands a prior view.
+
+        Returns:
+            bool | None: True after ordinary dispatch; None when delegated to v2 KRAM.
+            Handler return values are not forwarded as an application acceptance receipt.
+
+        Raises:
+            ValidationError: Unsupported message, missing selected processor, or invalid
+            mandatory attachments; protocol handler errors propagate to the parse loop."""
         serder = exts['serder']
 
         if isinstance(serder, SerderKERI):

@@ -296,13 +296,15 @@ class MultisigNotificationHandler:
 
 
 def loadHandlers(exc, mux):
-    """ Load handlers for the peer-to-peer distributed group multisig protocol
+    """Load handlers for the peer-to-peer distributed group multisig protocol
 
     Parameters:
         exc (Exchanger): Peer-to-peer message router
         mux (Multiplexor): Multisig communication coordinator
 
-    """
+    Returns:
+        None. Registers the existing multisig routes, including native registry
+        proposals, on the caller-owned Exchanger; registration grants no approval."""
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/icp", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rot", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/ixn", mux=mux))
@@ -747,18 +749,23 @@ def multisigRpyExn(ghab, rpy, version=None, gvrsn=None, kind=None):
 
 
 def multisigExn(ghab, exn, version=None, kind=None):
-    """ Create a peer to peer message to propose a credential issuance from a multisig group identifier
+    """Wrap one proposed exchange for explicit group-member approval.
 
-    Either rot or ixn are required but not both
-
-    Parameters:
-        ghab (GroupHab): identifier Hab for endorsing the message to send
-        exn (bytes): CESR stream of serialized exchange message, with signatures
+    Args:
+        ghab (GroupHab): Group whose local member signs the wrapper.
+        exn (bytes): Exact signed child exchange stream, including its attachments.
+        version (Versionage | None): Genus/profile selector; v2 uses a native nest,
+        otherwise the legacy embedded-exchange form is retained.
+        kind (str | None): Wrapper body encoding, default JSON.
 
     Returns:
-        tuple: (Serder, bytes): Serder of exn message and CESR attachments
+        tuple[Serder, bytearray]: Member-signed wrapper body and detached attachments.
 
-    """
+    Raises:
+        ValueError: Native input does not parse as exactly one EXN.
+
+    The wrapper commits to the child's SAID; reception is a proposal, never local
+    consent to issue a credential or send the child exchange."""
     if version is not None and version.major == Vrsn_2_0.major:
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(exn), processive=False)
         if len(parsed) != 1 or parsed[0].serder.ilk != Ilks.exn:
@@ -791,7 +798,22 @@ def multisigExn(ghab, exn, version=None, kind=None):
 
 
 def multisigRegistryExn(ghab, tel, anc):
-    """Propose exact native TEL and group KEL bodies, without custody secrets."""
+    """Propose exact native TEL and group KEL bodies without custody secrets.
+
+    Args:
+        ghab (GroupHab): Group whose local member signs the proposal wrapper.
+        tel (bytes): One serialized native registry event with any attachments.
+        anc (bytes): One serialized group key event intended to seal that TEL event.
+
+    Returns:
+        tuple[Serder, bytearray]: Signed /multisig/registry wrapper and attachments
+        nesting both exact parsed child streams in TEL/KEL order.
+
+    Raises:
+        ValueError: Either input does not parse as exactly one event.
+
+    This builder commits to supplied bodies; Multiplexor validates their relationship
+    and each participant must explicitly approve before ordinary event processing."""
     children = []
     for stream in (tel, anc):
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False)
@@ -851,13 +873,20 @@ class Multiplexor:
     """
 
     def __init__(self, hby, notifier, *, exc=None, rgy=None):
-        """ Create Multiplexor for local database and Habs
+        """Create Multiplexor for local database and Habs
 
         Parameters:
             hby (habbing.Habery): database environment for local Habs
             notifier (notifying.Notifier): stores notices for human consumption
 
-        """
+        Additional parameters:
+            exc (Exchanger | None): Shared concrete exchange processor for approved child
+            replay; None creates the existing empty-handler Exchanger.
+            rgy (Rever | None): Native registry processor for approved TEL child replay.
+
+        Returns:
+            None. Habery, notifier, and injected processors remain caller-owned; this
+            object creates no autonomous approval or scheduling lifecycle."""
         self.hby = hby
         self.rtr = Router()
         self.rvy = Revery(db=self.hby.db, rtr=self.rtr)
@@ -869,7 +898,18 @@ class Multiplexor:
         self.notifier = notifier
 
     def _replayApproved(self, said):
-        """Replays a stored wrapped child event after local approval exists"""
+        """Replay a retained child proposal after the caller establishes local approval.
+
+        Args:
+            said (str): Accepted multisig wrapper whose exact retained children to replay.
+
+        Returns:
+            None. Dispatches native children through the injected KEL/EXN/TEL processors,
+            or legacy embedded children through the existing replay path.
+
+        Parsing may escrow dependencies rather than complete a group operation. This
+        method does not create approval or conclude quorum completion; caller/store
+        failures propagate and parser validation uses its ordinary error handling."""
 
         # Check for nested substreams saved under that EXN SAID
         stored = self.hby.db.enst.get(keys=(said,))
@@ -910,7 +950,24 @@ class Multiplexor:
             parser.parse(ims=ims, local=True)
 
     def validate(self, serder, nests=None):
-        """Validate a /multisig exn without mutating local state."""
+        """Check a multisig wrapper's shape, child commitments, and local membership.
+
+        Args:
+            serder (Serder): Sender-authenticated multisig proposal wrapper.
+            nests (Iterable | None): Exact parsed children for native v2 wrappers.
+
+        Returns:
+            tuple | None: (proposal key, sender, route, wrapper SAID) for a supported
+            proposal; None for a legacy wrapper without an embedded digest.
+
+        Raises:
+            ValidationError: Unsupported route, wrong child type/count/SAID, registry
+            controller mismatch, or missing exact TEL seal in the proposed key event.
+            ValueError: Local participant/group membership or sender membership fails.
+
+        This performs no writes and grants no local consent. Native registry proposals
+        use their anchoring key-event SAID as the aggregation key; exchange proposals use
+        the signed child SAID, so distinct bodies cannot share approval accidentally."""
         ked = serder.ked
         embed = ked.get('e')
         nests = nests if nests is not None else []

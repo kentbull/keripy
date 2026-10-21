@@ -711,6 +711,27 @@ class Exchanger:
 
     def logEvent(self, serder, pathed=None, tsgs=None, cigars=None, essrs=None,
                  sourceSeals=None, nests=None, endorsers=None):
+        """Persist a route-accepted exchange and its verified authentication evidence.
+
+        Args:
+            serder (Serder): Sender-authenticated body already accepted by the route flow.
+            pathed (Iterable | None): Exact legacy embedded attachment paths.
+            tsgs (Iterable | None): Verified transferable signature groups to accumulate.
+            cigars (Iterable | None): Verified nontransferable signatures to accumulate.
+            essrs (Iterable | None): Encrypted peer payload fragments to retain.
+            sourceSeals (Iterable | None): Verified explicit KEL anchor triples.
+            nests (Iterable | None): Exact parsed native nested disclosure streams.
+            endorsers (Iterable[str] | None): Behavior-approved non-sender AIDs for the
+            accepted-endorsement reverse index, excluding escrow-only evidence.
+
+        Returns:
+            None. Updates body/authentication storage and the prior-response index.
+
+        One accepted exchange SAID retains its first disclosed paths/nests. A replay may
+        add authentication evidence but cannot replace that view with a fuller one.
+        Transitioning from escrow first discards provisional attachments, then stores the
+        accepted set. Storage/serialization failures propagate; this method is not a
+        standalone semantic verifier or an atomic transaction across every EXN table."""
         dig = serder.said
         pdig = serder.ked['p']
         pathed = pathed or []

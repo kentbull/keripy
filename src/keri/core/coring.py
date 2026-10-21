@@ -4770,11 +4770,18 @@ class Tholder:
 
 
     def _satisfy_numeric(self, indices):
-        """
-        Returns True if satisfies numeric threshold False otherwise
+        """Determine whether distinct verified key indexes meet the numeric threshold.
 
-        Parameters:
-            indices: list of indices (offsets into key list) of verified signatures"""
+        Args:
+            indices (Iterable[int]): Indexes of signatures already cryptographically
+            verified against their respective public keys.
+
+        Returns:
+            bool: Whether a positive threshold is met by the number of unique indexes;
+            False for a nonpositive threshold or an input/counting failure.
+
+        Different signature encodings from one key contribute one vote. This method
+        counts authenticated indexes; it neither verifies signatures nor bounds indexes."""
         try:
             if self.thold > 0 and len(set(indices)) >= self.thold:  # distinct keys
                 return True
