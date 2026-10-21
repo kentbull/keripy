@@ -17,32 +17,63 @@ class Notices:
     """Receive core notifications without opening an unrelated application store."""
 
     def add(self, attrs):
-        """Ignore transient attrs; assertions inspect actual core accepted evidence."""
+        """Ignore transient notifications while testing concrete accepted/escrow evidence.
+
+        Args:
+            attrs (dict): Core accepted-notification payload, unused by this test.
+
+        Returns:
+            None. Opens no unrelated application store or alternate acceptance path."""
         pass
 
 
 def anchor(hab, registry, event):
-    """Anchor the exact staged TEL event through a real controller interaction."""
+    """Commit the exact staged TEL event with a real controller key-event seal.
+
+    Args:
+        hab (Hab): Registry controller creating its next signed interaction.
+        registry (Registry): Concrete engine holding the staged TEL event.
+        event (SerderACDC): Exact registry event to seal and accept.
+
+    Returns:
+        SerderKERI: Accepted sealing key event.
+
+    Raises:
+        AssertionError: The real anchor cannot advance registry acceptance."""
     hab.interact(data=[dict(i=registry.regk, s=event.sad['n'], d=event.said)])
     assert registry.anchorMsg(event.said)
     return hab.kever.serder
 
 
 def public(*events):
-    """Frame public native events with explicit empty attachment groups."""
+    """Frame native public registry bodies for ordinary parser intake.
+
+    Args:
+        *events: Ordered TEL events whose exact raw bytes to concatenate.
+
+    Returns:
+        bytes: Each body followed by a complete v2 zero-count attachment-group foot.
+        The helper neither signs nor injects acceptance for those events."""
     foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
     return b''.join(event.raw + foot for event in events)
 
 
 @pytest.mark.parametrize('bound', [False, True])
 def test_unknown_target_opening_escrows_then_accepts_without_grant_replay(bound):
-    """A stale event-1 verifier retries a valid event-2 opening after acquisition.
+    """Recover a signed Grant carrying a valid opening outside the accepted TEL prefix.
 
-    bound also exercises exact Issuee coordinates. Real sender authentication
-    and semantic dispatch must retain the unaccepted grant in normal escrow;
-    later public KEL/TEL intake alone completes it. Wrong-target, corrupted,
-    duplicate, stale-known, and conflicting-bound openings remain refused.
-    """
+    Args:
+        bound (bool): Whether openings additionally bind exact recipient KEL coordinates.
+
+    Returns:
+        None. Assertions require ordinary EXN escrow at stale event 1 and acceptance
+        after real event-2 KEL/TEL arrival without Grant replay. Malformed/wrong-target,
+        duplicate/stale-known, resolved-source, and conflicting-bound proofs remain
+        permanent refusals; a self-valid opening never published remains unresolved.
+
+    All Haberies/registry/evidence owners close in finally/context-manager paths.
+    Neither the fixture nor dependency classification writes synthetic accepted rows,
+    infers an unmatched opening's ordinal, or asserts publication time/freshness."""
     with (openHby(name='opening-source', version=Vrsn_2_0) as source,
           openHby(name='opening-verifier', version=Vrsn_2_0) as verifier):
         issuer = source.makeHab(name='issuer')
@@ -76,7 +107,15 @@ def test_unknown_target_opening_escrows_then_accepts_without_grant_replay(bound)
             assert verifierRegistry.store.headEvent(registry.regk).said == event1.said
 
             def submission(message, proofs):
-                """Build and intake one actually signed grant with the supplied node foot."""
+                """Build and ingest one signed Grant with exactly the selected node-local proofs.
+
+                Args:
+                    message (str): Human payload distinguishing independent test Grants.
+                    proofs (Iterable[Blinder]): Supplied openings, including deliberate hostile sets.
+
+                Returns:
+                    SerderKERI: Authored exchange after ordinary parser dispatch. Returning it
+                    proves no acceptance; callers inspect concrete EXN/escrow state separately."""
                 from keri.core import messagize
                 origin = messagize(credential, bonds=[proof.data for proof in proofs],
                                    gvrsn=Vrsn_2_0)
