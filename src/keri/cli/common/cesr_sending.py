@@ -10,16 +10,31 @@ from keri.kering import ConfigurationError
 
 
 def send(doer, url, body, timeout):
-    """Send exact CESR bytes with bounded, cooperatively scheduled transport.
+    """Transmit exact CESR bytes through bounded cooperatively scheduled transport.
 
-    ``doer`` is the scheduling DoDoer; ``timeout`` bounds its clock.
-    ``url`` selects HTTP(S) intake or a raw TCP host and explicit port;
-    ``body`` is the already authenticated message stream. HTTP returns the
-    response after checking its status. TCP returns only a transport marker
-    after its send buffer drains, never a receiver acceptance assertion.
-    The caller must observe authenticated protocol or application results.
-    All child sockets close on completion, failure, or cancellation.
-    """
+    Args:
+        doer (DoDoer): Caller-owned scheduler providing tyme/tock and child ownership.
+        url (str): HTTP(S) intake or raw TCP host with an explicit port.
+        body (bytes): Complete preselected stream; this helper does not authenticate it.
+        timeout (float): Positive finite injected-clock duration validated by the caller.
+
+    Yields:
+        float: Caller tock while connection/send or HTTP response remains pending.
+
+    Returns:
+        dict: Checked successful HTTP response, or a TCP sent-byte transport marker
+        once connected and the local send buffer drains. Neither is authenticated
+        credential acceptance, durable remote storage, or application processing proof.
+
+    Raises:
+        ConfigurationError: Unsupported/credentialed URL or unsuccessful HTTP status.
+        ValueError: URL port syntax is invalid.
+        ConnectionError: TCP peer cuts off before the pending send completes.
+        TimeoutError: Connection/send or HTTP response exceeds the caller deadline.
+
+    Uses TCPMessenger's existing send-buffer completion boundary. Every scheduled
+    client child is removed and its socket closed on success, error, or cancellation;
+    HTTP retains the exact path/query target rather than silently changing it."""
     target = urlsplit(url)
     if target.scheme == 'tcp':
         if (not target.hostname or not target.port or target.username or

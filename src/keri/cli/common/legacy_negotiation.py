@@ -26,25 +26,62 @@ class Negotiation(doing.DoDoer):
     """Own one v1 negotiation command, its identity, and bounded delivery work."""
 
     def __init__(self, args, verb):
-        """Retain parsed CLI args and apply/offer/agree verb for scheduled work."""
+        """Schedule one existing v1 IPEX negotiation operation.
+
+        Args:
+            args (Namespace): Existing individual identity and public CLI selections.
+            verb (str): apply, offer, or agree from the concrete legacy command adapter.
+
+        Returns:
+            None. Retains arguments and schedules run; opens no identity or transport yet."""
         self.args, self.verb = args, verb
         super().__init__(doers=[doing.doify(self.run)])
 
     def prior(self, hby, said, route):
-        """Return an accepted v1 message with exact route, or refuse the action."""
+        """Select a retained v1 thread message with the exact expected route.
+
+        Args:
+            hby (Habery): Caller-owned environment containing accepted EXN bodies.
+            said (str): Exact retained predecessor identifier.
+            route (str): Expected legacy IPEX route, including its leading slash.
+
+        Returns:
+            SerderKERI: Retained body with matching v1 version and route.
+
+        Raises:
+            ConfigurationError: No matching retained body exists.
+
+        This lookup does not rerun the entire negotiation. run checks operation-specific
+        sender/recipient/schema relationships and ordinary Exchanger verifies new work."""
         event = hby.db.exns.get((said,))
         if event is None or event.pvrsn != Vrsn_1_0 or event.route != route:
             raise ConfigurationError(f'expected an accepted legacy {route} message')
         return event
 
     def run(self, tymth, tock=0.03125, **kwa):
-        """Authenticate, construct and persist a v1 message, then export/deliver.
+        """Authenticate an individual identity, author a v1 message, and export/deliver.
 
-        tymth/tock supply cooperative time. Args select an existing individual
-        identity and public evidence. Output files are exclusive and include
-        sender KEL evidence; direct or mailbox transport completion is distinct
-        from remote acceptance. Errors close owned stores and child work.
-        """
+        Args:
+            tymth (Callable): HIO injected clock governing bounded delivery.
+            tock (float): Cooperative scheduling interval.
+            **kwa: Additional scheduler lifecycle metadata, unused here.
+
+        Yields:
+            float | None: Initial delay and delegated direct/mailbox transport progress.
+
+        Returns:
+            None. Prints the locally accepted exchange/version/recipient after ordinary
+            Exchanger validation and any selected export/delivery operation completes.
+
+        Raises:
+            ConfigurationError: Invalid timeout/options/identity, missing schema or saved
+            v1 credential, mismatched thread roles/schema, or authored EXN stays unaccepted.
+            TimeoutError: Transport/mailbox delivery exceeds the finite deadline.
+            OSError, ValueError: Exclusive output, input-file, or attribute JSON handling fails.
+
+        Owned Habery, optional legacy Regery/Noter, and delivery child work close on every
+        exit. Existing unencrypted Keeper mode is preserved. Transport completion remains
+        distinct from remote acceptance; native plans/openings require explicit --v2."""
         self.wind(tymth)
         self.tock = tock
         yield tock
