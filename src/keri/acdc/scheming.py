@@ -271,7 +271,10 @@ def _verifySchemer(schema, *, expected=None, kind=None):
     Raises:
         FailedSchemaValidationError: If the schema has an invalid ``$id`` or
             its content does not match the declared or expected SAID.
-    """
+
+    Encoding parameter:
+        kind (str | None): Mapping's actual serialization kind; defaults to JSON.
+        Schemer inputs retain their own raw encoding rather than adopting this hint."""
     # Rebuild an existing Schemer from its bytes
     if isinstance(schema, Schemer):
         schemer = Schemer(raw=schema.raw, verify=False)
@@ -358,7 +361,21 @@ def _checkProfile(schemer):
 
 
 def _cachedSchema(db, said, sections=None):
-    """Authenticate one schema from the concrete KEL or section evidence store."""
+    """Authenticate one schema from the concrete KEL or section evidence store.
+
+    Args:
+        db (Baser): Conventional local schema cache, checked first.
+        said (str): Exact normative schema commitment to authenticate.
+        sections (SectionBaser | None): Independent native sch evidence store.
+
+    Returns:
+        Schemer | _VerifiedSchema | None: Authenticated schema in its received
+        encoding, or None when no candidate is available.
+
+    Raises:
+        FailedSchemaValidationError: A candidate's content does not match its key.
+
+    Schema evidence enables validation only; no credential disclosure is merged."""
     cached = db.schema.get(said)
     if cached is not None:
         return _verifySchemer(cached, expected=said)
@@ -387,13 +404,29 @@ def _registry(schemer, db, sections=None):
     Raises:
         MissingSchemaError: If a referenced schema is not in the local cache.
         FailedSchemaValidationError: If a referenced schema is invalid.
-    """
+
+    Additional parameter:
+        sections (SectionBaser | None): Independent sch messages available to resolve
+        exact schema commitments; never used to expand credential attributes."""
     # Start an empty local registry
     registry = referencing.Registry()
     resources = {}
     references = []
 
     def add(current, aliases=()):
+        """Add one verified local schema and its bundled resources to this collection.
+
+        Args:
+            current (Schemer | _VerifiedSchema): SAID-verified schema in its actual kind.
+            aliases (Iterable[str]): Reference spellings for this same schema resource.
+
+        Returns:
+            None. Mutates the enclosing registry/resources/reference work lists, reusing
+            previously added SAIDs to terminate recursive references.
+
+        Raises:
+            FailedSchemaValidationError: Unsupported schema profile or bundled resource.
+            Missing remote references remain work for the outer local-only resolver."""
         nonlocal registry
         said = current.said
 

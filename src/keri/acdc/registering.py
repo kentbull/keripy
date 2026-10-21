@@ -77,7 +77,19 @@ class RegistryStore:
         return self.event(saider.qb64) if saider is not None else None
 
     def accept(self, regk, sn, serder):
-        """Atomically commit an authenticated event; duplicates leave the head alone."""
+        """Atomically commit an already authenticated event through RegBaser.
+
+        Args:
+            regk (str): Registry whose accepted frontier to advance.
+            sn (int): Exact candidate ordinal.
+            serder (SerderACDC): Event validated for issuer, anchor, and predecessor.
+
+        Returns:
+            bool: True for a new acceptance, False for an identical accepted replay.
+
+        Raises:
+            ValidationError: Keys/linkage are inconsistent or a different event already
+            occupies the slot. No accepted head changes on refusal."""
         return self.baser.accept(regk, sn, serder)
 
     def cloneTelIter(self, regk, sn=0):

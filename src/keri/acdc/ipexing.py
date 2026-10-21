@@ -1281,7 +1281,16 @@ class IpexHandler:
         The KEL processor already verifies the delegator's authorization before
         accepting a foreign dip. A mutable Kever attribute or an unaccepted dip
         body is not delegation evidence. Follow the accepted chain transitively.
-        """
+
+        Args:
+            issuer (str): Near-node issuer whose accepted delegation chain to follow.
+            issuee (str): Far-node Issuee expected at any point in that chain.
+
+        Returns:
+            bool: Whether the Issuee is the issuer or a verified ancestor delegator.
+
+        Raises:
+            MissingChainError: An inception, witness quorum, or delegator seal is absent."""
         seen = set()
         while issuer and issuer not in seen:
             if issuer == issuee:
@@ -1310,7 +1319,18 @@ class IpexHandler:
         in Grant verification. Policy validity is optional; it may impose
         standing, expiry or trust requirements and must return bool or None.
         Missing/malformed evidence is never logical False and cannot be negated.
-        """
+
+        Args:
+            said (str): Authenticated disclosed node SAID to evaluate.
+            nodes (dict): Exact parsed node views indexed by SAID.
+            memo (dict): Shared completed truth values, updated in place.
+            active (set): Current recursion path, restored on every exit.
+            averages (dict): Shared computed numeric group results.
+
+        Returns:
+            bool | None: Known node truth, or unknown for cycles, unsupported structure,
+            or a policy result other than a concrete bool. Policy exceptions propagate;
+            callers must supply trusted application configuration."""
         if said in memo:
             return memo[said]
         if said in active or said not in nodes:
@@ -1349,7 +1369,15 @@ class IpexHandler:
 
     @staticmethod
     def _edgeIssuee(serder):
-        """Distinguish known untargeted from an undisclosed issuee section."""
+        """Distinguish known untargeted from an undisclosed issuee section.
+
+        Args:
+            serder (SerderACDC): Exact disclosed far-node credential.
+
+        Returns:
+            tuple[bool, str | None]: Whether the selected attribute block is visible,
+            and its Issuee when present. A visible block without i is known untargeted;
+            a compact digest is unknown and cannot establish that default."""
         if "a" in serder.sad:
             block = serder.sad["a"]
         else:
@@ -1360,7 +1388,18 @@ class IpexHandler:
         return (True, block.get("i")) if isinstance(block, Mapping) else (False, None)
 
     def _graphRegistry(self, serder, nest):
-        """Resolve a disclosed registry declaration or explicit one-way source."""
+        """Resolve a disclosed registry declaration or explicit one-way source.
+
+        Args:
+            serder (SerderACDC): Exact disclosed node, never a fuller cached view.
+            nest: Parsed node-local source triples used for one-way bindings.
+
+        Returns:
+            str | None: Declared registry, otherwise a unique non-KEL source identifier.
+            Ambiguous or absent source references do not select a registry.
+
+        Raises:
+            MisregistryError: Disclosed protected sections disagree on the issuer registry."""
         from .regeventing import issuerRegistry
         regk = issuerRegistry(serder)
         if regk:
@@ -1379,7 +1418,18 @@ class IpexHandler:
         The earliest near issuance anchor within the verified selected TEL or
         known accepted issuer KEL supplies its ordinal. This does not establish
         globally first publication or rule out other undisclosed evidence.
-        """
+
+        Args:
+            near (SerderACDC): Authenticated credential making the authority assertion.
+            far (SerderACDC): Authenticated authority credential with optional bounds.
+            nodes (dict): Exact disclosed node views and node-local openings.
+
+        Returns:
+            bool | None: True for ordinary unbounded relations, otherwise the known
+            bound-history predicate; None for incomplete, incomparable, or invalid proof.
+
+        Raises:
+            MissingChainError: A required accepted KEL/TEL dependency is unavailable."""
         from . import regeventing
         farNest = nodes[far.said]
         proofs = self._blindProofs(farNest)
@@ -1560,7 +1610,14 @@ class IpexHandler:
 
     @staticmethod
     def _finiteGraphNumber(value):
-        """Accept JSON numeric values without bools, infinities or overflow."""
+        """Accept JSON numeric values without bools, infinities or overflow.
+
+        Args:
+            value: Candidate policy-selected numeric property or arithmetic result.
+
+        Returns:
+            bool: Whether value is an int/float safely representable as a finite float.
+            Arithmetic conversion failures are treated as invalid input."""
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return False
         try:
@@ -1576,7 +1633,24 @@ class IpexHandler:
         graphPolicy.accept(near, group, average). The engine computes arithmetic;
         policy selects the numeric property and interprets the resulting mean.
         Nested AVG/WAVG results supply their computed mean to their parent.
-        """
+
+        Args:
+            group (Mapping): Disclosed operator group or leaf edge.
+            nodes (dict): Exact authenticated nodes indexed by SAID.
+            nserder (SerderACDC): Near node establishing the edge.
+            nested (bool): Whether group is below the section root.
+            inheritedSchema: Additional ancestor constraints, preserved at every child.
+            memo (dict | None): Shared node truth cache for this evaluation only.
+            active (set | None): Shared recursion path used to detect cycles.
+            averages (dict | None): Mutable group-id-to-mean results for nested averages.
+
+        Returns:
+            bool | None: Reduced truth, or unknown for any unresolved/malformed operand.
+
+        Raises:
+            MissingChainError: Required disclosed/authenticated far-node evidence is absent.
+            MissingSchemaError: A pinned schema is unavailable. Trusted policy exceptions
+            propagate instead of being mistaken for authenticated credential truth."""
         memo = {} if memo is None else memo
         active = set() if active is None else active
         averages = {} if averages is None else averages
@@ -1682,7 +1756,17 @@ class IpexHandler:
         Authenticate and schema-check all disclosed nodes before calling this
         method. A false far-node predicate may contribute to NOT/NAND/NOR; an
         unknown or malformed node may not. No default ecosystem trust is implied.
-        """
+
+        Args:
+            nodes (dict): Exact issuer-authenticated and own-schema-checked node views.
+            order (list[str]): Reachable traversal order, with the origin first.
+
+        Returns:
+            bool: Whether the origin evaluates to concrete True; unknown fails closed.
+
+        Raises:
+            MissingChainError, MissingSchemaError: Required edge evidence is unavailable.
+            Exceptions from trusted local graph policy propagate."""
         if not order or set(order) != set(nodes):
             return False
         memo, active, averages = {}, set(), {}
@@ -1951,7 +2035,27 @@ class IpexHandler:
 
     def _vetRegistry(self, regk, proofs, target, controller=None, acdc=None,
                      cutoff=None, sourceSeals=None, requireSource=False):
-        """Vet one issuer or presentation registry using matching BLIDs."""
+        """Vet one issuer or presentation registry using matching BLIDs.
+
+        Args:
+            regk (str): Selected issuer or presentation registry identifier.
+            proofs (Iterable[Blinder]): Node-local disclosures, matched to TEL BLIDs.
+            target (str): Credential/exchange SAID the selected binding must commit to.
+            controller (str | None): Required registry-controlling AID.
+            acdc (SerderACDC | None): Credential for issuer-registry mutual binding.
+            cutoff: Legacy timestamp selector; common verification rejects it.
+            sourceSeals (Iterable | None): Explicit Issuee KEL source triples.
+            requireSource (bool): Require an authenticated historical binding source.
+
+        Returns:
+            RegStateRecord | None: Verified selected binding, or None for permanent
+            structural/binding failure or no injected registry owner.
+
+        Raises:
+            MissingChainError: The accepted chain or selected KEL anchor is unavailable.
+
+        The common verifier authenticates the TEL and openings. Neither a cache hit nor
+        an unsigned source locator is an independent claim of acceptance."""
 
         # Require disclosed proofs and a locally available TEL chain.
         if (evidence := self._registryEvidence(regk)) is None:
@@ -2054,7 +2158,14 @@ class IpexHandler:
         Return ``None`` when a registry-backed ACDC hides a section that could
         contain a presentation requirement. A verifier cannot distinguish an
         omitted requirement from an undisclosed one using only its digest.
-        """
+
+        Args:
+            serder (SerderACDC): Exact disclosed node whose a/A blocks to inspect.
+
+        Returns:
+            list[tuple[str, str]] | None: Unique (Issuee, registry) declarations in wire
+            order, an empty list for no disclosed requirement, or None for ambiguity,
+            malformed identifiers, or a hidden potentially relevant section."""
         if not serder.sad.get("rd"):
             # Inner rd is the protected issuer registry in this form. It does
             # not also impose an Issuee presentation registry requirement.
@@ -2120,7 +2231,19 @@ class IpexHandler:
         return declarations
 
     def _verifyPresentationAuthGraph(self, serder, nodes, order):
-        """Verify every presentation registry in the DAG."""
+        """Verify every presentation registry in the DAG.
+
+        Args:
+            serder (Serder): Grant whose SAID every presentation binding must commit to.
+            nodes (dict): Exact authenticated disclosed nodes and their openings.
+            order (list[str]): Deterministic reachable graph traversal order.
+
+        Returns:
+            list[str] | None: Unique tethering Issuee AIDs when every requirement verifies;
+            None for an invalid or undisclosed requirement.
+
+        Raises:
+            MissingChainError: A declared registry or historical KEL source is unavailable."""
 
         required = []
 
@@ -2188,7 +2311,18 @@ class IpexHandler:
         signatures from the same AID.
         Grants drop unresolved optional evidence after Exchanger requests the
         missing KEL. Other verbs reject foreign, invalid, or unresolved evidence.
-        """
+
+        Args:
+            serder (Serder): Sender-authenticated exchange under this handler's route.
+            tsgs (Iterable | None): Verified non-sender transferable signature groups.
+            cigars (Iterable | None): Verified non-sender nontransferable signatures.
+            sourceSeals (Iterable | None): Verified non-sender KEL source triples.
+            invalid (bool): Whether cryptographic attachment validation found bad evidence.
+            missing (Iterable | None): Attachment dependencies not yet resolved by KRAM.
+
+        Returns:
+            tuple | None: Accepted (tsgs, cigars, sourceSeals), or None for inadmissible
+            supplemental evidence. This filters evidence; it does not validate a Grant DAG."""
         # Normalize optional evidence collections for filtering.
         tsgs = tsgs if tsgs is not None else []
         cigars = cigars if cigars is not None else []
@@ -2245,7 +2379,17 @@ class IpexHandler:
         Reuse the same proof and transition checks, allowing only an identical
         already recorded response. This is a current-evidence check, not an
         assertion about a past application's policy decision.
-        """
+
+        Args:
+            said (str): SAID of the retained native exchange to revalidate.
+
+        Returns:
+            bool: Whether retained sender authentication, exact nests, and current
+            configured route semantics all verify. Unknown/wrong-route bodies return False.
+
+        Raises:
+            KeriError: Retained authentication or dependent evidence is missing/invalid,
+            including MissingChainError and MissingSchemaError for retryable dependencies."""
         from ..peer.exchanging import verify
         serder = self.hby.db.exns.get((said,))
         if serder is None or serder.route != self.resource or serder.pvrsn.major != 2:

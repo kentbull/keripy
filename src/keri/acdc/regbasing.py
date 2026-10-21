@@ -163,7 +163,14 @@ class RegBaser(LMDBer):
         Raises:
             ValidationError: inconsistent event keys, conflicting accepted
                 state, a missing predecessor, or a mismatched prior.
-        """
+
+        Args:
+            regk (str): Registry identifier whose frontier to advance.
+            sn (int): Exact candidate ordinal, including zero for inception.
+            serder (SerderACDC): Event already authenticated by the caller.
+
+        This operation does not authenticate KEL anchors or decide conflict policy;
+        its transaction guarantees bodies, accepted ordinals, and head agree on reopen."""
         inception = serder.ilk == Ilks.rip
         if (serder.ilk not in (Ilks.rip, Ilks.bup, Ilks.upd)
                 or Number(numh=serder.sad['n']).num != sn

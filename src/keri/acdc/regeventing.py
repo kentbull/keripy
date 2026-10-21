@@ -245,7 +245,15 @@ def _kever(db, pre):
 
 def _kelEvent(db, pre, claim):
     """Resolve a claimed anchoring key event of pre's KEL by sequence number
-    (int) or SAID (str).  Returns the event serder or None when absent."""
+    (int) or SAID (str).  Returns the event serder or None when absent.
+
+    Args:
+        db (Baser): Caller-populated accepted KEL database.
+        pre (str): Controller whose accepted events may supply the anchor.
+        claim (int | str): Accepted KEL ordinal or exact event SAID.
+
+    Returns:
+        SerderKERI | None: Accepted event body, or None when the claim is unavailable."""
     if isinstance(claim, int):
         dig = db.kels.getLast(keys=pre, on=claim)
         if dig is None:
@@ -280,7 +288,14 @@ def sealDigests(serder):
 
 
 def _matchesRegistrySeal(candidate, event):
-    """Recognize the approved digest/couple/triple profile, matching all fields."""
+    """Recognize the approved digest/couple/triple profile, matching all fields.
+
+    Args:
+        candidate (Mapping): One seal carried by a key event.
+        event (SerderACDC): Registry event whose digest and optional coordinates match.
+
+    Returns:
+        bool: Whether the exact supported seal shape commits to this event."""
     if not isinstance(candidate, Mapping):
         return False
     if set(candidate) not in ({'d'}, {'s', 'd'}, {'i', 's', 'd'}):
@@ -291,7 +306,16 @@ def _matchesRegistrySeal(candidate, event):
 
 
 def _scanKel(db, pre, serder):
-    """Find the earliest accepted, fully witnessed matching controller seal."""
+    """Find the earliest accepted, fully witnessed matching controller seal.
+
+    Args:
+        db (Baser): Caller-populated authenticated KEL database.
+        pre (str): Required registry controller AID.
+        serder (SerderACDC): TEL event whose seal to locate.
+
+    Returns:
+        tuple[int, str] | None: First matching accepted KEL ordinal/digest, or None.
+        Unwitnessed events cannot satisfy an anchor."""
     kever = _kever(db, pre)
     if kever is None:
         return None
@@ -355,7 +379,20 @@ def _validateSourceLocators(serder, *, db, issuer, sscs=(), ssts=()):
     unsigned attachments. Source couples/triples locate evidence; they cannot
     impose a persistent sender-controlled condition on later authentic replay.
     Unavailable KEL evidence therefore follows ordinary anchor discovery/escrow.
-    """
+
+    Args:
+        serder (SerderACDC): Structurally validated candidate TEL event.
+        db (Baser): Accepted KEL evidence database.
+        issuer (str | None): Known authorized controller, if inception is available.
+        sscs (Iterable): Issuer-implied source couples supplied on this intake.
+        ssts (Iterable): Explicit-controller source triples supplied on this intake.
+
+    Returns:
+        None. It retains no sender-selected requirement on later replay.
+
+    Raises:
+        ValidationError: A resolvable locator has the wrong controller, digest, or seal,
+        or lacks its required number/digest pair."""
     locators = [(issuer, number, diger) for number, diger in sscs]
     locators.extend((prefixer.qb64, number, diger)
                     for prefixer, number, diger in ssts)
@@ -477,7 +514,17 @@ def vetUpdate(bup, rip):
 
 
 def _blindCandidates(blinder):
-    """Decode exactly one blind or bound opening without ignoring trailing bytes."""
+    """Decode exactly one blind or bound opening without ignoring trailing bytes.
+
+    Args:
+        blinder (Blinder | str | bytes): One complete blind or bound opening.
+
+    Returns:
+        list[Blinder]: Supported exact decodings; a Blinder is preserved directly.
+
+    Raises:
+        UnverifiedBlindError: No supported exact encoding consumes all supplied bytes.
+        Opening target/BLID authentication is performed separately by vetBlind."""
     if isinstance(blinder, Blinder):
         return [blinder]
     qb64 = blinder.decode() if hasattr(blinder, "decode") else blinder
@@ -556,7 +603,21 @@ def vetBound(blinder, *, acdc, db):
     BoundState, or None for a BlindState or a strict all-empty placeholder.
     Missing event/witness evidence is retryable; a conflicting accepted digest,
     missing issuee, or substituted credential is a permanent binding failure.
-    """
+
+    Args:
+        blinder (Blinder | str | bytes): Opening already authenticated by vetBlind.
+        acdc (SerderACDC): Credential fixing the expected target and Issuee.
+        db (Baser): Accepted Issuee KEL and verified witness receipt evidence.
+
+    Returns:
+        SerderKERI | None: Referenced bound key event, or None for an unbound/vacuous
+        opening with no historical authority assertion.
+
+    Raises:
+        MissingAnchorError: Referenced accepted event or witness quorum is absent.
+        MisanchorError: A different event occupies the accepted bound ordinal.
+        MisbindingError: Target, Issuee, or placeholder bound coordinates conflict.
+        UnverifiedBlindError: The opening cannot be decoded exactly."""
     blinder = _blindCandidates(blinder)[0]
     if blinder.clan != BoundState:
         return None
@@ -603,7 +664,17 @@ def boundStateAt(transitions, *, issuee, issuer, sn):
     normative current-event premise, NOT independent proof of publication time.
     The assurance is explicit because valid signatures cannot prove that an
     issuer did not choose an old bound. Different KEL ordinals are incomparable.
-    """
+
+    Args:
+        transitions (Iterable[tuple[str, int]]): Complete authenticated state/bound
+        ordinal history in verified TEL order, excluding vacuous placeholders.
+        issuee (str): KEL whose ordinals supply the authority bounds.
+        issuer (str): KEL controller of the near credential's issuance event.
+        sn (int): Near issuance event's authenticated KEL ordinal.
+
+    Returns:
+        BoundStateResult: Explicit truth/unknown result and interpretation assurance.
+        Malformed/incomparable histories are unknown rather than a negatable False."""
     if not issuee or issuer != issuee:
         return BoundStateResult(None, 'incomparable-kels')
     if type(sn) is not int or sn < 0:
@@ -625,7 +696,15 @@ def issuerRegistry(acdc):
     A top-level registry makes inner registries application/presentation
     declarations. Without it, disclosed a/A blocks may carry the issuer rd.
     No cached disclosure is consulted and no hidden block is expanded.
-    """
+
+    Args:
+        acdc (SerderACDC): Exact presented credential view.
+
+    Returns:
+        str | None: Top-level rd, otherwise the unique visible inner rd, or None.
+
+    Raises:
+        MisregistryError: Visible protected sections name multiple issuer registries."""
     serder = _coerce(acdc)
     if regid := serder.sad.get('rd'):
         return regid
@@ -938,7 +1017,17 @@ class _RegEventer:
             regk (str | None): bound registry identifier when reopening or
                 attaching to an existing local registry state.
             regd (str | None): accepted head-event SAID when already known.
-        """
+
+        Additional parameters:
+            db (Baser | None): Explicit accepted KEL owner for verifier-side construction
+            without a local habitat; otherwise hab.db is used.
+            issuer (str | None): Explicit controller without a habitat; otherwise hab.pre.
+
+        Returns:
+            None. Stores/habitat remain caller-owned; construction does not advance a TEL.
+
+        Raises:
+            ConfigurationError: KEL database, issuer, or registry store is unavailable."""
         # The engine needs the controlling habitat for local KEL inspection,
         # the registry store for persistence, and the current accepted TEL tip
         self.hab = hab
@@ -1584,13 +1673,35 @@ class Rever:
     """
 
     def __init__(self, *, db, reger):
+        """Create foreign-registry intake over caller-owned durable evidence stores.
+
+        Args:
+            db (Baser): Authenticated accepted KEL evidence used to verify issuer seals.
+            reger (RegBaser): TEL bodies, accepted frontier, and durable dependency queues.
+
+        Returns:
+            None. Neither store is opened, closed, or trusted merely by constructing Rever."""
         from .registering import RegistryStore
         self.db = db
         self.reger = reger
         self.store = RegistryStore(reger)
 
     def processEvent(self, serder, *, sscs=(), ssts=(), **kwa):
-        """Return acceptance, or False after durably escrowing dependencies."""
+        """Return acceptance, or False after durably escrowing dependencies.
+
+        Args:
+            serder (SerderACDC): Candidate native rip/upd/bup event.
+            sscs (Iterable): Issuer-implied KEL source couples on this intake.
+            ssts (Iterable): Explicit KEL source triples on this intake.
+            **kwa: Additional parser dispatch metadata, unused here.
+
+        Returns:
+            bool: True for authenticated acceptance/replay; False for durably pending work.
+
+        Raises:
+            ValidationError: Candidate structure, controller, linkage, or source is invalid.
+            DuplicitousRegistryError: A different occupied-slot candidate independently
+            authenticates. Existing accepted ordinals/head remain unchanged."""
         event = _normalizeEventRecord(serder)
         if event.ilk == Ilks.rip:
             _validateRip(event.serder)
@@ -1611,7 +1722,12 @@ class Rever:
         return engine.processEvent(event.serder, sscs=sscs, ssts=ssts)
 
     def processEscrows(self):
-        """Recover foreign work from durable escrow rows, including on reopen."""
+        """Recover foreign work from durable escrow rows, including on reopen.
+
+        Returns:
+            None. Incomplete inception/anchor/predecessor work remains durably pending.
+            Candidate ValidationError is logged and isolated; unexpected store errors
+            propagate instead of discarding unaudited work."""
         regks = set()
         for escrow in (self.reger.maes, self.reger.ooes):
             for keys, _, _ in escrow.getTopItemIter():
