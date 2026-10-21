@@ -364,12 +364,15 @@ class Advance(native.NativeAuthor):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
+        self.auths = native.readWitnessAuth(getattr(args, 'witness_auth_file', None))
         with native.opened(args, custody=True) as (hby, rgy, wallet):
             from keri.app import GroupHab
             hab = hby.habByName(args.alias)
             reg = native.registry(rgy, args.registry_name, hab)
             if hab is None or isinstance(hab, GroupHab):
                 raise ConfigurationError('advance currently requires an individual registry controller')
+            if set(self.auths) - set(hab.kever.wits):
+                raise ConfigurationError('witness authentication names a noncurrent witness')
             acdc = wallet.issuedCredential(args.said)
             head = reg.store.headEvent(reg.regk)
             if head is None or head.ilk != 'bup':
