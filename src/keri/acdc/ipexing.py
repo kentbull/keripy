@@ -2075,7 +2075,10 @@ class IpexHandler:
             structural/binding failure or no injected registry owner.
 
         Raises:
-            MissingChainError: The accepted chain or selected KEL anchor is unavailable.
+            MissingChainError: The accepted chain, selected KEL anchor, or TEL event
+                for a self-verified target opening is unavailable. An unmatched
+                opening proves no newer ordinal, state, or freshness; even a
+                self-valid foreign opening may remain unresolved without acceptance.
 
         The common verifier authenticates the TEL and openings. Neither a cache hit nor
         an unsigned source locator is an independent claim of acceptance."""
@@ -2084,6 +2087,9 @@ class IpexHandler:
         if (evidence := self._registryEvidence(regk)) is None:
             return None
 
+        # Preserve the exact disclosed set for dependency classification if the
+        # accepted prefix cannot yet consume it. Callers may supply an iterator.
+        proofs = list(proofs)
         # Import lazily to avoid the ACDC module cycle.
         from . import regeventing
         try:
@@ -2168,10 +2174,52 @@ class IpexHandler:
                     f"missing presentation anchor source for registry {regk}") from ex
             return None
 
+        except UnverifiedBlindError as ex:
+            # A resolved historical source selects an exact accepted event;
+            # another opening cannot replace that event's required commitment.
+            if requireSource:
+                return None
+            known = {update.sad['b'] for update in evidence[1]
+                     if update.ilk == Ilks.bup}
+            unresolved = None
+            try:
+                if acdc is not None:
+                    regeventing.vetBindings(acdc, regid=regk,
+                        issuer=evidence[0].sad['i'], td=target)
+                checked = []
+                for proof in proofs:
+                    disclosed, _ = regeventing.vetBlind(proof, blid=proof.said)
+                    if proof.said in known and sum(item.said == proof.said for item in proofs) != 1:
+                        return None  # Known commitments still require one opening.
+                    checked.append((proof, disclosed))
+                missingBound = None
+                for proof, disclosed in checked:
+                    if disclosed != target:
+                        continue
+                    try:
+                        regeventing.vetBound(proof, acdc=acdc, db=self.hby.db)
+                    except MissingAnchorError as error:
+                        # Scan all target proofs before returning a dependency:
+                        # a known contradiction wins regardless of proof order.
+                        missingBound = error
+                    if proof.said not in known:
+                        unresolved = proof.said
+            except (UnverifiedBlindError, MisbindingError, MisanchorError):
+                return None
+            if unresolved is not None:
+                if missingBound is not None:
+                    raise MissingChainError(
+                        f"registry {regk} opening is missing bound KEL evidence") from missingBound
+                # This is only an authenticated disclosure with no matching
+                # accepted TEL event. Fetch/retry through normal EXN escrow;
+                # do not infer its ordinal, issuer publication time, or validity.
+                raise MissingChainError(
+                    f"registry {regk} is missing TEL evidence for disclosed blid={unresolved}") from ex
+            return None
+
         # Structurally invalid or misbound TEL evidence fails permanently.
         except (MisdigestError, MissequenceError, MisregistryError,
-                RootSealError, MisbindingError, DuplicitousRegistryError,
-                UnverifiedBlindError):
+                RootSealError, MisbindingError, DuplicitousRegistryError):
             return None
 
     @staticmethod
