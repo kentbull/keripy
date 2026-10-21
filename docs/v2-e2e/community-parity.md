@@ -155,3 +155,16 @@ The sequential collector failed this test before the change. The development
 composition passes afterward; five focused installed-wheel receipt tests also
 pass, including genuine v1/v2 signatures and cancellation cleanup. Final clean
 artifact qualification remains separate.
+
+### Released HTTP media type
+
+Actual isolated KERIpy 1.2.14 and 1.3.6 peers exposed a 406 before receipt
+verification: their `app.httping.CESR_CONTENT_TYPE` is
+`application/cesr+json`, whereas this core emits `application/cesr`.
+`parseCesrHttpRequest` now accepts both established names for its existing
+JSON-body/attachment-header contract. Outbound framing and the required JSON
+and attachment checks remain unchanged. This is a local compatibility adaptation
+of the upstream parser, grounded in those released source distributions.
+All six HTTP helper tests pass; the hosted released-peer matrix subsequently
+verifies registration, unauthorized refusal and authentic indexed receipts in
+both unmodified released interpreters. Its harness lives in witness-hk.
