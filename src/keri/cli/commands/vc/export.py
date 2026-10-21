@@ -11,6 +11,8 @@ from hio.base import doing
 from hio.help import ogler
 
 from ...common import Parsery, setupHby
+from ...common import native
+from ....kering import ConfigurationError
 
 from ....app import serialize
 from ....core import SerderKERI
@@ -32,12 +34,20 @@ parser.add_argument("--chains", help="export any chained credentials", action="s
 parser.add_argument("--full", help="export credential, signatures, tels, kels and full chains", action="store_true")
 parser.add_argument("--files", help="export artifacts to individual files keyed off of AIDs or SAIDS, default is "
                                     "stdout", action="store_true")
+native.options(parser)
+parser.add_argument('--custody', action='store_true', help='export native private custody to an owner-only file')
+parser.add_argument('--registry-name', '-r', default=None)
+parser.add_argument('--output', default=None, help='native export destination (created exclusively)')
 
 
 def export_credentials(args):
     """ Command line list credential registries handler
 
     """
+    if getattr(args, 'native', False):
+        if not args.output or not args.registry_name:
+            raise ConfigurationError('native export requires --output and --registry-name')
+        return native.read(args, 'export')
     tels = args.tels
     kels = args.kels
     chains = args.chains if args.chains is not None else {}

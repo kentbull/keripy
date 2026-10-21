@@ -4,6 +4,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ....common import Parsery, setupHby
+from ....common import native
 
 from .....app import (GroupHab, Notifier, MailboxDirector,
                       HaberyDoer, Multiplexor, Counselor,
@@ -36,9 +37,13 @@ parser.add_argument('--alias', '-a', help='human readable alias for the new iden
 parser.add_argument('--usage', '-u', help='For multisig issuers, a message to other participants about how this'
                                           ' registry is to be used',
                     default=None)
+native.options(parser, author=True)
+parser.add_argument('--discloser', help='native registry designated disclosure identifier', default=None)
 
 
 def registryIncept(args):
+    if getattr(args, 'native', False):
+        return [native.NativeAuthor(args, 'incept')]
     name = args.name
     alias = args.alias
     bran = args.bran

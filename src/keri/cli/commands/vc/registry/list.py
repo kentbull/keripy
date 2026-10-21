@@ -10,6 +10,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ....common import Parsery, existingHby
+from ....common import native
 
 from .....kering import ConfigurationError
 from .....vdr import Regery
@@ -21,12 +22,15 @@ parser = argparse.ArgumentParser(description='List credential registry names and
                                  parents=[Parsery.keystore()])
 parser.set_defaults(handler=lambda args: list_registries(args))
 parser.add_argument("--verbose", "-V", help="print JSON of all current events", action="store_true")
+native.options(parser)
 
 
 def list_registries(args):
     """ Command line list credential registries handler
 
     """
+    if getattr(args, 'native', False):
+        return native.read(args, 'registries')
     kwa = dict(args=args)
     return [doing.doify(registries, **kwa)]
 

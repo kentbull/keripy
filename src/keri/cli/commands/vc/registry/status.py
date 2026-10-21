@@ -4,6 +4,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ....common import Parsery, setupHby
+from ....common import native
 
 from .....app import MailboxDirector, HaberyDoer, Counselor
 from .....core import SerderKERI
@@ -18,9 +19,12 @@ parser.set_defaults(handler=lambda args: registryStatus(args))
 parser.add_argument('--registry-name', '-r', help='Human readable name for registry, defaults to name of Habitat',
                     default=None, required=True)
 parser.add_argument("--verbose", "-V", help="print JSON of all current events", action="store_true")
+native.options(parser)
 
 
 def registryStatus(args):
+    if getattr(args, 'native', False):
+        return native.read(args, 'status')
     name = args.name
     bran = args.bran
     base = args.base

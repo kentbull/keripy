@@ -1,0 +1,388 @@
+"""Real independent group members, native TELs and IPEX approval thresholds."""
+from contextlib import ExitStack, contextmanager
+
+import pytest
+
+from keri import Vrsn_2_0
+from keri.acdc import Regery, acdcmap, grant, loadHandlers
+from keri.acdc.messaging import regcept, update
+from keri.app import openHby
+from keri.app.native_grouping import NativeGroup
+from keri.core import Diger, Number, Parser, messagize
+from keri.kering import ValidationError
+from keri.peer import Exchanger
+
+
+class Notices:
+    def add(self, attrs):
+        pass
+
+
+@pytest.fixture
+def members():
+    with groupMembers('members') as result:
+        yield result
+
+
+@contextmanager
+def groupMembers(label):
+    with ExitStack() as stack:
+        hbys = [stack.enter_context(openHby(name=f'native-group-{label}-{n}', version=Vrsn_2_0))
+                for n in range(3)]
+        people = [hby.makeHab(name='member') for hby in hbys]
+        for hby in hbys:
+            for person in people:
+                Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(
+                    ims=bytearray(person.replay(gvrsn=Vrsn_2_0)), local=True)
+        groups = [hby.makeGroupHab(group='group', mhab=person,
+                    smids=[member.pre for member in people], isith='2', nsith='2',
+                    version=Vrsn_2_0) for hby, person in zip(hbys, people)]
+        messages = [group.msgOwnInception(allowPartiallySigned=True, gvrsn=Vrsn_2_0)
+                    for group in groups]
+        for hby in hbys:
+            for message in messages:
+                Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(ims=bytearray(message), local=True)
+            hby.kvy.processEscrows()
+        assert len({group.pre for group in groups}) == 1
+        assert all(group.accepted for group in groups)
+        rgys, coordinators = [], []
+        for hby, group in zip(hbys, groups):
+            rgy = Regery(hby=hby, temp=True)
+            stack.callback(rgy.close)
+            exc = Exchanger(hby, handlers=[])
+            loadHandlers(hby, exc, Notices(), rgy=rgy)
+            rgys.append(rgy)
+            coordinators.append(NativeGroup(hby, rgy, group, exc, Notices()))
+        yield hbys, groups, rgys, coordinators
+
+
+def test_registry_quorum_and_explicit_member_approval(members):
+    hbys, groups, rgys, owners = members
+    rip = regcept(groups[0].pre)
+    first, atc = owners[0].approveRegistry(rip)
+    assert rgys[0].store.headEvent(rip.said) is None
+    proposal = first.raw + atc
+    event, anchor = owners[1].registryProposal(proposal)
+    owners[2].receive(proposal)
+    assert event.said == rip.said
+    assert rgys[1].store.headEvent(rip.said) is None
+    assert rgys[2].store.headEvent(rip.said) is None
+    second, batc = owners[1].approveRegistry(event, anchor)
+    assert rgys[1].store.headEvent(rip.said).said == rip.said
+    owners[0].receive(second.raw + batc)
+    assert rgys[0].store.headEvent(rip.said).said == rip.said
+    owners[2].receive(second.raw + batc)
+    assert rgys[2].store.headEvent(rip.said) is None
+    owners[2].approveRegistry(event, anchor)
+    assert rgys[2].store.headEvent(rip.said).said == rip.said
+
+    credential = acdcmap(israid=groups[0].pre, regid=rip.said,
+                         attribute=dict(d='', role='group-issued'))
+    issued = update(rip.said, rip.said, credential.said, 'issued')
+    first, atc = owners[0].approveRegistry(issued)
+    event, anchor = owners[1].registryProposal(first.raw + atc)
+    assert rgys[1].store.headEvent(rip.said).said == rip.said
+    second, batc = owners[1].approveRegistry(event, anchor)
+    owners[0].receive(second.raw + batc)
+    assert rgys[0].store.headEvent(rip.said).said == issued.said
+    assert rgys[1].store.headEvent(rip.said).said == issued.said
+    # Exact old proposal replay cannot lower the accepted native TEL head.
+    owners[0].receive(proposal)
+    assert rgys[0].store.headEvent(rip.said).said == issued.said
+
+
+def test_group_ipex_uses_real_threshold_and_shared_semantic_handler(members):
+    hbys, groups, _, owners = members
+    holder = hbys[0].makeHab(name='holder')
+    credential = acdcmap(israid=groups[0].pre, iseaid=holder.pre,
+                         attribute=dict(d='', role='group-grant'))
+    # The ACDC origin has the same 2-of-3 issuer threshold as the EXN. Each
+    # member's explicit approval contributes its own independent origin proof.
+    signatures = [group.sign(credential.raw)[0] for group in groups[:2]]
+    origin = messagize(credential, tsgs=[(groups[0].kever.prefixer,
+        Number(num=groups[0].kever.lastEst.s), Diger(qb64=groups[0].kever.lastEst.d),
+        signatures)], gvrsn=Vrsn_2_0)
+    exn, atc = grant(groups[0], holder.pre, 'group approved grant', origin=origin)
+    first, fatc = owners[0].approveExchange(exn.raw + atc)
+    assert not owners[0].completeExchange(exn.said)
+    owners[1].receive(first.raw + fatc)
+    owners[2].receive(first.raw + fatc)
+    assert not owners[1].completeExchange(exn.said)
+    second, satc = owners[1].approveExchange(exn.raw + atc)
+    assert owners[1].completeExchange(exn.said)
+    owners[0].receive(second.raw + satc)
+    assert owners[0].completeExchange(exn.said)
+    owners[2].receive(second.raw + satc)
+    assert not owners[2].completeExchange(exn.said)
+    owners[2].approveExchange(exn.raw + atc)
+    assert owners[2].completeExchange(exn.said)
+
+
+def test_native_registry_approval_refuses_different_tel(members):
+    _, groups, _, owners = members
+    rip = regcept(groups[0].pre)
+    proposal, atc = owners[0].approveRegistry(rip)
+    _, anchor = owners[1].registryProposal(proposal.raw + atc)
+    substitute = regcept(groups[0].pre)
+    with pytest.raises(ValidationError, match='exclusively anchor'):
+        owners[1].approveRegistry(substitute, anchor)
+
+
+def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fanout(tmp_path):
+    import uuid
+    from tests.app.test_native_cli import PASSCODE, command, invoke
+
+    names = ['group-cli-' + uuid.uuid4().hex for _ in range(2)]
+    with ExitStack() as stack:
+        hbys = [stack.enter_context(openHby(name=name, base='native-cli-test', temp=False,
+                    bran=PASSCODE, version=Vrsn_2_0)) for name in names]
+        people = [hby.makeHab(name='member') for hby in hbys]
+        for hby, remote in zip(hbys, reversed(people)):
+            Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(
+                ims=bytearray(remote.replay(gvrsn=Vrsn_2_0)), local=True)
+        groups = [hby.makeGroupHab(group='group', mhab=person,
+                    smids=[member.pre for member in people], isith='2', nsith='2', version=Vrsn_2_0)
+                  for hby, person in zip(hbys, people)]
+        messages = [group.msgOwnInception(allowPartiallySigned=True, gvrsn=Vrsn_2_0)
+                    for group in groups]
+        for hby, message in zip(hbys, reversed(messages)):
+            Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(ims=bytearray(message), local=True)
+            hby.kvy.processEscrows()
+        prefix = groups[0].pre
+
+    first, second = tmp_path / 'first.cesr', tmp_path / 'second.cesr'
+    result = command(names[0], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+        '-r', 'registry', '--proposal-output', str(first), '--timeout', '0.2')
+    assert first.exists()
+    assert 'pending member approval' in result.stdout
+    pending = invoke(names[0], 'vc', 'registry', 'status', '--native', '-r', 'registry')[0]
+    assert pending['accepted'] is False and pending['pending']
+    accepted = invoke(names[1], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+        '-r', 'registry', '--proposal', str(first), '--proposal-output', str(second), '--timeout', '2')[0]
+    assert accepted['accepted'] and accepted['controller'] == prefix
+    assert accepted['custody'] == 'requires explicit protected import'
+    accepted = invoke(names[0], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+        '-r', 'registry', '--proposal', str(second), '--timeout', '2')[0]
+    assert accepted['accepted']
+
+    # A public update needs no independently regenerated custody secret. The
+    # exact pending TEL and KEL bodies are reused after each CLI process exits.
+    issue1, issue2 = tmp_path / 'issue1.cesr', tmp_path / 'issue2.cesr'
+    args = ('vc', 'create', '--native', '-a', 'group', '-r', 'registry',
+            '--unblinded', '--data', '{"role":"member-approved"}')
+    result = command(names[0], *args, '--proposal-output', str(issue1), '--timeout', '0.2')
+    assert 'pending member approval' in result.stdout
+    issued = invoke(names[1], *args, '--proposal', str(issue1), '--proposal-output', str(issue2), '--timeout', '2')[0]
+    assert issued['state'] == 'issued'
+    issuedAgain = invoke(names[0], *args, '--proposal', str(issue2), '--timeout', '2')[0]
+    assert issuedAgain['credential'] == issued['credential']
+    assert invoke(names[0], 'vc', 'registry', 'status', '--native', '-r', 'registry')[0]['sn'] == 1
+    for path in (first, second, issue1, issue2):
+        parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(path.read_bytes()), processive=False)
+        wrapper = parsed[-1]
+        assert wrapper.serder.route == '/multisig/registry'
+        assert not wrapper.bsqs and not wrapper.bsss
+
+
+@contextmanager
+def groupNetwork(members, unused_tcp_port_factory):
+    import time
+    import falcon
+    from hio.base import doing
+    from hio.core import http
+    from keri.app import HttpEnd
+    from keri.kering import Kinds, Roles
+
+    hbys, groups, rgys, owners = members
+
+    class Intake(HttpEnd):
+        def __init__(self, owner):
+            self.owner, self.requests = owner, 0
+            super().__init__(rxbs=bytearray())
+
+        def on_post(self, req, rep):
+            super().on_post(req, rep)
+            self.requests += 1
+            self.owner.receive(self.rxbs)
+            self.rxbs.clear()
+
+        def on_put(self, req, rep):
+            super().on_put(req, rep)
+            self.requests += 1
+            self.owner.receive(self.rxbs)
+            self.rxbs.clear()
+
+    servers, endpoints = [], []
+    for group, owner in zip(groups, owners):
+        port = unused_tcp_port_factory()
+        app = falcon.App()
+        endpoint = Intake(owner)
+        app.add_route('/', endpoint)
+        endpoints.append(endpoint)
+        servers.append(http.Server(port=port, app=app))
+        # Endpoint discovery itself uses authenticated KERI replies.
+        role = group.mhab.makeEndRole(eid=group.mhab.pre, role=Roles.controller,
+            version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+        location = group.mhab.makeLocScheme(url=f'http://127.0.0.1:{port}',
+            version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+        for hby in hbys:
+            hby.psr.parse(ims=bytearray(role + location))
+
+    doist = doing.Doist(tock=0.01, real=False,
+        doers=owners + [http.ServerDoer(server=server) for server in servers])
+    doist.enter()
+    try:
+        def until(predicate):
+            deadline = time.monotonic() + 5
+            while not predicate() and time.monotonic() < deadline:
+                doist.recur()
+                time.sleep(0.01)
+            assert predicate()
+
+        yield until, endpoints
+    finally:
+        doist.exit()
+        for server in servers:
+            server.close()
+
+
+def test_group_fanout_uses_real_http_and_keeps_unapproved_member_pending(members, unused_tcp_port_factory):
+    hbys, groups, rgys, owners = members
+    with groupNetwork(members, unused_tcp_port_factory) as (until, endpoints):
+        rip = regcept(groups[0].pre)
+        first, atc = owners[0].approveRegistry(rip)
+        owners[0].send(first, atc)
+        until(lambda: endpoints[1].requests > 0 and endpoints[2].requests > 0)
+        assert rgys[1].store.headEvent(rip.said) is None
+        assert rgys[2].store.headEvent(rip.said) is None
+
+        event, anchor = owners[1].registryProposal(first.raw + atc)
+        second, batc = owners[1].approveRegistry(event, anchor)
+        owners[1].send(second, batc)
+        until(lambda: rgys[0].store.headEvent(rip.said) is not None and endpoints[2].requests > 1)
+        assert rgys[0].store.headEvent(rip.said).said == rip.said
+        assert rgys[1].store.headEvent(rip.said).said == rip.said
+        assert rgys[2].store.headEvent(rip.said) is None
+
+
+def test_group_issuer_holder_admission_presentation_and_revocation_converge(members, unused_tcp_port_factory):
+    from keri.acdc import admit
+    from keri.acdc.regeventing import vet
+    from keri.app.credentialing import Wallet
+    from keri.core import Codens, Counter, Prefixer
+    from keri.peer import serializeMessage
+    from keri.peer.exchanging import serializeParsedSubstream
+
+    issuerTeam = members
+    with groupMembers('holders') as holderTeam, ExitStack() as stack:
+        allTeams = [issuerTeam, holderTeam]
+        combined = tuple([item for team in allTeams for item in team[index]] for index in range(4))
+        hbys, groups, rgys, owners = combined
+        # Establish actual remote member and group KELs at each independent peer.
+        for owner in owners:
+            for group in groups:
+                owner.receive(group.mhab.replay(gvrsn=Vrsn_2_0))
+                owner.receive(group.replay(gvrsn=Vrsn_2_0))
+        wallets = [Wallet(hby, rgy, exc=owner.exc) for hby, rgy, owner in zip(hbys, rgys, owners)]
+        for wallet in wallets:
+            stack.callback(wallet.close)
+        foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+
+        with groupNetwork(combined, unused_tcp_port_factory) as (until, endpoints):
+            def approveRegistry(team, event):
+                _, _, stores, peers = team
+                first, atc = peers[0].approveRegistry(event)
+                peers[0].send(first, atc)
+                until(lambda: peers[1].exc.complete(first.said) and peers[2].exc.complete(first.said))
+                proposed, anchor = peers[1].registryProposal(first.raw + atc)
+                second, batc = peers[1].approveRegistry(proposed, anchor)
+                peers[1].send(second, batc)
+                until(lambda: peers[0].exc.complete(second.said) and peers[2].exc.complete(second.said))
+                peers[2].approveRegistry(proposed, anchor)
+                regid = event.said if event.ilk == 'rip' else event.sad['rd']
+                assert all(store.store.headEvent(regid).said == event.said for store in stores)
+
+            def synchronize():
+                # Public proof dissemination goes through the production Parser
+                # and Rever; no accepted-table shortcuts or synthetic KRAM rows.
+                for team in allTeams:
+                    _, teamGroups, stores, _ = team
+                    stream = bytearray(teamGroups[0].replay(gvrsn=Vrsn_2_0))
+                    for _, event in stores[0].store.baser.evts.getTopItemIter():
+                        stream.extend(event.raw + foot)
+                    for owner in owners:
+                        owner.receive(stream)
+
+            def approveExchange(team, stream):
+                _, _, _, peers = team
+                child = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False)[0].serder
+                first, atc = peers[0].approveExchange(stream)
+                peers[0].send(first, atc)
+                until(lambda: peers[1].exc.complete(first.said) and peers[2].exc.complete(first.said))
+                exact = peers[1].exchangeProposal(first.raw + atc)
+                second, batc = peers[1].approveExchange(exact)
+                peers[1].send(second, batc)
+                until(lambda: peers[0].completeExchange(child.said) and peers[2].exc.complete(second.said))
+                peers[2].approveExchange(exact)
+                assert all(peer.completeExchange(child.said) for peer in peers)
+                return serializeMessage(peers[0].hby, child.said, framed=False)
+
+            issuer, holder = issuerTeam[1][0], holderTeam[1][0]
+            issuerRip, holderRip = regcept(issuer.pre), regcept(holder.pre)
+            approveRegistry(issuerTeam, issuerRip)
+            approveRegistry(holderTeam, holderRip)
+            credential = acdcmap(israid=issuer.pre, regid=issuerRip.said, iseaid=holder.pre,
+                attribute=dict(d='', role='group authority', rd=holderRip.said))
+            issued = update(issuerRip.said, issuerRip.said, credential.said, 'issued')
+            approveRegistry(issuerTeam, issued)
+            synchronize()
+            for wallet in wallets[:3]:
+                wallet.recordIssued(credential, issued.said)
+
+            # First create the immutable grant, then have the holder group
+            # authorize that exact grant through its declared presentation TEL.
+            original, atc = grant(issuer, holder.pre, 'group issuance', origin=credential.raw + foot)
+
+            def presentation(stream, exn, prior, sn):
+                binding = update(holderRip.said, prior, exn.said, 'presented', sn=sn)
+                approveRegistry(holderTeam, binding)
+                synchronize()
+                number, diger = holderTeam[2][0].store.anchor(binding.said)
+                parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False)[0]
+                node = parsed.nests[0]
+                node.ssts.append((Prefixer(qb64=holder.pre), number, diger))
+                return binding, serializeParsedSubstream(parsed)
+
+            firstBinding, stream = presentation(original.raw + atc, original, holderRip.said, 1)
+            delivered = approveExchange(issuerTeam, stream)
+            for peer in holderTeam[3]:
+                peer.receive(delivered)
+                assert peer.completeExchange(original.said)
+            response, ratc = admit(holder, 'explicit group holder consent', original)
+            admitted = approveExchange(holderTeam, response.raw + ratc)
+            for peer in issuerTeam[3]:
+                peer.receive(admitted)
+            for wallet in wallets[3:]:
+                wallet.recordAdmission(original.said, response.said, consent=True)
+                assert wallet.heldCredential(original.said)['credential'].said == credential.said
+
+            # The group holder presents the retained disclosure with a distinct
+            # grant and a newly approved binding. The first grant stays historical.
+            held = wallets[3].heldCredential(original.said)
+            presented, patc = grant(holder, issuer.mhab.pre, 'group presentation', origin=held['proof'])
+            secondBinding, stream = presentation(presented.raw + patc, presented, firstBinding.said, 2)
+            delivered = approveExchange(holderTeam, stream)
+            for peer in issuerTeam[3]:
+                peer.receive(delivered)
+                assert peer.completeExchange(presented.said)
+
+            revoked = update(issuerRip.said, issued.said, credential.said, 'revoked', sn=2)
+            approveRegistry(issuerTeam, revoked)
+            synchronize()
+            for hby, rgy in zip(hbys, rgys):
+                assert rgy.store.headEvent(issuerRip.said).said == revoked.said
+                assert vet(issuerRip, [issued, revoked], db=hby.db, acdc=credential).state == 'revoked'
+                assert rgy.store.headEvent(holderRip.said).said == secondBinding.said
+            assert all(wallet.heldCredential(original.said)['grant'].said == original.said
+                       for wallet in wallets[3:])
+            assert all(endpoint.requests > 0 for endpoint in endpoints)

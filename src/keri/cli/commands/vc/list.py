@@ -14,6 +14,7 @@ from hio.help import ogler
 
 from ...common import (Parsery, Colors, Symbols,
                        setupHby, aliasInput)
+from ...common import native
 
 from ....kering import ConfigurationError
 from ....app import MailboxDirector
@@ -37,12 +38,15 @@ parser.add_argument("--said", "-s", help="Display only the SAID of found credent
                     action="store_true")
 parser.add_argument("--schema", help="Display only credentials with the given schema SAID.",
                     action="store", default=None)
+native.options(parser)
 
 
 def list_credentials(args):
     """ Command line list credential registries handler
 
     """
+    if getattr(args, 'native', False):
+        return native.read(args, 'inventory')
     ld = ListDoer(name=args.name,
                   alias=args.alias,
                   base=args.base,

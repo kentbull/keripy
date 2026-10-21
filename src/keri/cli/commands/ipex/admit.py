@@ -4,6 +4,7 @@ keri.app.cli.commands module
 
 """
 import argparse
+from ...common import native_exchange
 
 from hio.base import doing
 
@@ -36,7 +37,11 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
 parser.add_argument("--time", help="timestamp", required=False, default=None)
 
 
+native_exchange.options(parser, send=True)
+
 def handler(args):
+    if args.native:
+        return [native_exchange.ExchangeDoer(args, 'admit')]
     ed = AdmitDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,

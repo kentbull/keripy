@@ -10,6 +10,8 @@ from hio.help import ogler
 from hio.base import doing
 
 from ...common import setupHby
+from ...common import native
+from ....kering import ConfigurationError
 
 from ....app import HaberyDoer
 from ....core import Parser
@@ -28,6 +30,12 @@ parser.add_argument('--passcode', '-p', help='21 character encryption passcode f
                     dest="bran", default=None)  # passcode => bran
 parser.add_argument("--file", help="File of streamed CESR credential to import", required=True)
 parser.add_argument("--said", "-s", help="SAID of the credential to expect.", required=False, default=None)
+native.options(parser)
+parser.add_argument('--custody', action='store_true', help='import native protected disclosure custody')
+parser.add_argument('--registry', default=None)
+parser.add_argument('--controller', default=None)
+parser.add_argument('--discloser', default=None)
+parser.add_argument('--rewrap', action='store_true', help='explicitly rewrap imported custody after Keeper AEID change')
 
 
 def imprt(args):
@@ -35,6 +43,10 @@ def imprt(args):
 
     """
 
+    if getattr(args, 'native', False):
+        if not args.custody or not all((args.registry, args.controller, args.discloser)):
+            raise ConfigurationError('native import requires --custody, --registry, --controller and --discloser')
+        return native.read(args, 'import')
     ed = ImportDoer(name=args.name,
                     base=args.base,
                     bran=args.bran,

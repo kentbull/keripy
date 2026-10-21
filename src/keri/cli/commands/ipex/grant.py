@@ -4,6 +4,7 @@ keri.app.cli.commands module
 
 """
 import argparse
+from ...common import native_exchange
 
 from hio.base import doing
 
@@ -39,7 +40,16 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
 parser.add_argument("--time", help="timestamp for the revocation", required=False, default=None)
 
 
+native_exchange.options(parser, send=True)
+parser.add_argument('--from-grant', help='present this admitted grant disclosure')
+parser.add_argument('--disclose', action='append', default=[], help='attribute disclosure path rooted at a')
+parser.add_argument('--prior', help='accepted apply or agree SAID')
+parser.add_argument('--refresh', action='store_true', help='derive current registry openings for an admitted disclosure using provisioned custody')
+parser.add_argument('--bound-event', help='explicit accepted issuee KEL event SAID for bound-state derivation')
+
 def handler(args):
+    if args.native:
+        return [native_exchange.ExchangeDoer(args, 'grant')]
     ed = GrantDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,

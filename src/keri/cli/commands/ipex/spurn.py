@@ -4,6 +4,7 @@ keri.app.cli.commands module
 
 """
 import argparse
+from ...common import native_exchange
 import os
 
 from hio.base import doing
@@ -34,7 +35,12 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
                                             "send to recipient", required=False, default="")
 
 
+native_exchange.options(parser, send=True)
+parser.add_argument('--time', default=None)
+
 def handler(args):
+    if args.native:
+        return [native_exchange.ExchangeDoer(args, 'spurn')]
     ed = SpurnDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,

@@ -8,6 +8,7 @@ import argparse
 from hio.base import doing
 
 from ...common import Parsery, setupHby
+from ...common import native
 
 from ....kering import ValidationError, Ilks, Vrsn_1_0
 from ....app import (MailboxDirector, HaberyDoer, Counselor,
@@ -30,9 +31,13 @@ parser.add_argument('--said', help='is SAID vc content qb64')
 parser.add_argument('--send', help='alias of contact to send the revocation events to (can be repeated)',
                     required=False, action="append")
 parser.add_argument("--time", help="timestamp for the revocation", required=False, default=None)
+native.options(parser, author=True)
+parser.add_argument('--unblinded', action='store_true', help='use an explicit native upd revocation')
 
 
 def revokeCredential(args):
+    if getattr(args, 'native', False):
+        return [native.NativeAuthor(args, 'revoke')]
     name = args.name
 
     revokeDoer = RevokeDoer(name=name, alias=args.alias, said=args.said, base=args.base, bran=args.bran,
