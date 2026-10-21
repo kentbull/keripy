@@ -5,6 +5,7 @@ keri.kli.commands module
 
 """
 import argparse
+from os import getenv
 
 from hio.help import ogler
 from hio.base import doing
@@ -27,7 +28,7 @@ parser.add_argument('--name', '-n', help='keystore name and file location of KER
 parser.add_argument('--base', '-b', help='additional optional prefix to file location of KERI keystore',
                     required=False, default="")
 parser.add_argument('--passcode', '-p', help='21 character encryption passcode for keystore (is not saved)',
-                    dest="bran", default=None)  # passcode => bran
+                    dest="bran", default=getenv('KLI_KEYSTORE_PASSCODE'))  # passcode => bran
 parser.add_argument("--file", help="File of streamed CESR credential to import", required=True)
 parser.add_argument("--said", "-s", help="SAID of the credential to expect.", required=False, default=None)
 native.options(parser)
