@@ -14,8 +14,8 @@ from keri.app.credentialing import Wallet, WalletBaser
 from keri.app.configing import Configer
 from keri.app.habbing import openHby
 from keri.core import Kevery, Parser, Signer, Number, Diger, Compactor, Noncer, Blinder, messagize
-from keri.kering import AuthError, ValidationError
-from keri.peer.exchanging import Exchanger
+from keri.kering import AuthError, ConfigurationError, ValidationError
+from keri.peer.exchanging import Exchanger, loadParsedNestedSubstreams
 
 
 class Notices:
@@ -261,6 +261,20 @@ def test_handlerless_retention_cannot_become_wallet_admission_after_registration
             assert exc.complete(gexn.said) and exc.complete(aexn.said)
             with pytest.raises(ValidationError, match='semantic acceptance'):
                 wallet.recordAdmission(gexn.said, aexn.said, consent=True)
+            class AcceptsEverything:
+                """Counterexample: route registration claims acceptance without proof."""
+                resource = '/ipex/grant'
+
+                def verifyAccepted(self, said):
+                    """Claim acceptance for any SAID; the wallet must ignore this hook."""
+                    return True
+
+            exc.routes['/ipex/grant'] = AcceptsEverything()
+            with pytest.raises(ValidationError, match='semantic acceptance'):
+                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
+            wallet.verification = True
+            with pytest.raises(ConfigurationError, match='concrete native IPEX verification'):
+                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
             assert wallet.inventory()['held'] == []
             assert wallet.admissions(credential.said) == []
         finally:
@@ -356,6 +370,188 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
                 **wallet.boundEvent(acdc, hby.habByName('issuee').kever.serder.said))
             with pytest.raises(ValidationError):
                 wallet.recordIssued(acdc, update.said, blinder=wrong)
+        finally:
+            wallet.close()
+            rgy.close()
+
+
+@pytest.mark.parametrize('arrival', ['before', 'after', 'restart'])
+@pytest.mark.parametrize('schemaUse', ['own', 'edge'])
+def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arrival, schemaUse):
+    """The actual peer parser resolves schemas without widening the grant view."""
+    from copy import deepcopy
+    from keri.acdc import messaging
+    from keri.acdc.sectioning import SectionBaser
+    from keri.cli.common.native_exchange import Peer
+    from keri.core import Codens, Counter
+    from keri.db import openLMDB
+
+    key = Signer(transferable=False)
+    name = f'sections-{schemaUse}-{arrival}'
+    sectionOpts = dict(cls=SectionBaser, name=name, temp=False, headDirPath=str(tmp_path))
+    with encrypted(name, tmp_path, key) as hby:
+        issuer, holder = hby.makeHab(name='issuer'), hby.makeHab(name='holder')
+        rgy = regery(hby, tmp_path)
+        wallet = Wallet(hby, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        try:
+            with openLMDB(**sectionOpts) as sections:
+                peer = Peer(hby, rgy, wallet, sections)
+                # This non-default schema exists only in the independent section.
+                section = messaging.sectschema({'$id': '', 'version': '1.0.0',
+                    'title': 'independent own or edge constraint', 'type': 'object'})
+                schema = section.sad['s']['$id']
+                full = acdcmap(israid=issuer.pre, iseaid=holder.pre, uuid=Noncer().qb64,
+                    schema=schema if schemaUse == 'own' else None,
+                    attribute={'d': '', 'u': Noncer().qb64,
+                               'shown': {'d': '', 'value': 'visible'},
+                               'private': {'d': '', 'value': 'later cached'}})
+                compact = Compactor(mad=deepcopy(full.sad['a']), makify=True, kind=Kinds.json)
+                compact.compact(paths=['a/shown/'], root='a')
+                partial = acdcmap(israid=full.israid, iseaid=holder.pre, uuid=full.sad['u'],
+                    schema=full.schema, attribute=compact.partials[('a/shown/',)].mad)
+                assert partial.said == full.said
+                origin, artifacts = partial, []
+                if schemaUse == 'edge':
+                    origin = acdcmap(israid=issuer.pre, iseaid=holder.pre,
+                        attribute={'d': '', 'purpose': 'independent edge schema'},
+                        edge={'d': '', 'member': {'d': '', 'n': partial.said,
+                                                  'o': 'NI2I', 's': schema}})
+                    artifacts = [signed(partial, issuer)]
+                plan = [[origin.schema if isinstance(origin.schema, str) else origin.schema['$id'], '/', []]]
+                if artifacts:
+                    plan.append([partial.schema['$id'], '/e/member/_/', []])
+                gexn, gatc = grant(issuer, holder.pre, 'independent schema',
+                    origin=signed(origin, issuer), artifacts=artifacts, modifiers={'dp': [plan]})
+                def wire(message):
+                    """Frame one standalone section with an empty CESR attachment group."""
+                    return message.raw + Counter(Codens.AttachmentGroup,
+                        count=0, version=Vrsn_2_0).qb64b
+                # Tampered content cannot enter the store under the claimed SAID.
+                tampered = wire(section).replace(b'independent own or edge constraint',
+                                                b'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX')
+                with pytest.raises((ConfigurationError, ValidationError)):
+                    peer.ingest(tampered)
+                assert sections.messages.get(section.said) is None
+                # A different valid schema cannot satisfy the committed SAID.
+                wrong = messaging.sectschema({'$id': '', 'version': '1.0.0',
+                    'title': 'wrong content', 'type': 'object'})
+                peer.ingest(wire(wrong))
+                assert hby.db.schema.get(schema) is None
+                assert not list(sections.parts.getTopItemIter(('s', schema, '')))
+                if arrival == 'before':
+                    peer.ingest(wire(section))
+                peer.ingest(gexn.raw + gatc)
+                if arrival != 'before':
+                    assert not peer.exc.complete(gexn.said)
+                    assert hby.db.emse.get((gexn.said, schema)) is not None
+                if arrival == 'after':
+                    peer.ingest(wire(section))
+                if arrival != 'restart':
+                    assert peer.exc.complete(gexn.said)
+                    assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
+            # Reopen the section owner and construct the peer again. The delayed
+            # case also reopens the Habery below before receiving its dependency.
+        finally:
+            wallet.close()
+            rgy.close()
+    with encrypted(name, tmp_path, key) as hby:
+        rgy = regery(hby, tmp_path)
+        wallet = Wallet(hby, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        try:
+            with openLMDB(**sectionOpts) as sections:
+                peer = Peer(hby, rgy, wallet, sections)
+                if arrival == 'restart':
+                    assert hby.db.emse.get((gexn.said, schema)) is not None
+                    peer.ingest(wire(section))
+                assert peer.exc.complete(gexn.said)
+                assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
+                aexn, aatc = admit(hby.habByName('holder'), 'retain this exact view', gexn)
+                peer.ingest(aexn.raw + aatc)
+                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
+                before = wallet.heldCredential(gexn.said)
+                # Cache a fuller attribute section. Retained evidence and any
+                # caller projecting that evidence still see only the original.
+                peer.ingest(wire(messaging.sectattr(full.sad['a'])))
+                after = wallet.heldCredential(gexn.said)
+                assert after['proof'] == before['proof']
+                retained = after['credential'] if schemaUse == 'own' else next(
+                    nest.serder for nest in loadParsedNestedSubstreams(hby, gexn.said)
+                    if nest.serder.said == partial.said)
+                assert isinstance(retained.sad['a']['private'], str)
+                assert hby.db.schema.get(schema) is None
+        finally:
+            wallet.close()
+            rgy.close()
+
+
+@pytest.mark.parametrize('operator', ['AVG', 'WAVG'])
+def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, operator):
+    """Explicit AVG/WAVG policy survives restart; default/refusal keeps only history."""
+    from keri.acdc.ipexing import NativeVerification
+    from keri.app import ipexing as dispatching
+
+    class ScorePolicy:
+        """Concrete test application rule: average disclosed scores at least 80."""
+        def __init__(self, permitted=True):
+            """Select whether this application permits the credential graph."""
+            self.permitted = permitted
+
+        def value(self, *, near, edge, far):
+            """Use the far node's disclosed score as the numeric edge value."""
+            return far.sad['a']['score']
+
+        def accept(self, *, near, group, average):
+            """Return whether the computed mean meets the configured rule."""
+            return self.permitted and average >= 80
+
+    key = Signer(transferable=False)
+    name = 'average-' + operator.lower()
+    pairs = []
+    with encrypted(name, tmp_path, key) as hby:
+        issuer, holder = hby.makeHab(name='issuer'), hby.makeHab(name='holder')
+        rgy = regery(hby, tmp_path)
+        exc = Exchanger(hby=hby, handlers=[])
+        verification = dispatching.loadHandlers(hby, exc, Notices(), rgy, graphPolicy=ScorePolicy())
+        wallet = Wallet(hby, rgy, exc=exc, verification=verification,
+                        db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        try:
+            child = acdcmap(israid=issuer.pre, iseaid=holder.pre, attribute={'d': '', 'score': 90})
+            origin = acdcmap(israid=issuer.pre, iseaid=holder.pre,
+                attribute={'d': '', 'result': 'qualifies'}, edge={'d': '', 'o': operator,
+                'score': {'d': '', 'n': child.said, 'o': 'NI2I', 'w': 2}})
+            for stage in range(2):
+                gexn, gatc = grant(issuer, holder.pre, f'configured score {stage}',
+                    origin=signed(origin, issuer), artifacts=[signed(child, issuer)],
+                    modifiers={'dp': [[[origin.schema['$id'], '/', []],
+                                      [child.schema['$id'], '/e/score/_/', []]]]})
+                receive(hby, gexn.raw + gatc, rgy=rgy, exc=exc)
+                assert exc.complete(gexn.said)
+                aexn, aatc = admit(holder, 'explicit consent', gexn)
+                receive(hby, aexn.raw + aatc, rgy=rgy, exc=exc)
+                assert exc.complete(aexn.said)
+                pairs.append((gexn.said, aexn.said))
+            wallet.recordAdmission(*pairs[0], consent=True)
+        finally:
+            wallet.close()
+            rgy.close()
+    with encrypted(name, tmp_path, key) as hby:
+        rgy = regery(hby, tmp_path)
+        exc = Exchanger(hby=hby, handlers=[])
+        dispatching.loadHandlers(hby, exc, Notices(), rgy)
+        wallet = Wallet(hby, rgy, exc=exc, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        try:
+            # Consent history and exact retained evidence remain inspectable.
+            assert wallet.recordAdmission(*pairs[0], consent=True).grant == pairs[0][0]
+            assert wallet.heldCredential(pairs[0][0])['credential'].said == origin.said
+            for policy in (None, ScorePolicy(permitted=False)):
+                wallet.verification = NativeVerification(hby, rgy, graphPolicy=policy)
+                assert not wallet.verification.verifyAccepted(pairs[1][0], '/ipex/grant')
+                with pytest.raises(ValidationError, match='semantic acceptance'):
+                    wallet.recordAdmission(*pairs[1], consent=True)
+                assert len(wallet.inventory()['held']) == 1
+            wallet.verification = NativeVerification(hby, rgy, graphPolicy=ScorePolicy())
+            assert wallet.recordAdmission(*pairs[1], consent=True).grant == pairs[1][0]
+            assert len(wallet.inventory()['held']) == 2
         finally:
             wallet.close()
             rgy.close()

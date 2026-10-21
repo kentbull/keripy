@@ -13,7 +13,7 @@ from pathlib import Path
 import stat
 
 from keri.acdc import regeventing
-from keri.acdc.ipexing import IpexHandler
+from keri.acdc.ipexing import NativeVerification
 from keri.core import Blinder, BoundState, Number, Prefixer, Salter, SerderACDC
 from keri.db import dbing, koming, subing
 from keri.help import helping
@@ -88,8 +88,24 @@ Custody always requires an authenticated encrypted Keeper. Manager AEID changes
 do not migrate these application records: old custody fails closed until an
 explicit operator rewrap/import. This module never changes Manager or AEID.
 """
-    def __init__(self, hby, rgy, *, exc=None, db=None):
+    def __init__(self, hby, rgy, *, exc=None, db=None, verification=None):
+        """Compose local inventory, custody storage, and native verification.
+
+        Args:
+            hby (Habery): Authenticated local identity and retained exchange owner.
+            rgy (Regery): Native registry evidence owner.
+            exc (Exchanger | None): Router used to check retained completion.
+            db (WalletBaser | None): Existing inventory/custody store, or create one.
+            verification (NativeVerification | None): Explicit context returned by
+                native/app IPEX loadHandlers. None uses ordinary default policy;
+                configured applications must pass their actual shared context.
+
+        Returns:
+            None
+        """
         self.hby, self.rgy, self.exc = hby, rgy, exc
+        self.verification = (verification if verification is not None
+                             else NativeVerification(hby, rgy))
         self.db = db if db is not None else WalletBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
 
@@ -301,6 +317,21 @@ explicit operator rewrap/import. This module never changes Manager or AEID.
         exchanging.verify(self.hby, exn)
         return exn
 
+    def _verification(self):
+        """Return the concrete native context for fresh semantic acceptance.
+
+        Returns:
+            NativeVerification: Configured proof-and-policy validation context.
+
+        Raises:
+            ConfigurationError: Context is arbitrary or belongs to another owner.
+        """
+        context = self.verification
+        if (type(context) is not NativeVerification or context.hby is not self.hby
+                or context.rgy is not self.rgy):
+            raise ConfigurationError('configured concrete native IPEX verification is required')
+        return context
+
     def recordAdmission(self, grant, admit, *, consent=False):
         """Record explicit local consent to an actual accepted grant/admit pair.
 
@@ -308,6 +339,19 @@ explicit operator rewrap/import. This module never changes Manager or AEID.
         idempotent retained-IPEX validation as well as authenticated messages and
         actual response linkage. An existing consent record remains history;
         reading it does not promise current credential standing.
+
+        Args:
+            grant (str): Retained grant SAID with exactly one disclosed origin.
+            admit (str): Retained response SAID signed by its local holder.
+            consent (bool): Explicit True is required for local retention.
+
+        Returns:
+            AdmittedCredential: Existing identical consent or newly persisted row.
+
+        Raises:
+            ValidationError: Consent, evidence, response linkage, or current native
+                semantic acceptance is invalid.
+            ConfigurationError: Exchange or concrete verification owner is absent.
         """
         if consent is not True:
             raise ValidationError('explicit consent is required before wallet admission')
@@ -328,11 +372,9 @@ explicit operator rewrap/import. This module never changes Manager or AEID.
             if old.admit != admit or old.credential != origins[0] or old.holder != holder:
                 raise ValidationError('conflicting wallet admission for this grant')
             return old
+        verification = self._verification()
         for route, message in (('/ipex/grant', gexn), ('/ipex/admit', aexn)):
-            # Instantiate the concrete native verifier: registration of an
-            # arbitrary route or a duck-typed hook cannot grant wallet consent.
-            handler = IpexHandler(resource=route, hby=self.hby, notifier=None, rgy=self.rgy)
-            if not handler.verifyAccepted(message.said):
+            if not verification.verifyAccepted(message.said, route):
                 raise ValidationError('native IPEX semantic acceptance is required before wallet admission')
         record = AdmittedCredential(origins[0], grant, admit, holder, helping.nowIso8601())
         # Only this application environment participates in the transaction.

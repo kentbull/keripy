@@ -9,12 +9,14 @@ IPEx protocol service support (Issuance and Presentation Exchange)
 from collections import deque, namedtuple
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from math import isfinite
 
 from hio.help import ogler
 
 from .. import Kinds, Protocols
-from ..kering import (Colds, DuplicitousRegistryError, FailedSchemaValidationError,
+from ..kering import (Colds, ConfigurationError, DuplicitousRegistryError,
+                      FailedSchemaValidationError,
                       Ilks, KeriError, MisanchorError, MisbindingError,
                       MissingAnchorError, MissingChainError, MissingSchemaError,
                       MissingSenderKeyStateError, MisdigestError, MisregistryError,
@@ -463,7 +465,8 @@ class IpexHandler:
     # Receive route-filtered non-sender evidence from Exchanger.
     acceptsEvidence = True
 
-    def __init__(self, resource, hby, notifier, rgy=None, *, graphPolicy=None):
+    def __init__(self, resource, hby, notifier, rgy=None, *, graphPolicy=None,
+                 sections=None, verification=None):
         """Create a handler for one IPEX route.
 
         Parameters:
@@ -477,15 +480,30 @@ class IpexHandler:
                 selecting a finite numeric property and ``accept(near, group,
                 average)`` interpreting the computed mean as bool or None.
                 Methods receive the named arguments shown. No policy is inferred.
+            sections (SectionBaser | None): Independently received schema evidence
+                shared with the application's parser. Lookup never expands the
+                retained credential's disclosed fields.
+            verification (NativeVerification | None): Concrete shared context.
+                When supplied, its policy and section store take precedence.
 
         Returns:
             None
+
+        Raises:
+            ConfigurationError: A supplied concrete context belongs to another
+                Habery/Regery or is not a NativeVerification instance.
         """
+        if verification is not None and (type(verification) is not NativeVerification
+                or verification.hby is not hby or verification.rgy is not rgy):
+            raise ConfigurationError('native verifier context must belong to this Habery and Regery')
         self.resource = resource
         self.hby = hby
         self.notifier = notifier
         self.rgy = rgy
-        self.graphPolicy = graphPolicy
+        self.verification = verification if verification is not None else NativeVerification(
+            hby, rgy, graphPolicy=graphPolicy, sections=sections)
+        self.graphPolicy = self.verification.graphPolicy
+        self.sections = self.verification.sections
         # Only Grant treats unresolved non-sender evidence as optional. Other
         # IPEX verbs continue rejecting foreign evidence before persistence.
         # Store this policy per route-specific handler instance.
@@ -1422,7 +1440,7 @@ class IpexHandler:
                 if supplied:
                     # A presenter cannot hide an earlier seal already in this
                     # verified KEL merely by attaching a later source couple.
-                    kever = self.hby.kevers.get(near.israid)
+                    kever = self.hby.kevers[near.israid] if near.israid in self.hby.kevers else None
                     if kever is None:
                         return None
                     for sn in range(kever.sn + 1):
@@ -1448,6 +1466,22 @@ class IpexHandler:
         ACDC f0bd097d lines 1186-1211: latest conflicting relation wins;
         missing/empty operators default to I2I for targeted nodes, NI2I otherwise.
         NOT affects far-node validity only, never the edge's relation or schema.
+
+        Args:
+            group (Mapping): Disclosed edge naming its far node and constraints.
+            nodes (dict): Authenticated disclosed nodes indexed by SAID.
+            nserder (SerderACDC): Near credential establishing this edge.
+            inheritedSchema: Additional ancestor schema pins, if any.
+            memo (dict | None): Already evaluated node truth values.
+            active (set | None): Nodes currently being evaluated, to reject cycles.
+            averages (dict | None): Computed child group numeric results.
+
+        Returns:
+            bool | None: Edge validity, or None when semantics are unresolved.
+
+        Raises:
+            MissingChainError: Required far node or delegation evidence is absent.
+            MissingSchemaError: A pinned schema is unavailable in KEL/section stores.
         """
         memo = {} if memo is None else memo
         active = set() if active is None else active
@@ -1505,7 +1539,8 @@ class IpexHandler:
             except (KeriError, ValueError, TypeError):
                 return None
             try:
-                scheming.validateSchema(acdc=far, db=self.hby.db, schema=schema, schemaKind=schemaKind)
+                scheming.validateSchema(acdc=far, db=self.hby.db, schema=schema, schemaKind=schemaKind,
+                                        sections=self.sections)
             except MissingSchemaError:
                 raise
             except (FailedSchemaValidationError, ValidationError, ValueError):
@@ -1617,12 +1652,23 @@ class IpexHandler:
         return result
 
     def _verifyNodeSchemas(self, nodes, order):
-        """Validate each disclosed ACDC against its embedded or cached schema."""
+        """Validate disclosed nodes without expanding their retained views.
+
+        Args:
+            nodes (dict): Authenticated disclosed nodes indexed by SAID.
+            order (list): Reachable node SAIDs to validate in graph order.
+
+        Returns:
+            bool: Whether every node satisfies its embedded or cached own schema.
+
+        Raises:
+            MissingSchemaError: Required schema evidence is not yet available.
+        """
         for said in order:
             nest = nodes[said]
             nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
             try:
-                scheming.validateSchema(acdc=nserder, db=self.hby.db)
+                scheming.validateSchema(acdc=nserder, db=self.hby.db, sections=self.sections)
             except MissingSchemaError:
                 raise
             except (FailedSchemaValidationError, ValidationError, ValueError):
@@ -1677,7 +1723,21 @@ class IpexHandler:
         return True
 
     def _verifyIssuerAuthNode(self, serder, nest):
-        """Verify one ACDC using its declared issuer authentication factor."""
+        """Verify one disclosed ACDC's selected issuer authentication factor.
+
+        Args:
+            serder (SerderACDC): Exact disclosed credential view.
+            nest: Parsed object or dictionary carrying that view's attachments.
+
+        Returns:
+            bool: Whether the selected registry, anchor, or signature authenticates
+                the issuer. Invalid selected evidence never falls back to another
+                factor.
+
+        Raises:
+            MissingChainError: Required authenticated KEL/TEL evidence is absent.
+            KeriError: Invalid registry opening or binding evidence.
+        """
         from .regeventing import issuerRegistry, vetBlind, vetBound
 
         # Authentication Factor 1: Registry
@@ -1775,8 +1835,10 @@ class IpexHandler:
         # Fall back to signature verification when no registry or anchor is supplied
         tsgs = []
 
-        # Resolve the issuer's current key state.
-        kever = self.hby.db.kevers.get(issuer)
+        # Membership performs the existing statedict read-through from verified
+        # persisted state. Its get() only sees warmed in-memory entries, so it
+        # would incorrectly require replay of an already retained KEL on restart.
+        kever = self.hby.kevers[issuer] if issuer in self.hby.kevers else None
 
         # Read bare indexed signatures from the node stream.
         sigers = parsed.get("sigers", [])
@@ -2144,7 +2206,8 @@ class IpexHandler:
             freshTsgs = []
             for prefixer, number, diger, sigers in tsgs:
                 # Resolve the endorser's current verified state.
-                kever = self.hby.db.kevers.get(prefixer.qb64)
+                kever = (self.hby.kevers[prefixer.qb64]
+                         if prefixer.qb64 in self.hby.kevers else None)
                 # Require exact current establishment coordinates.
                 if (kever is not None
                         and number.sn == kever.lastEst.s
@@ -2237,6 +2300,55 @@ class IpexHandler:
             d=serder.said,
             m=attrs["m"],
         ))
+
+
+@dataclass(frozen=True)
+class NativeVerification:
+    """Concrete native semantic context shared by intake and fresh admission.
+
+    This context carries evidence and policy, never a caller assertion of
+    acceptance. Retained inspection may outlive it; fresh acceptance may not.
+
+    Parameters:
+        hby (Habery): Owner of authenticated KEL and retained EXN evidence.
+        rgy (Regery | None): Registry evidence used for issuer authentication.
+        graphPolicy: Explicit local graph validity/averaging policy, or None.
+        sections (SectionBaser | None): Parser-owned independent schema store.
+    """
+    hby: object
+    rgy: object = None
+    graphPolicy: object = None
+    sections: object = None
+
+    def handler(self, resource, notifier=None):
+        """Return a route handler using this context's evidence and policy.
+
+        Args:
+            resource (str): Native IPEX route to validate.
+            notifier: Optional receiver of accepted-message notifications.
+
+        Returns:
+            IpexHandler: Concrete route processor with no independent defaults.
+        """
+        return IpexHandler(resource, self.hby, notifier, rgy=self.rgy,
+                           verification=self)
+
+    def verifyAccepted(self, said, route):
+        """Re-run authenticated retained semantics under this exact context.
+
+        Args:
+            said (str): Retained exchange identifier.
+            route (str): Expected native IPEX route.
+
+        Returns:
+            bool: Whether authenticated evidence satisfies current semantics.
+
+        Raises:
+            MissingSchemaError: A required independently supplied schema is absent.
+            KeriError: Retained authentication or dependent evidence is invalid.
+        """
+        return self.handler(route).verifyAccepted(said)
+
 
 def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gvrsn=None, *, ax=None):
     """Create a signed V2 IPEX ``apply`` exchange.
@@ -2772,24 +2884,23 @@ def spurn(hab, message, spurned, recp=None, dt=None, kind=None, gvrsn=None):
     return serder, atc
 
 
-def loadHandlers(hby, exc, notifier, rgy=None, *, graphPolicy=None):
-    """Register handlers for the six V2 IPEX verb routes.
+def loadHandlers(hby, exc, notifier, rgy=None, *, graphPolicy=None, sections=None):
+    """Register native IPEX routes with one explicit semantic context.
 
-    Parameters:
-        hby (Habery): Habitat environment and backing database.
-        exc (Exchanger): Exchange router to register handlers on.
-        notifier: Notifier-like object passed through to each handler.
-        rgy (Regery | None): Optional local registry manager reused by every
-            IPEX handler for verifier-side registry proof checks.
-        graphPolicy: Explicit application graph policy shared by the handlers;
-            see IpexHandler. Missing averaging policy fails closed.
+    Schema lookup uses the same section store as the application's parser.
+
+    Args:
+        hby (Habery): Owner of KEL and EXN evidence.
+        exc (Exchanger): Router receiving the six native IPEX handlers.
+        notifier: Receiver of accepted-message notifications.
+        rgy (Regery | None): Issuer registry evidence owner.
+        graphPolicy: Explicit local graph policy, or None for default semantics.
+        sections (SectionBaser | None): Independent schema store used by parsing.
 
     Returns:
-        None
+        NativeVerification: Shared semantic context for explicit wallet injection.
     """
-    exc.addHandler(IpexHandler(resource="/ipex/apply", hby=hby, notifier=notifier, rgy=rgy, graphPolicy=graphPolicy))
-    exc.addHandler(IpexHandler(resource="/ipex/offer", hby=hby, notifier=notifier, rgy=rgy, graphPolicy=graphPolicy))
-    exc.addHandler(IpexHandler(resource="/ipex/agree", hby=hby, notifier=notifier, rgy=rgy, graphPolicy=graphPolicy))
-    exc.addHandler(IpexHandler(resource="/ipex/grant", hby=hby, notifier=notifier, rgy=rgy, graphPolicy=graphPolicy))
-    exc.addHandler(IpexHandler(resource="/ipex/admit", hby=hby, notifier=notifier, rgy=rgy, graphPolicy=graphPolicy))
-    exc.addHandler(IpexHandler(resource="/ipex/spurn", hby=hby, notifier=notifier, rgy=rgy, graphPolicy=graphPolicy))
+    verification = NativeVerification(hby, rgy, graphPolicy=graphPolicy, sections=sections)
+    for verb in Ipex:
+        exc.addHandler(verification.handler(f"/ipex/{verb}", notifier))
+    return verification

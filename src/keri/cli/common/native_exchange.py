@@ -32,12 +32,26 @@ class Notices:
 
 
 class Peer:
-    def __init__(self, hby, rgy, wallet, sections):
+    def __init__(self, hby, rgy, wallet, sections, *, graphPolicy=None):
+        """Share section evidence and native policy across intake and admission.
+
+        Args:
+            hby (Habery): Authenticated local identity and KEL/EXN evidence.
+            rgy (Regery): Native registry evidence owner.
+            wallet (Wallet): Inventory owner configured to use this peer's context.
+            sections (SectionBaser): Independently received section store; caller
+                owns closing it, including across CLI invocations/reopen.
+            graphPolicy: Optional explicit graph validity/averaging policy.
+
+        Returns:
+            None
+        """
         self.hby, self.rgy, self.wallet = hby, rgy, wallet
         self.evidence = EvidenceContext(hby, reger=rgy.baser)
         self.exc = exchanging.Exchanger(hby, handlers=[])
         self.scy = Sectioner(db=hby.db, sections=sections)
-        ipexing.loadHandlers(hby, self.exc, Notices(), rgy)
+        wallet.verification = ipexing.loadHandlers(hby, self.exc, Notices(), rgy,
+                                                  graphPolicy=graphPolicy, sections=sections)
         wallet.exc = self.exc
         self.parser = Parser(kvy=self.evidence.kvy, rgy=self.evidence.rever,
                              exc=self.exc, scy=self.scy, version=Vrsn_2_0, local=False)

@@ -85,3 +85,33 @@ Targets: `app.registrar.serving.Context.__init__` and
   fabricated. Both registrar and observer cases pass.
 - This unit covers service ownership only. Group/CLI/Dolly composition is tracked
   separately before closing the whole R5 gate.
+
+## R2/R3-A: shared native semantic context and restart lookup
+
+Targets: `acdc.ipexing.NativeVerification` and its methods; native/app
+`IpexHandler.__init__` and `loadHandlers`; native `_evaluateLeaf`,
+`_verifyNodeSchemas`, `_verifyIssuerAuthNode`, `_boundEdgeValidity`,
+`verifyEvidence`; `app.credentialing.Wallet.__init__`, `_verification`,
+`recordAdmission`; `cli.common.native_exchange.Peer.__init__`; new/changed tests
+in `test_native_wallet.py` and `test_ipex_verification_context.py`.
+
+- Source lineage: schema validation `4e1d2140f116d95d12158a5029a87662020d3e19`,
+  leaf evaluation `f09d49e91e2a308f43993b499cdfeb1f6056e0f7`, retained verification
+  `825229806db825fdce180cb2a11ec31ed66aee03`; wallet reference bookkeeping
+  `d30395c1acbf609d9099f9ce34288d1d4c89233f`, Peer composition
+  `93fef663f53ee49187747caf207bc9173c9b6fc1`, and version dispatcher
+  `a17fdc0b4601d8527224d62e0b4212e48e12f973` are prior branch contributions.
+- Local Codex design: one concrete frozen context carries actual Habery/Regery,
+  explicit graph policy, and independent schema store into intake and fresh
+  consent. It carries no acceptance assertion; concrete core verification still
+  runs. Existing consent is inspectable history, not fresh policy acceptance.
+- Independent sections supply schema evidence only. Validation uses the retained
+  disclosed node, so cached fuller content cannot widen a presentation.
+- Restart correction follows existing `db.basing.statedict` membership/index
+  read-through. Its `get` sees warmed entries only. Three native lookups now load
+  persisted verified foreign key state without requiring a new replay. Dolly's
+  schema tests exposed this defect and pass across full reopen without replay.
+- Tests and delta are agent-authored, independently reviewed. AVG/WAVG acceptance,
+  rejection with absent/changed policy, exact owner/type guards, independent own
+  and edge schema arrival, and retained-view checks cover the shared boundary.
+  Group and Dolly parser wiring have separate review units.
