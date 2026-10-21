@@ -207,7 +207,9 @@ class ExchangeDoer(doing.DoDoer):
                 peer.process()
             if self.verb == 'receive':
                 app = falcon.App()
-                app.add_route('/ingest', Intake(peer))
+                intake = Intake(peer)
+                app.add_route('/ingest', intake)
+                app.add_route('/', intake)
                 server = createHttpServer(args.host, args.port, app)
                 owner = http.ServerDoer(server=server)
                 self.extend([owner])
@@ -437,3 +439,7 @@ class Intake:
             raise falcon.HTTPUnsupportedMediaType()
         rep.media = self.peer.ingest(req.bounded_stream.read())
         rep.status = falcon.HTTP_202
+
+    # StreamPoster uses PUT at the recipient endpoint root. Both methods enter
+    # the same native verifier and neither implies wallet admission.
+    on_put = on_post

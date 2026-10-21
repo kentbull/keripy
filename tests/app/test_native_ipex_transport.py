@@ -160,3 +160,31 @@ def test_http_preserves_query_and_does_not_hide_refusal(status):
         server.server_close()
         thread.join(timeout=2)
         assert not thread.is_alive()
+
+
+def test_http_intake_accepts_streamposter_put_without_changing_verification():
+    """POST and StreamPoster PUT pass exact bytes to the same native peer."""
+    import falcon
+    from falcon import testing
+    from keri.cli.common.native_exchange import Intake
+
+    class Peer:
+        """Record only the transport boundary; protocol tests cover the peer."""
+        def __init__(self):
+            """Create the empty intake trace."""
+            self.messages = []
+
+        def ingest(self, raw):
+            """Retain exact bytes, returning the peer's transport outcome."""
+            self.messages.append(raw)
+            return {'accepted': []}
+
+    peer = Peer()
+    api = falcon.App()
+    api.add_route('/', Intake(peer))
+    client = testing.TestClient(api)
+    for method in ('POST', 'PUT'):
+        response = client.simulate_request(method=method, path='/', body=b'cesr-frame',
+                                           headers={'Content-Type': 'application/cesr'})
+        assert response.status_code == 202 and response.json == {'accepted': []}
+    assert peer.messages == [b'cesr-frame', b'cesr-frame']
