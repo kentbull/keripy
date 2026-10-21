@@ -48,8 +48,16 @@ def auth(args):
 
 
 class AuthDoer(doing.DoDoer):
+    """Register an existing local identifier with a hosted witness."""
 
     def __init__(self, name, alias, base, bran, witness, urlOnly):
+        """Open the named KLI environment and resolve the witness contact.
+
+        ``name``/``base`` select storage, ``bran`` unlocks the Keeper and
+        ``alias`` selects the local habitat. ``witness`` is a known AID or
+        unambiguous contact alias; ``urlOnly`` suppresses the QR rendering.
+        The inherited HIO lifecycle owns the registration client.
+        """
         self.hby = setupHby(name=name, base=base, bran=bran)
         self.hab = self.hby.habByName(alias)
         self.org = Organizer(hby=self.hby)
@@ -75,7 +83,7 @@ class AuthDoer(doing.DoDoer):
         super(AuthDoer, self).__init__(doers=doers)
 
     def authDo(self, tymth, tock=0.0, **kwa):
-        """ Export credential from store and any related material
+        """Register authenticated KEL evidence and display the returned TOTP URI.
 
         Parameters:
             tymth (function): injected function wrapper closure returned by .tymen() of
@@ -83,7 +91,10 @@ class AuthDoer(doing.DoDoer):
             tock (float): injected initial tock value
 
         Returns:
-            doifiable Doist compatible generator method
+            Doist-compatible generator. Yields while awaiting the hosted
+            registration response; decrypts its returned secret with the local
+            habitat. This operator command intentionally prints the private
+            TOTP provisioning URI, so its output must not enter public reports.
 
         """
         # enter context

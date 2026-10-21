@@ -60,6 +60,7 @@ def authenticate(req, ctx, allowed, routes):
 
 
 class HealthEnd:
+    """Report listener availability without implying evidence acceptance."""
     def on_get(self, req, rep):
         """Return service availability without claiming credential acceptance.
 

@@ -9,6 +9,7 @@ from keri.app.httping import CESR_CONTENT_TYPE
 from keri.help import helping
 
 class QueryEnd:
+    """Serve only verified cached history with an exact current-source observation."""
     def __init__(self, ctx):
         """Bind authenticated cache queries to an existing observer.
 
