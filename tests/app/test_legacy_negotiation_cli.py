@@ -112,9 +112,41 @@ def test_legacy_apply_offer_agree_across_cli_processes(tmp_path, seeder):
     assert agreement.stat().st_size > 0
 
     granted = tmp_path / 'grant.cesr'
-    grant = invoke('issuer', 'grant', '--said', cred.said, '--recipient', prefixes['holder'],
-                   '--prior', agree['exchange'], '--input', str(agreement), '--output', str(granted))
-    assert grant['localAccepted']
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+    delivered = []
+
+    class Intake(BaseHTTPRequestHandler):
+        """Capture real HTTP bytes without replacing any credential verifier."""
+
+        def do_POST(self):
+            """Retain this request body and acknowledge transport; return None.
+
+            The server only captures bytes. The ordinary receiver processors below
+            must authenticate them separately; read/write errors fail the request.
+            """
+            delivered.append(self.rfile.read(int(self.headers['Content-Length'])))
+            self.send_response(202)
+            self.end_headers()
+
+        def log_message(self, *args):
+            """Suppress fixture access logs; args are unused, return None."""
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Intake)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        grant = invoke('issuer', 'grant', '--said', cred.said, '--recipient', prefixes['holder'],
+            '--prior', agree['exchange'], '--input', str(agreement), '--output', str(granted),
+            '--endpoint', f'http://127.0.0.1:{server.server_port}/ingest')
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    # Removing the completed HTTP child must leave the Grant owner open long
+    # enough to query its authenticated completion and print the actual result.
+    assert grant['localAccepted'] and delivered == [granted.read_bytes()]
     with openHby(name=names['holder'], base=base, temp=False, bran=PASSCODE,
                  version=Vrsn_1_0) as hby:
         rgy = Regery(hby=hby, name=hby.name, base=base, temp=False)

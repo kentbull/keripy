@@ -364,11 +364,17 @@ class GrantDoer(doing.DoDoer):
             deeds: Optional HIO child-deed queue passed to DoDoer.exit.
 
         Returns:
-            None. Closes separately owned Noter, Regery and Habery even after direct
-            output completion or scheduling failure; close/storage errors propagate."""
+            None. Selective child removal closes only the supplied deeds. Full owner
+            exit closes Noter, Regery and Habery after all children unwind, including
+            failed delivery; close/storage errors propagate.
+
+        HIO remove() calls this method with a temporary deeds queue. Closing stores
+        there would invalidate the still-running Grant immediately after its HTTP
+        or TCP client finishes. Only the full lifecycle exit owns those stores."""
         try:
             super().exit(deeds=deeds)
         finally:
-            self.noter.close()
-            self.rgy.close()
-            self.hby.close()
+            if deeds is None:
+                self.noter.close()
+                self.rgy.close()
+                self.hby.close()
