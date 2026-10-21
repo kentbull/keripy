@@ -7,7 +7,7 @@ has no CLI, wallet database, secret storage, or network lifecycle dependency.
 from keri import Vrsn_2_0
 from keri.acdc.regeventing import issuerRegistry, vetBlind, vetBound
 from keri.core import Counter, Codens, Number, SealEvent, messagize
-from keri.kering import ConfigurationError
+from keri.kering import ConfigurationError, ValidationError
 
 
 def registryProof(hby, rgy, credential, regid, *, retained=(), derive=None):
@@ -72,3 +72,29 @@ def registryProof(hby, rgy, credential, regid, *, retained=(), derive=None):
         bonds.append(SealEvent(i=regid, s=binding.sad['n'], d=binding.said))
     return (messagize(credential, bonds=bonds, gvrsn=Vrsn_2_0) if bonds else
             credential.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
+
+
+def boundEvent(hby, acdc, said):
+    """Resolve an exact accepted, fully witnessed issuee KEL event.
+
+    Args:
+        hby: Owner of verified KEL evidence; no wallet or secret store is needed.
+        acdc: Credential defining the issuee whose event is selected.
+        said: Explicit event digest, never an implicit substitution of current head.
+
+    Returns:
+        dict: Bound-opening derivation options with exact sequence and digest.
+
+    Raises:
+        ValidationError: Missing, unaccepted or insufficiently witnessed event.
+
+    Extracted unchanged from Wallet.boundEvent at aef3013d. Historical selection
+    is valid for reproducing an existing opening; authoring a new bound update
+    separately requires the known current issuee event.
+    """
+    issuee = acdc.iseaid
+    event = hby.db.evts.get((issuee, said)) if issuee else None
+    if (event is None or hby.db.kels.getLast(keys=issuee, on=event.sn) != said
+            or not hby.db.fullyWitnessed(event)):
+        raise ValidationError('bound reference requires an accepted witnessed issuee KEL event')
+    return dict(bound=True, bsn=event.sn, bd=event.said)

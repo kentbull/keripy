@@ -19,6 +19,7 @@ from keri.help import helping
 from keri.kering import ConfigurationError, ValidationError
 from keri.peer import exchanging
 from .registry_custody import EncryptedCustody
+from .credential_disclosing import boundEvent
 
 
 @dataclass
@@ -119,12 +120,7 @@ class Wallet:
                 ValidationError: Event is missing, unaccepted, or not fully witnessed.
 
             This public evidence lookup loads no custody and does not derive an opening."""
-        issuee = acdc.iseaid
-        event = self.hby.db.evts.get((issuee, said)) if issuee else None
-        if (event is None or self.hby.db.kels.getLast(keys=issuee, on=event.sn) != said
-                or not self.hby.db.fullyWitnessed(event)):
-            raise ValidationError('bound reference requires an accepted witnessed issuee KEL event')
-        return dict(bound=True, bsn=event.sn, bd=event.said)
+        return boundEvent(self.hby, acdc, said)
 
     def recordIssued(self, acdc, update, *, blinder=None):
         """Record verified issuance, or return an identical historical record.

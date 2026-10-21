@@ -180,3 +180,12 @@ policy. These narrow harness options support Locksmith's separate
 receipts, full holder admission, issuer shutdown and two graduated Dolly hooks.
 The test retains exact earlier proof/hook hashes. Original six scripts remain
 unchanged. These are local scenario-composition choices, not protocol changes.
+
+
+`credential_disclosing.boundEvent` extracts the existing `Wallet.boundEvent`
+public-evidence lookup at aef3013d. The wallet method remains a compatibility
+adapter. GUI and headless applications can select the same exact accepted,
+fully witnessed issuee event without constructing a wallet or loading custody.
+The historical-reference validation is unchanged; authoring a new bound update
+still separately requires the known current issuee head. This is a local
+separation-of-concerns extraction, not a new protocol or timing rule.
