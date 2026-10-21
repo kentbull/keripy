@@ -81,3 +81,22 @@ Development S1 (full holder, graduated HTTP) and S2 (partial holder, onward TCP)
 passed with two Dolly hooks each using registrar 7b77c08 and observer 27a7e0f.
 These runs used an uncommitted harness and do not close clean qualification,
 hosted-witness or Locksmith acceptance gates.
+
+### Hosted witness authorization through KLI
+
+`cli.common.witness_authing.readWitnessAuth` is a local narrow adapter from an
+explicit JSON file to the existing `Receiptor` authorization map. Native author
+options/run/anchor and rotate parser/handler/doer pass these short-lived headers
+without persisting TOTP seeds or changing ordinary presentation. Native authoring
+rejects unrelated witness IDs and explicitly rejects this new option for groups;
+existing group workflows retain their previous behavior.
+
+The root URL fix in `witness.authenticate.AuthDoer.authDo` adapts the existing
+upstream command: strip its trailing slash before appending `/aids`, preventing
+HIO from interpreting `//aids` as another host. The actual hosted onboarding
+run reproduced that failure before correction.
+
+Fifteen focused native CLI/group/pruning tests pass. A development S1 story also
+passes using the actual hosted witness, registrar and observer binaries, including
+TOTP registration, a quorum-two rotation, native issuance and two Dolly hooks.
+This checks the real authorization path; final clean qualification remains open.

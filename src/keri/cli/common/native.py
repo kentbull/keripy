@@ -21,15 +21,19 @@ from ...kering import AuthError, ConfigurationError, Vrsn_2_0
 from ...peer import Exchanger
 
 
+from .witness_authing import readWitnessAuth
+
+
 def options(parser, *, author=False):
     """Add explicit v2 selection and optional authoring controls to parser.
 
     Mutate the argument parser and return None. author adds anchor timeout and
-    exact group/bound-evidence options. --native aliases --v2; v1 remains the
+    explicit witness authorization and exact group/bound-evidence options. --native aliases --v2; v1 remains the
     command default. These flags never toggle the core's authentication policy."""
     parser.add_argument('--v2', '--native', dest='native', action='store_true',
                         help='use v2 ACDC registries and IPEX (--native is an alias)')
     if author:
+        parser.add_argument("--witness-auth-file", help="JSON witness AID to short-lived authorization header map")
         parser.add_argument('--timeout', type=float, default=30.0,
                             help='seconds to wait for authenticated anchor acceptance')
         parser.add_argument('--bound-event', help='exact accepted issuee KEL event for a bound state update')
@@ -136,6 +140,7 @@ class NativeAuthor(doing.DoDoer):
         Initialize pending group/anchor/opening references and one cooperative run
         child. This constructor opens no identity, registry, or custody store."""
         self.args, self.operation = args, operation
+        self.auths = {}
         self.group = self.proposedEvent = self.proposedAnchor = self.blinder = None
         super().__init__(doers=[doing.doify(self.run)])
 
@@ -190,7 +195,7 @@ class NativeAuthor(doing.DoDoer):
             author = reg.hab.rotate if reg.hab.kever.estOnly else reg.hab.interact
             author(data=[seal], version=Vrsn_2_0, gvrsn=Vrsn_2_0)
             anchor = reg.hab.kever.serder
-        receiptor.msgs.append(dict(pre=reg.hab.pre, sn=anchor.sn))
+        receiptor.msgs.append(dict(pre=reg.hab.pre, sn=anchor.sn, auths=self.auths))
         deadline = time.monotonic() + self.args.timeout
         while True:
             hby.kvy.processEscrows()
@@ -279,6 +284,7 @@ class NativeAuthor(doing.DoDoer):
         self.tock = tock
         yield self.tock
         args = self.args
+        self.auths = readWitnessAuth(getattr(args, "witness_auth_file", None))
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive')
         wantsCustody = (getattr(args, 'with_custody', False) if self.operation == 'incept'
@@ -287,6 +293,10 @@ class NativeAuthor(doing.DoDoer):
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('native authoring requires a local alias')
+            if set(self.auths) - set(hab.kever.wits):
+                raise ConfigurationError('witness authorization names an AID outside the controller witness set')
+            if self.auths and isinstance(hab, GroupHab):
+                raise ConfigurationError('group authoring does not yet support per-command witness authorization')
             receiptor = Receiptor(hby=hby)
             if isinstance(hab, GroupHab):
                 self.group = NativeGroup(hby, rgy, hab, Exchanger(hby, handlers=[]), Notifier(hby=hby))

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 from hio.base import doing
 
+from ..common.witness_authing import readWitnessAuth
 from ..common import Parsery, config, addRotationArgs, setupHby, parseVersion
 
 from ...kering import ConfigurationError, Kinds
@@ -30,6 +31,7 @@ parser.add_argument("--authenticate", '-z', help="Prompt the controller for auth
                     action='store_true')
 parser.add_argument('--code', help='<Witness AID>:<code> formatted witness auth codes.  Can appear multiple times',
                     default=[], action="append", required=False)
+parser.add_argument("--witness-auth-file", help="JSON witness AID to short-lived authorization header map")
 parser.add_argument('--code-time', help='Time the witness codes were captured.', default=None, required=False)
 
 parser.add_argument("--proxy", help="alias for delegation communication proxy", default=None)
@@ -70,7 +72,8 @@ def rotate(args):
                          isith=opts.isith, nsith=opts.nsith,
                          count=opts.ncount, toad=opts.toad,
                          data=opts.data, proxy=args.proxy, authenticate=args.authenticate,
-                         codes=args.code, codeTime=args.code_time, version=args.version)
+                         codes=args.code, codeTime=args.code_time, version=args.version,
+                         auths=readWitnessAuth(getattr(args, "witness_auth_file", None)))
 
     doers = [rotDoer]
 
@@ -126,7 +129,7 @@ class RotateDoer(doing.DoDoer):
 
     def __init__(self, name, base, bran, alias, version=None, endpoint=False, isith=None, nsith=None, count=None,
                  toad=None, wits=None, cuts=None, adds=None, data: list = None, proxy=None, authenticate=False,
-                 codes=None, codeTime=None):
+                 codes=None, codeTime=None, auths=None):
         """
         Returns DoDoer with all registered Doers needed to perform rotation.
 
@@ -140,6 +143,8 @@ class RotateDoer(doing.DoDoer):
             adds is list of qb64 pre of witnesses to be added to witness list
             data is list of dicts of committed data such as seals
             proxy is optional name of proxy Hab to use to send messages to delegator
+            auths is an optional witness AID to existing authorization-header map;
+                it contains short-lived codes, never persisted provider secrets.
 
        """
 
@@ -151,6 +156,7 @@ class RotateDoer(doing.DoDoer):
         self.data = data
         self.endpoint = endpoint
         self.authenticate = authenticate
+        self.auths = dict(auths or {})
         self.codes = codes if codes is not None else []
         self.codeTime = codeTime
         self.version = version
@@ -207,7 +213,7 @@ class RotateDoer(doing.DoDoer):
                    cuts=list(self.cuts), adds=list(self.adds),
                    data=self.data, framed=True, **kwa)
 
-        auths = {}
+        auths = dict(self.auths)
         if self.authenticate:
             codeTime = helping.fromIso8601(self.codeTime) if self.codeTime is not None else helping.nowIso8601()
             for arg in self.codes:

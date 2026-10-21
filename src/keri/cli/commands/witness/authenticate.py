@@ -116,7 +116,9 @@ class AuthDoer(doing.DoDoer):
 
         client.request(
             method="POST",
-            path=f"{client.requester.path}/aids",
+            # A root endpoint already ends in '/'. A double slash would be
+            # interpreted as a network-path reference naming host 'aids'.
+            path=f"{client.requester.path.rstrip('/')}/aids",
             headers=headers,
             fargs=fargs
         )
