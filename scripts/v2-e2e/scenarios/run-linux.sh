@@ -8,6 +8,9 @@ IMAGE=${SCENARIO_IMAGE:-keripy-v2-scenarios:dev}
 BASE_IMAGE=${SCENARIO_BASE_IMAGE:-keripy-v2-scenarios:base}
 VOLUME=${SCENARIO_VOLUME:-keripy-v2-scenarios}
 PROFILE=${SCENARIO_SERVICE_PROFILE:-kli}
+WITNESS_PROFILE=${SCENARIO_WITNESS_PROFILE:-kli}
+case "$WITNESS_PROFILE" in kli|hk) ;; *) exit 2;; esac
+if [[ $WITNESS_PROFILE == hk ]]; then : "${WITNESS_HK_SOURCE:?Set the upgraded hosted witness checkout}"; fi
 case "$PROFILE" in kli|kf) ;; *) printf 'Unknown service profile: %s\n' "$PROFILE" >&2; exit 2;; esac
 if [[ $PROFILE == kf ]]; then
     : "${KF_REGISTRAR_SOURCE:?Set the upgraded registrar checkout}"
@@ -42,8 +45,19 @@ if [[ $PROFILE == kf ]]; then
 fi
 fi
 if [[ $PROFILE == kf ]]; then IMAGE="$IMAGE-kf"; fi
+if [[ $WITNESS_PROFILE == hk ]]; then
+    if [[ ${SCENARIO_SKIP_BUILD:-0} != 1 ]]; then
+        WITNESS_DIRTY=false
+        [[ -z $(git -C "$WITNESS_HK_SOURCE" status --porcelain) ]] || WITNESS_DIRTY=true
+        docker build -t "$IMAGE-hk" -f "$HERE/Dockerfile.hk" \
+            --build-context "witness-src=$WITNESS_HK_SOURCE" --build-arg "SCENARIO_IMAGE=$IMAGE" \
+            --build-arg "WITNESS_REVISION=$(git -C "$WITNESS_HK_SOURCE" rev-parse HEAD)" \
+            --build-arg "WITNESS_DIRTY=$WITNESS_DIRTY" "$ROOT"
+    fi
+    IMAGE="$IMAGE-hk"
+fi
 docker run --rm --mount "type=volume,src=$VOLUME,dst=/tmp" \
     --mount "type=volume,src=$VOLUME-state,dst=/usr/local/var" \
-    -e "SCENARIO_SERVICE_PROFILE=$PROFILE" \
+    -e "SCENARIO_WITNESS_PROFILE=$WITNESS_PROFILE" -e "SCENARIO_SERVICE_PROFILE=$PROFILE" \
     -e "SCENARIO_TRANSPORT=${SCENARIO_TRANSPORT:-http}" "$IMAGE" \
     "/workspace/scripts/v2-e2e/scenarios/$SCENARIO"

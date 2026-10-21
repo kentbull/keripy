@@ -1,0 +1,10 @@
+# syntax=docker/dockerfile:1
+ARG SCENARIO_IMAGE=community-services:dev-kf
+FROM ${SCENARIO_IMAGE}
+COPY --from=witness-src pyproject.toml README.md LICENSE /opt/witness-hk/
+COPY --from=witness-src src /opt/witness-hk/src
+ARG WITNESS_REVISION
+ARG WITNESS_DIRTY=false
+ENV SCENARIO_WITNESS_REVISION=${WITNESS_REVISION} SCENARIO_WITNESS_DIRTY=${WITNESS_DIRTY}
+RUN python -m pip install pyotp==2.9.0 && python -m pip wheel --no-deps --no-build-isolation /opt/witness-hk -w /artifacts && python -m pip install --no-deps /artifacts/witopnet*.whl
+RUN python -c 'import os,json,hashlib,pathlib; p=pathlib.Path("/artifacts"); f=p/"manifest.json"; v=json.loads(f.read_text()); v.update(witness_profile="hk", witness_revision=os.environ["SCENARIO_WITNESS_REVISION"], witness_worktree_dirty=os.environ["SCENARIO_WITNESS_DIRTY"]=="true"); v["wheels"].update({w.name:hashlib.sha256(w.read_bytes()).hexdigest() for w in p.glob("witopnet*.whl")}); f.write_text(json.dumps(v,indent=2))'

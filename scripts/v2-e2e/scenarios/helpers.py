@@ -156,6 +156,11 @@ if __name__ == '__main__':
             value['roles'][role] = dict(aid=(folder / (role + '.aid')).read_text().strip())
         for path in folder.glob('*.ref'):
             value[path.stem] = path.read_text().strip()
+        value['hostedWitnesses'] = {path.stem.removesuffix('-hosted'): json_file(path)
+            for path in folder.glob('*-hosted.json')}
+        if value['hostedWitnesses']:
+            value['topology'].update(witnessIdentityModel='per-controller hosted',
+                onboarding='incept, register, rotate to quorum two before credential issuance')
         value['versions'] = dict(kli=(folder / 'kli-version.txt').read_text().strip(),
             dolly=(folder / 'dolly-version.txt').read_text().strip())
         value['authorizationProfile'] = (folder / 'authorization.txt').read_text().strip()

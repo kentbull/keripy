@@ -66,3 +66,28 @@ wallet actors still use KLI; hosted witness and Locksmith profiles are subsequen
 gates. Development runs of the full-holder/HTTP and partial-holder/TCP stories
 passed with two Dolly webhooks each. They are integration evidence, not the final
 clean multi-component qualification.
+
+### Additive hosted witness profile
+
+Set `SCENARIO_WITNESS_PROFILE=hk` and `WITNESS_HK_SOURCE` to the upgraded
+witness-hk checkout. It can be combined with the KF service profile. The runner
+installs and launches three independent `witopnet marshal` processes.
+
+This uses the provider's existing per-controller onboarding: incept an actor,
+provision one hosted witness in each process, register through `kli witness
+authenticate`, then rotate to the three witnesses with quorum two before
+credential issuance. Each controller has its own three witness identities.
+The result includes their provider mapping and this onboarding history. The
+original profile still covers witnessed inception with shared witness identities.
+
+`hosted.sh` drives public CLI operations. `hosted.py` performs boot HTTP calls,
+selects exact public introduction frames and generates short-lived headers from
+the CLI's registration result. KLI/core verifies all introductions and receipts;
+the adapter writes no accepted protocol rows. Test-only TOTP URLs and headers
+remain under the owner-only `private/` directory and must never enter public
+qualification archives. This is an operator adapter, not a new wallet secret
+storage or provisioning protocol.
+
+Development S1 passed with actual hosted provisioning/authorization, issuance,
+full-holder graduated presentation and both Dolly hooks. The remaining distinct
+stories and final clean installation remain separate gates.

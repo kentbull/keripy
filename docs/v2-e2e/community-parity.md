@@ -100,3 +100,17 @@ Fifteen focused native CLI/group/pruning tests pass. A development S1 story also
 passes using the actual hosted witness, registrar and observer binaries, including
 TOTP registration, a quorum-two rotation, native issuance and two Dolly hooks.
 This checks the real authorization path; final clean qualification remains open.
+
+### Hosted scenario composition
+
+`scenarios/hosted.sh` and `hosted.py`, the witness profile branches in `common.sh`
+and `run-linux.sh`, `Dockerfile.hk` and result mapping are local test integration.
+They reuse the existing witness-hk boot/registration API and KLI rotation; no
+new provider protocol or bypass is introduced. Three processes retain quorum
+two, with the provider's per-controller witness identities and pre-issuance
+onboarding rotation explicitly recorded. The original witnessed-inception
+scenario profile remains supported.
+
+Development S1 passed against witness-hk cafe3f2, registrar 7b77c08, observer
+27a7e0f and the authored KLI authorization changes. This result has two actual
+Dolly hooks, but does not close all-six/released-peer/restart/clean-artifact gates.

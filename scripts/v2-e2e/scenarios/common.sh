@@ -4,6 +4,7 @@ set -Eeuo pipefail
 umask 077
 HERE=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 JSON="$HERE/helpers.py"
+source "$HERE/hosted.sh"
 declare -A PIDS=() PORTS=() AIDS=() NAMES=()
 
 # Print selected JSON value: artifact path, dotted path. Missing/invalid JSON fails.
@@ -32,7 +33,15 @@ cleanup() {
 k() {
     local role=$1
     shift
-    printf 'kli ' >> "$RUN_DIR/commands.log"
+    if [[ ${WITNESS_PROFILE:-kli} == hk && -f "$RUN_DIR/$role-hosted.json" ]]; then
+        case "${1:-}:${2:-}:${3:-}" in
+            rotate:*|vc:create:*|vc:revoke:*|vc:registry:incept|vc:registry:advance)
+                python "$HERE/hosted.py" auth "$RUN_DIR" "$role"
+                set -- "$@" --witness-auth-file "$RUN_DIR/private/$role-auth.json"
+                ;;
+        esac
+    fi
+    printf 'kli '  >> "$RUN_DIR/commands.log"
     printf '%q ' "$@" >> "$RUN_DIR/commands.log"
     printf '%q %q %q %q\n' --name "${NAMES[$role]}" --base "$STORE_BASE" >> "$RUN_DIR/commands.log"
     if ! timeout "${SCENARIO_COMMAND_TIMEOUT:-45}" kli "$@" --name "${NAMES[$role]}" --base "$STORE_BASE" \
@@ -92,15 +101,17 @@ prepare() {
     export KLI_KEYSTORE_PASSCODE
     KLI_KEYSTORE_PASSCODE=$(kli passcode generate)
     trap cleanup EXIT
+    WITNESS_PROFILE=${SCENARIO_WITNESS_PROFILE:-kli}
+    case "$WITNESS_PROFILE" in kli|hk) ;; *) printf 'Unknown witness profile: %s\n' "$WITNESS_PROFILE" >&2; exit 2;; esac
     SERVICE_PROFILE=${SCENARIO_SERVICE_PROFILE:-kli}
     case "$SERVICE_PROFILE" in kli|kf) ;; *) printf 'Unknown service profile: %s\n' "$SERVICE_PROFILE" >&2; exit 2;; esac
     printf '%s\n' "$SERVICE_PROFILE" > "$RUN_DIR/service-profile.txt"
     ROLES=(witness1 witness2 witness3 issuer holder registrar observer dolly)
     if [[ $SCENARIO == *selected-discloser* ]]; then ROLES+=(presenter); fi
-    python "$JSON" ports "${ROLES[@]}" witness1tcp witness2tcp witness3tcp dollytcp hook registraradmin \
+    python "$JSON" ports "${ROLES[@]}" witness1tcp witness2tcp witness3tcp dollytcp hook registraradmin witness1boot witness2boot witness3boot \
         > "$RUN_DIR/ports.json"
     local role
-    for role in "${ROLES[@]}" witness1tcp witness2tcp witness3tcp dollytcp hook registraradmin; do
+    for role in "${ROLES[@]}" witness1tcp witness2tcp witness3tcp dollytcp hook registraradmin witness1boot witness2boot witness3boot; do
         PORTS[$role]=$(value "$RUN_DIR/ports.json" "$role")
     done
     printf '{"transferable":false,"wits":[],"toad":0,"icount":1,"isith":"1","ncount":0,"nsith":"0"}\n' \
@@ -110,6 +121,9 @@ prepare() {
     for role in "${ROLES[@]}"; do NAMES[$role]="${RUN_DIR##*/}-$role"; done
     : > "$RUN_DIR/witnesses.cesr"
     : > "$RUN_DIR/witness-kels.cesr"
+    if [[ $WITNESS_PROFILE == hk ]]; then
+        start_hosted_witnesses
+    else
     for role in witness1 witness2 witness3; do
         k "$role" init --version 2.0
         k "$role" incept -a "$role" --version 2.0 --file "$RUN_DIR/witness.json"
@@ -125,10 +139,11 @@ prepare() {
             -a "$role" --no-prompt -H "${PORTS[$role]}" -T "${PORTS[${role}tcp]}"
         python "$JSON" ready "http://127.0.0.1:${PORTS[$role]}/oobi" 15
     done
+    fi
     for role in "${ROLES[@]:3}"; do
         k "$role" init --version 2.0
-        k "$role" kel import --version 2.0 --file "$RUN_DIR/witnesses.cesr"
-        if [[ $role == issuer || $role == holder || $role == presenter ]]; then
+        if [[ -s "$RUN_DIR/witnesses.cesr" ]]; then k "$role" kel import --version 2.0 --file "$RUN_DIR/witnesses.cesr"; fi
+        if [[ $WITNESS_PROFILE == kli && ( $role == issuer || $role == holder || $role == presenter ) ]]; then
             k "$role" incept -a "$role" --version 2.0 --file "$RUN_DIR/plain.json" \
                 --receipt-endpoint --wits "${AIDS[witness1]}" --wits "${AIDS[witness2]}" \
                 --wits "${AIDS[witness3]}" --toad 2
@@ -137,6 +152,9 @@ prepare() {
         fi
         AIDS[$role]=$(kli aid --name "${NAMES[$role]}" --base "$STORE_BASE" -a "$role")
         printf '%s\n' "${AIDS[$role]}" > "$RUN_DIR/$role.aid"
+        if [[ $WITNESS_PROFILE == hk && ( $role == issuer || $role == holder || $role == presenter ) ]]; then
+            configure_hosted_actor "$role"
+        fi
         k "$role" kel export -a "$role" --output "$RUN_DIR/$role-initial.cesr"
     done
     cat "$RUN_DIR/witnesses.cesr" "$RUN_DIR"/*-initial.cesr > "$RUN_DIR/bootstrap-initial.cesr"
