@@ -942,13 +942,30 @@ class IpexHandler:
         return None
 
     def _verifyDisclosurePlan(self, plan, origin, nodes, order):
-        """Verify a disclosed Grant DAG against its negotiated disclose paths.
+        """Check exact disclosed nodes against the negotiated local path contract.
 
-        Each plan entry must select the corresponding node in breadth-first
-        graph order and match that node's schema. An empty field list ([]) permits
-        any valid compaction level, a sole empty-string path ([""]) requires the whole
-        ACDC, and other paths require their canonical ``Compactor`` disclosure
-        closure.
+        Args:
+            plan (list): Ordered (schema SAID, graph prefix, field-path list)
+                entries, one per node in the disclosed breadth-first traversal.
+            origin (str): Root credential SAID from the Grant.
+            nodes (dict): Exact received parsed node views indexed by SAID.
+            order (list[str]): Reachable node order already checked by _walkGraph.
+
+        Returns:
+            bool: Whether every selected node/schema and requested disclosure
+                closure matches, without resolving or expanding received views.
+
+        Empty fields require node presence at any valid compaction level. A sole
+        empty-string path requires expanded a/e/r section containers and visible
+        aggregate members. This is a provisional local whole-block contract, not
+        proof of universal recursive completeness: an unconstrained string may
+        be either ordinary data or a compacted nested block's SAID. Compactor
+        cannot recover that distinction from received bytes. Explicit leaf paths
+        or a schema requiring the relevant block structure provide stronger
+        guarantees; ordinary node-schema validation runs separately afterward.
+
+        Other paths require their canonical Compactor disclosure closure. Cached
+        fuller sections never satisfy an omitted path or enlarge these bytes.
         """
         selected = []
         for schema, prefix, fields in plan:
@@ -992,15 +1009,21 @@ class IpexHandler:
             if nodeSchema != schema:
                 return False
 
-            # The empty path selects the whole ACDC. Every present compactable
-            # section must therefore be carried instead of its bare SAID/AGID.
+            # Require expanded section containers under the local empty-path
+            # contract. A digest-valued arbitrary attribute remains ambiguous;
+            # its encoding alone cannot distinguish data from a hidden block.
             if fields == [""]:
                 for label in ("a", "e", "r"):
                     section = nserder.sad.get(label)
                     if section and not isinstance(section, Mapping):
                         return False
                 aggregate = nserder.sad.get("A")
-                if aggregate and not isinstance(aggregate, list):
+                if aggregate and (not isinstance(aggregate, list)
+                        or any(not isinstance(member, Mapping)
+                               for member in aggregate[1:])):
+                    # Aggregate positions are structurally blocks, unlike an
+                    # arbitrary attribute scalar. A bare member digest is known
+                    # selective withholding and cannot fulfill this request.
                     return False
                 continue
 

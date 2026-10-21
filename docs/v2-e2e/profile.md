@@ -114,6 +114,29 @@ matrix. `scripts/v2-e2e/walkthrough.sh` runs the shorter process/socket lifecycl
 The [released-peer profile](legacy-peers.md) records the necessary old-source
 TSN adapter and its exact interoperability boundary.
 
+## Whole-block disclosure requests
+
+The local IPEX `dp` interpretation distinguishes `[]` (node presence at any
+valid compaction level) from `[""]` (expanded section containers and visible
+aggregate member blocks). A hidden aggregate member is structurally a withheld
+block and fails the latter request. Ordinary digest-valued attribute scalars
+remain allowed: after reception, an unconstrained string is indistinguishable
+from a compacted nested block's SAID. Consequently, `[""]` alone is **not proof
+of universal recursive completeness**. Compactor cannot infer missing type
+information, and a fuller cached view does not fulfill the received disclosure.
+Explicit required leaf paths or a schema that requires the relevant block
+structure are necessary for stronger guarantees. Existing node-schema validation
+already refuses a scalar where that schema requires an object.
+
+This is a provisional implementation contract approved for this R&D profile.
+The pinned ACDC [variant/compaction definitions](https://github.com/trustoverip/kswg-acdc-specification/blob/f0bd097de318fbbe2d069a2b46cecd42550762e3/spec/spec-body.md#acdc-variants)
+distinguish block-level and deeper expansion; its
+[IPEX outline](https://github.com/trustoverip/kswg-acdc-specification/blob/f0bd097de318fbbe2d069a2b46cecd42550762e3/spec/spec-body.md#issuance-and-presentation-exchange-ipex)
+is non-normative and does not settle this exact `dp` wire spelling. S1/S2 full
+presentation claims must enumerate required paths and expected revealed values
+in their material manifests, then assert those values in actual retained/hook
+outputs. They cannot treat the empty-string request alone as that evidence.
+
 ## Graph and bound-state decisions
 
 The shared graph evaluator uses the published AND/OR/NAND/NOR/AVG/WAVG and
