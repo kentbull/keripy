@@ -1,7 +1,9 @@
 # Native ACDC reference profile
 
-Status: implementation in progress. This branch is not yet qualified for the
-complete issuer–holder–Dolly lifecycle. Python completion precedes TypeScript.
+This branch implements the declared native Python R&D profile. Python
+qualification precedes TypeScript. The exact commit and completed run results
+are reported in the final handoff; the reproducible gates and capability map
+are in [qualification.md](qualification.md).
 
 ## Source pins
 
@@ -106,9 +108,37 @@ The initial native macOS run failed opening LMDB with ENOSPC despite 2.4 TiB
 free. That run establishes no protocol result. Docker qualification is the
 reference environment until the host resource issue is resolved.
 
-Required outstanding gates remain P1–P5 and C1–C3, including historical
-presentation evidence, complete native forms/graph/group behavior, Dolly's real
-v1/v2 grants and two-stage disclosure webhooks, independent process/socket and
-restart demonstrations, v1.2.14/v1.3.6 peers, fresh-checkout reproduction and
-independent final acceptance. Unit or in-process service success does not close
-those gates.
+Run `scripts/v2-e2e/qualify.sh` from a fresh checkout to execute the complete
+selected protocol/application suite and the separately installed released-peer
+matrix. `scripts/v2-e2e/walkthrough.sh` runs the shorter process/socket lifecycle.
+The [released-peer profile](legacy-peers.md) records the necessary old-source
+TSN adapter and its exact interoperability boundary.
+
+## Graph and bound-state decisions
+
+The shared graph evaluator uses the published AND/OR/NAND/NOR/AVG/WAVG and
+I2I/NI2I/DI2I/NOT profile. AVG/WAVG require explicit application value/acceptance
+policy; the verifier cannot invent ecosystem meaning. Actual accepted KEL
+inception/approval evidence establishes DI2I delegation. Unsupported operators,
+undisclosed required edges and ambiguous section views cannot become truth.
+Independent cached sections require explicit commitment/source selection and
+never silently widen an IPEX disclosure.
+
+For bound authority, a near issuance in the same relevant issuee KEL is tested
+against `(issued.bn, revoked.bn]`. This interpretation relies on the published
+issuer assertion that the named issuee event was current when bound. Different
+KEL ordinals are not comparable clocks. Earliest matching issuance means the
+earliest in the verified selected TEL history or known accepted issuer KEL;
+it does not prove globally first publication. A real stale-bound counterexample
+and a resealing counterexample delimit these guarantees in the tests.
+
+Issued inventory retains verified original bound coordinates. New bound CLI
+updates require an explicit known-current issuee event; historical retries use
+the original coordinates. A holder can explicitly refresh a retained grant's
+opening using provisioned custody and newly acquired accepted registry evidence.
+An explicit bound event is required when new bound metadata is needed.
+
+Observation freshness is tied to the currently configured source URL. Reopening
+with a different observer/registrar preserves authenticated history but does not
+inherit freshness authority from a removed source. No new KRAM timing rule is
+introduced by this application policy.
