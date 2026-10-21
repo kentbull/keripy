@@ -24,13 +24,12 @@ fi
 docker network create "$run" >/dev/null
 docker run -d --rm --name "$run-1214" --network "$run" \
     --mount "type=volume,src=$run-1214,dst=/tmp" \
-    --mount "type=bind,src=$here,dst=/opt/legacy,readonly" keripy-legacy-peer:1.2.14 >/dev/null
+    keripy-legacy-peer:1.2.14 >/dev/null
 docker run -d --rm --name "$run-136" --network "$run" \
     --mount "type=volume,src=$run-136,dst=/tmp" \
-    --mount "type=bind,src=$here,dst=/opt/legacy,readonly" keripy-legacy-peer:1.3.6 >/dev/null
+    keripy-legacy-peer:1.3.6 >/dev/null
 # The runner checks profile health with a bounded retry before pytest starts.
 docker run --rm --name "$run-current" --network "$run" \
-    --mount "type=bind,src=$root,dst=/workspace,readonly" \
     --mount "type=volume,src=$run-current,dst=/tmp" \
     -e PYTHONDONTWRITEBYTECODE=1 -e KERI_LEGACY_PEER_MATRIX=1 \
     -e "LEGACY_PEER_1_2_14_URL=http://$run-1214:7723/" \

@@ -6,5 +6,12 @@ COPY scripts/v2-e2e/requirements.lock /build/requirements.lock
 RUN python -m pip install -c /build/requirements.lock pip==26.2.1 setuptools==84.0.0 wheel==0.48.0
 RUN python -m pip install --no-build-isolation -r /build/requirements.lock
 RUN mkdir -p /build/src && cd /build && python -m pip install --no-deps --no-build-isolation '.[test]'
-ENV PYTHONPATH=/workspace/src
+COPY setup.py README.md LICENSE /workspace/
+COPY src /workspace/src
+COPY tests /workspace/tests
+COPY scripts /workspace/scripts
+COPY static /workspace/static
+COPY keri /workspace/keri
+RUN python -m pip install --no-deps --no-build-isolation /workspace
+ENV PYTHONDONTWRITEBYTECODE=1
 CMD ["python", "-m", "pytest", "-q", "tests/acdc"]
