@@ -183,7 +183,7 @@ def test_independent_cli_witness_holder_observer_dolly_restart_and_revocation(tm
         # Use the existing synchronous receipt endpoint for inception itself.
         processes.invoke('issuer', 'witness', 'submit', '-a', 'issuer', '--receipt-endpoint')
         processes.invoke('holder', 'witness', 'submit', '-a', 'holder', '--receipt-endpoint')
-        registry = processes.invoke('issuer', 'vc', 'registry', 'incept', '--native',
+        registry = processes.invoke('issuer', 'vc', 'registry', 'incept', '--native', '--with-custody',
             '-a', 'issuer', '-r', 'r', '--timeout', '8')[0]['registry']
         attributes = {'d': '', 'u': Noncer().qb64,
             'status': {'d': '', 'u': Noncer().qb64, 'value': 'authorized'},

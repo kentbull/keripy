@@ -40,7 +40,7 @@ def test_native_cli_authoring_reopen_and_private_export(tmp_path):
         issuer = hby.makeHab(name='issuer', version=Vrsn_2_0)
         prefix = issuer.pre
 
-    created = invoke(name, 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'authority')[0]
+    created = invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'authority')[0]
     assert created['accepted'] is True
     assert created['controller'] == prefix
     regid = created['registry']
@@ -88,11 +88,27 @@ def test_native_cli_authoring_reopen_and_private_export(tmp_path):
     repeated = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'authority',
                       '--credential', '@' + str(public))[0]
     assert repeated['credential'] == credential
-    assert repeated['state'] == 'revoked'
+    assert repeated['state'] == 'unknown'  # retained issuance is not current blinded standing
     assert invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'authority',
                   '--said', credential)[0]['update'] == revoked['update']
     assert invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'authority')[0]['sn'] == 2
     assert private.read_bytes() == custody
+    # Simulate loss of this test registry's custody row. Historical issuance
+    # retry must neither regenerate a salt nor try to derive current standing.
+    with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
+                 version=Vrsn_2_0) as hby:
+        rgy = Regery(hby=hby, name=name, base=hby.base)
+        wallet = Wallet(hby, rgy)
+        try:
+            assert wallet.db.custody.rem((regid,))
+        finally:
+            wallet.close()
+            rgy.close()
+    retained = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'authority',
+                      '--credential', '@' + str(public))[0]
+    assert retained['update'] == issued['update']
+    assert retained['state'] == 'unknown'
+    assert invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'authority')[0]['sn'] == 2
 
 
 def test_native_option_is_explicit_and_legacy_remains_default():
@@ -102,13 +118,14 @@ def test_native_option_is_explicit_and_legacy_remains_default():
                     ['vc', 'revoke', '-a', 'issuer', '--said', 'example']):
         assert parser.parse_args(command + ['--name', 'example']).native is False
         assert parser.parse_args(command + ['--name', 'example', '--native']).native is True
+        assert parser.parse_args(command + ['--name', 'example', '--v2']).native is True
 
 
 def test_native_cli_refuses_unencrypted_custody_before_registry_creation():
     name = 'unencrypted-' + uuid.uuid4().hex
     with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
         hby.makeHab(name='issuer', version=Vrsn_2_0)
-    result = command(name, 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'blocked')
+    result = command(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'blocked')
     assert 'authenticated encrypted Keeper' in result.stdout
     assert '"accepted": true' not in result.stdout
     with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
@@ -116,6 +133,38 @@ def test_native_cli_refuses_unencrypted_custody_before_registry_creation():
         try:
             assert rgy.registryByName('blocked') is None
         finally:
+            rgy.close()
+
+
+def test_public_cli_lifecycle_never_provisions_or_encrypts_custody():
+    """Public inception/issue/revoke/list work with an unencrypted identity.
+
+    The subprocess helper supplies a passcode environment variable deliberately;
+    ordinary opening must not silently migrate Keeper encryption or create salt.
+    """
+    name = 'public-' + uuid.uuid4().hex
+    with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
+        hby.makeHab(name='issuer', version=Vrsn_2_0)
+        assert not hby.mgr.aeid
+    reg = invoke(name, 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'public')[0]
+    assert reg['custody'] == 'not requested'
+    issued = invoke(name, 'vc', 'create', '--native', '--unblinded', '-a', 'issuer',
+                    '-r', 'public', '--data', '{"name":"Public"}')[0]
+    assert issued['state'] == 'issued'
+    revoked = invoke(name, 'vc', 'revoke', '--native', '--unblinded', '-a', 'issuer',
+                     '-r', 'public', '--said', issued['credential'])[0]
+    assert revoked['state'] == 'revoked'
+    assert invoke(name, 'vc', 'list', '--native', '--issued', '-a', 'issuer')[0]['state'] == 'revoked'
+    with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
+        rgy = Regery(hby=hby, name=name, base=hby.base)
+        wallet = Wallet(hby, rgy)
+        try:
+            assert not hby.mgr.aeid
+            assert wallet.custody is None
+            assert list(wallet.db.custody.getTopItemIter()) == []
+            assert rgy.registryByName('public').sn == 2
+        finally:
+            wallet.close()
             rgy.close()
 
 
@@ -128,7 +177,7 @@ def test_native_cli_pending_witness_anchor_resumes_without_resealing():
             hby.makeHab(name='issuer', wits=[witness.pre], toad=1, version=Vrsn_2_0)
         # No witness endpoint has been configured; the normal receipt owner
         # cannot complete. The CLI must leave honest pending state, not success.
-        result = command(name, 'vc', 'registry', 'incept', '--native', '-a', 'issuer',
+        result = command(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer',
                          '-r', 'pending', '--timeout', '0.2')
         assert 'ERR:' in result.stdout
         assert '"accepted": true' not in result.stdout
@@ -148,7 +197,7 @@ def test_native_cli_pending_witness_anchor_resumes_without_resealing():
                 event, _, _ = hab.getOwnEvent(sn=sn)
                 receipt = witness.witness(event, version=Vrsn_2_0, gvrsn=Vrsn_2_0)
                 hby.psr.parse(ims=bytearray(receipt))
-        accepted = invoke(name, 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'pending')[0]
+        accepted = invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'pending')[0]
         assert accepted['registry'] == status['registry']
         assert accepted['accepted'] is True
         with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
@@ -161,7 +210,7 @@ def test_native_cli_unblinded_issuance_then_blind_revocation(tmp_path):
     with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         hby.makeHab(name='issuer', version=Vrsn_2_0)
-    invoke(name, 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'mixed')
+    invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'mixed')
     issued = invoke(name, 'vc', 'create', '--native', '--unblinded', '-a', 'issuer', '-r', 'mixed',
                     '--data', '{"name":"Bob"}')[0]
     assert issued['state'] == 'issued'
@@ -176,7 +225,7 @@ def test_native_cli_unblinded_issuance_then_blind_revocation(tmp_path):
     revoked = invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'mixed',
                      '--said', issued['credential'])[0]
     assert revoked['state'] == 'revoked'
-    assert invoke(name, 'vc', 'list', '--native', '--issued', '-a', 'issuer')[0]['state'] == 'revoked'
+    assert invoke(name, 'vc', 'list', '--native', '--issued', '-a', 'issuer')[0]['state'] == 'unknown'
 
 
 def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
@@ -186,7 +235,7 @@ def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
         hby.makeHab(name='issuer', version=Vrsn_2_0)
         holder = hby.makeHab(name='holder', version=Vrsn_2_0)
         issuee, first = holder.pre, holder.kever.serder.said
-    invoke(name, 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'bound')
+    invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'bound')
     issued = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'bound',
                     '--recipient', issuee, '--bound-event', first, '--data', '{"role":"bound"}')[0]
     assert issued['state'] == 'issued'

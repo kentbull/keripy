@@ -11,6 +11,7 @@ from keri.acdc import Regery, Registrar, acdcmap, blindate, update, grant, admit
 from keri.acdc.regbasing import RegBaser
 from keri.acdc.regeventing import Rever
 from keri.app.credentialing import Wallet, WalletBaser
+from keri.app.registry_custody import RegistryCustody
 from keri.app.configing import Configer
 from keri.app.habbing import openHby
 from keri.core import Kevery, Parser, Signer, Number, Diger, Compactor, Noncer, Blinder, messagize
@@ -61,20 +62,22 @@ def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_
         irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
         iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
         hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        iwallet.custody = RegistryCustody(issuer, irgy, db=iwallet.db)
+        hwallet.custody = RegistryCustody(holder, hrgy, db=hwallet.db)
         try:
             registry = Registrar(rgy=irgy).makeRegistry(name='credential', prefix=ihab.pre)
             rip = irgy.store.event(registry.regk)
             anchored(ihab, registry, rip)
-            issuerInfo = iwallet.createCustody(registry.regk, hhab.pre)
-            assert iwallet.createCustody(registry.regk, hhab.pre) == issuerInfo
+            issuerInfo = iwallet.custody.createCustody(registry.regk, hhab.pre)
+            assert iwallet.custody.createCustody(registry.regk, hhab.pre) == issuerInfo
             acdc = acdcmap(israid=ihab.pre, regid=registry.regk, iseaid=hhab.pre,
                            attribute={'d': '', 'name': 'Entitlement'})
-            opening = iwallet.derive(registry.regk, 1, acdc.said, 'issued')
+            opening = iwallet.custody.derive(registry.regk, 1, acdc.said, 'issued')
             update = blindate(regid=registry.regk, prior=rip.said, blid=opening.said)
             registry.processEvent(update)
             anchored(ihab, registry, update)
-            assert iwallet.recordIssued(acdc, update.said).credential == acdc.said
-            assert iwallet.exportCustody(registry.regk, export) == export
+            assert iwallet.recordIssued(acdc, update.said, blinder=opening).credential == acdc.said
+            assert iwallet.custody.exportCustody(registry.regk, export) == export
             assert export.stat().st_mode & 0o777 == 0o600
             salt = json.loads(export.read_text())['salt']
             retained = iwallet.db.custody.get((registry.regk,))
@@ -85,17 +88,17 @@ def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_
             receiver = Rever(db=holder.db, reger=hrgy.baser)
             assert receiver.processEvent(rip)
             assert receiver.processEvent(update)
-            holderInfo = hwallet.importCustody(export, regid=registry.regk,
+            holderInfo = hwallet.custody.importCustody(export, regid=registry.regk,
                                                controller=ihab.pre, discloser=hhab.pre)
             assert holderInfo == issuerInfo
-            assert hwallet.derive(registry.regk, 1, acdc.said, 'issued').qb64 == opening.qb64
-            future = iwallet.derive(registry.regk, 17, acdc.said, 'revoked').qb64
-            assert hwallet.derive(registry.regk, 17, acdc.said, 'revoked').qb64 == future
+            assert hwallet.custody.derive(registry.regk, 1, acdc.said, 'issued').qb64 == opening.qb64
+            future = iwallet.custody.derive(registry.regk, 17, acdc.said, 'revoked').qb64
+            assert hwallet.custody.derive(registry.regk, 17, acdc.said, 'revoked').qb64 == future
             issuerReplacement = Signer(transferable=False)
             issuer.mgr.updateAeid(issuerReplacement.verfer.qb64, issuerReplacement.qb64)
-            assert iwallet.importCustody(export, regid=registry.regk, controller=ihab.pre,
+            assert iwallet.custody.importCustody(export, regid=registry.regk, controller=ihab.pre,
                                          discloser=hhab.pre, rewrap=True) == issuerInfo
-            assert iwallet.derive(registry.regk, 17, acdc.said, 'revoked').qb64 == future
+            assert iwallet.custody.derive(registry.regk, 17, acdc.said, 'revoked').qb64 == future
             assert all(salt.encode() not in Path(baser.path, 'data.mdb').read_bytes()
                        for baser in (irgy.baser, hrgy.baser))
             regid, controller, discloser, credential = registry.regk, ihab.pre, hhab.pre, acdc.said
@@ -108,40 +111,41 @@ def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_
     with encrypted('custody-holder', tmp_path, holderKey) as holder:
         hrgy = regery(holder, tmp_path)
         wallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        wallet.custody = RegistryCustody(holder, hrgy, db=wallet.db)
         try:
             assert holder.habByPre(discloser)
             assert hrgy.store.head(regid).qb64 == update.said
-            assert wallet.derive(regid, 17, credential, 'revoked').qb64 == future
-            assert wallet.importCustody(export, regid=regid, controller=controller,
+            assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
+            assert wallet.custody.importCustody(export, regid=regid, controller=controller,
                                         discloser=discloser) == holderInfo
             with pytest.raises(ValidationError):
-                wallet.importCustody(export, regid=regid, controller=discloser, discloser=discloser)
+                wallet.custody.importCustody(export, regid=regid, controller=discloser, discloser=discloser)
             with pytest.raises(ValidationError):
-                wallet.importCustody(export, regid=regid, controller=controller, discloser=controller)
+                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=controller)
             export.chmod(0o644)
             with pytest.raises(ValidationError, match='mode0600'):
-                wallet.importCustody(export, regid=regid, controller=controller, discloser=discloser)
+                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=discloser)
             export.chmod(0o600)
             link = tmp_path / 'link'
             link.symlink_to(export)
             with pytest.raises(OSError):
-                wallet.importCustody(link, regid=regid, controller=controller, discloser=discloser)
+                wallet.custody.importCustody(link, regid=regid, controller=controller, discloser=discloser)
             with pytest.raises(FileExistsError):
-                wallet.exportCustody(regid, export)
+                wallet.custody.exportCustody(regid, export)
             # Manager does not rewrap application records; identity mismatch is explicit and closed.
             replacement = Signer(transferable=False)
             holder.mgr.updateAeid(replacement.verfer.qb64, replacement.qb64)
             with pytest.raises(AuthError, match='AEID changed'):
-                wallet.derive(regid, 18, credential, 'revoked')
+                wallet.custody.derive(regid, 18, credential, 'revoked')
             with pytest.raises(AuthError, match='AEID changed'):
-                wallet.importCustody(export, regid=regid, controller=controller, discloser=discloser)
-            assert wallet.importCustody(export, regid=regid, controller=controller,
+                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=discloser)
+            assert wallet.custody.importCustody(export, regid=regid, controller=controller,
                                          discloser=discloser, rewrap=True) == holderInfo
-            assert wallet.derive(regid, 17, credential, 'revoked').qb64 == future
+            assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
             assert wallet.db.custody.get((regid,)).aeid == replacement.verfer.qb64
             wallet.db.close()
             wallet.db.reopen()
-            assert wallet.derive(regid, 17, credential, 'revoked').qb64 == future
+            assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
         finally:
             wallet.close()
             hrgy.close()
@@ -226,9 +230,10 @@ def test_unencrypted_keeper_cannot_create_private_custody(tmp_path):
     with openHby(name='unencrypted-custody', temp=True, version=Vrsn_2_0) as hby:
         rgy = regery(hby, tmp_path)
         wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
+        wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
         try:
             with pytest.raises(AuthError, match='encrypted Keeper'):
-                wallet.createCustody('unprovisioned', 'not-an-identifier')
+                wallet.custody.createCustody('unprovisioned', 'not-an-identifier')
         finally:
             wallet.close()
             rgy.close()
@@ -300,8 +305,9 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
             prior, ordinal = rip.said, 1
             if history in ('mixed', 'blinded'):
                 if history == 'blinded':
-                    wallet.createCustody(registry.regk, hab.pre)
-                    opening = wallet.derive(registry.regk, 1, acdc.said, 'issued')
+                    wallet.custody = RegistryCustody(issuer, rgy, db=wallet.db)
+                    wallet.custody.createCustody(registry.regk, hab.pre)
+                    opening = wallet.custody.derive(registry.regk, 1, acdc.said, 'issued')
                 else:
                     opening = Blinder.blind(acdc=acdc.said, state='issued')
                 blind = blindate(regid=registry.regk, prior=prior, blid=opening.said)
@@ -315,7 +321,8 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
                 registry.processEvent(head)
                 anchored(hab, registry, head)
                 assert wallet.db.custody.get((registry.regk,)) is None
-            record = wallet.recordIssued(acdc, head.said)
+            record = wallet.recordIssued(acdc, head.said,
+                blinder=opening if history == 'blinded' else None)
             assert record.encoding == 'base64'
             assert wallet.issuedCredential(acdc.said).raw == acdc.raw
             raw, said, regid, head = acdc.raw, acdc.said, registry.regk, head.said
@@ -345,11 +352,12 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
             registry = Registrar(rgy=rgy).makeRegistry(name='bound', prefix=issuer.pre)
             rip = rgy.store.event(registry.regk)
             anchored(issuer, registry, rip)
-            wallet.createCustody(registry.regk, issuer.pre)
+            wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
+            wallet.custody.createCustody(registry.regk, issuer.pre)
             acdc = acdcmap(israid=issuer.pre, iseaid=issuee.pre, regid=registry.regk,
                            attribute=dict(d='', status='authorized'))
             selected = issuee.kever.serder
-            opening = wallet.derive(registry.regk, 1, acdc.said, 'issued',
+            opening = wallet.custody.derive(registry.regk, 1, acdc.said, 'issued',
                                     **wallet.boundEvent(acdc, selected.said))
             update = blindate(regid=registry.regk, prior=rip.said, blid=opening.said)
             registry.processEvent(update)
@@ -366,7 +374,8 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
         wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
         try:
             assert wallet.recordIssued(acdc, update.said) == record
-            wrong = wallet.derive(registry.regk, 1, acdc.said, 'issued',
+            wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
+            wrong = wallet.custody.derive(registry.regk, 1, acdc.said, 'issued',
                 **wallet.boundEvent(acdc, hby.habByName('issuee').kever.serder.said))
             with pytest.raises(ValidationError):
                 wallet.recordIssued(acdc, update.said, blinder=wrong)

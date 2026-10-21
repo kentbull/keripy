@@ -36,7 +36,7 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
                  bran=PASSCODE, version=Vrsn_2_0) as hby:
         Parser(kvy=Kevery(db=hby.db, lax=False, local=False), version=Vrsn_2_0).parse(
             ims=bytearray((tmp_path / 'holder.kel').read_bytes()))
-    invoke(names['issuer'], 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'r',
         '--discloser', prefixes['holder'])
     issued = invoke(names['issuer'], 'vc', 'create', '--native', '-a', 'issuer', '-r', 'r',
                     '--data', '{"status":"authorized"}')[0]
@@ -83,13 +83,14 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
     from keri.acdc import Regery
     from keri.acdc.messaging import blindate
     from keri.app.credentialing import Wallet
+    from keri.app.registry_custody import RegistryCustody
     with openHby(name=names['issuer'], base='native-ipex-cli', temp=False,
                  bran=PASSCODE, version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=hby.name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
             reg = rgy.registryByName('r')
-            opening = wallet.derive(reg.regk, 2, said, 'issued')
+            opening = RegistryCustody(hby, rgy, db=wallet.db).derive(reg.regk, 2, said, 'issued')
             event = blindate(reg.regk, reg.store.headEvent(reg.regk).said, opening.said, sn=2)
             reg.processEvent(event)
             hby.habByName('issuer').interact(data=[dict(s=event.sad['n'], d=event.said)])
@@ -101,6 +102,18 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
     private = tmp_path / 'custody.json'
     invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
         '--said', said, '--kels', '--tels', '--output', str(refreshed))
+    # A supplied event opening is a narrower capability than a derivation salt.
+    # The holder can refresh and present it before any custody is imported.
+    specific = tmp_path / 'event-opening.cesr'
+    specific.write_bytes(opening.qb64b)
+    suppliedPresentation = tmp_path / 'supplied-presentation.cesr'
+    supplied = invoke(names['holder'], 'ipex', 'grant', '--native', '-a', 'holder',
+        '-r', prefixes['verifier'], '-s', said, '--from-grant', grant['exchange'],
+        '--refresh', '--opening', str(specific), '--input', str(refreshed),
+        '--output', str(suppliedPresentation))[0]
+    incoming.write_bytes(refreshed.read_bytes() + suppliedPresentation.read_bytes())
+    assert invoke(names['verifier'], 'ipex', 'admit', '--native', '-a', 'verifier',
+        '-s', supplied['exchange'], '--input', str(incoming))[0]['admitted'] is True
     invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
         '--custody', '--output', str(private))
     invoke(names['holder'], 'vc', 'import', '--native', '--custody', '--registry', reg.regk,
@@ -109,7 +122,7 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
     fresh = tmp_path / 'fresh-presentation.cesr'
     current = invoke(names['holder'], 'ipex', 'grant', '--native', '-a', 'holder',
         '-r', prefixes['verifier'], '-s', said, '--from-grant', grant['exchange'],
-        '--refresh', '--input', str(refreshed), '--output', str(fresh))[0]
+        '--refresh', '--derive', '--input', str(refreshed), '--output', str(fresh))[0]
     assert current['exchange'] != presented['exchange']
     incoming.write_bytes(refreshed.read_bytes() + fresh.read_bytes())
     assert invoke(names['verifier'], 'ipex', 'admit', '--native', '-a', 'verifier',

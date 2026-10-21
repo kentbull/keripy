@@ -214,3 +214,40 @@ current supplied batch and genuine missing-prefix dependencies still block
 freshness. Freshness describes the selected accepted chain and observation; it
 does not certify absence of competing issuer evidence. Both regressions fail
 with the previous service methods, and all 24 conflict/service cases pass.
+
+## H: optional custody and ordinary native CLI operations
+
+Targets: moved `CustodyInfo`, `_Custody`, `EncryptedCustody` and all eight secret
+methods into `app.registry_custody.RegistryCustody`; its constructor and guard;
+`Wallet.__init__`/`recordIssued`; native CLI `options`, `opened`, `standing`,
+`NativeAuthor.update`/`run`, read/export/import composition; native IPEX `run`
+and `registryOrigin`; inception/grant arguments; wallet/custody/CLI regressions.
+
+- Move lineage: `d30395c1acbf609d9099f9ce34288d1d4c89233f`, with extraction
+  baseline `ea3d82811c6737f410f9418250e66fe22637b5ca`. Existing encrypted payload,
+  table key, environment, Keeper cryptography, and local binding checks remain.
+  The new concrete boundary, explicit proof/history handling, and no-regeneration
+  guard are local Codex designs under Kent's approved capability separation.
+- Wallet defaults to no custody. Fresh blinded issuance needs a supplied opening
+  checked by core `vet`; exact retained issuance retries make no current-standing
+  claim and need no salt. Missing custody cannot regenerate after accepted `bup`
+  history; explicit provisioning after public-only history remains supported.
+- CLI `--with-custody` explicitly provisions at registry inception. Public flows
+  create no secret. Ordinary opening passes no passcode to an unencrypted Keeper,
+  avoiding implicit encryption migration; encrypted identities still authenticate.
+  `--refresh --opening` supplies event-specific CESR evidence; `--refresh --derive`
+  explicitly uses a provisioned derivation owner. Both paths retain core proof
+  checks. `--v2` is the preferred selector; `--native` remains its alias.
+- Independent review caught a remaining historical retry derivation in CLI.
+  Removing it and suppressing blinded current-standing inference makes retries
+  survive lost custody, proved by a subprocess regression. Inventory similarly
+  reports unknown blinded standing without opening private records.
+- Keeper `Manager.updateAeid` migrates Keeper material only. Custody migration is
+  deliberately unsupported: old-AEID derivation fails, while retained presentation
+  continues. Recovery remains explicit plaintext mode-0600 re-import, not encrypted
+  transfer, a signed delegation, or automatic key rotation support.
+- The large move preserves one existing storage contract and updates all direct
+  CLI callers together. Review the moved method bodies separately from their
+  expanded documentation, then the optional composition and history checks.
+  Twenty-six wallet/custody tests, seventeen CLI/custody tests, seven final author
+  retry tests, and the selector test pass; scenario-level qualification remains.

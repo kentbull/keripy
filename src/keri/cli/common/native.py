@@ -14,6 +14,7 @@ from ...acdc.regeventing import issuerRegistry
 from ...acdc.registraring import Regery
 from ...app import GroupHab, HaberyDoer, Keeper, Notifier, Organizer, Receiptor
 from ...app.credentialing import Wallet
+from ...app.registry_custody import RegistryCustody
 from ...app.native_grouping import NativeGroup
 from ...core import Codens, Counter, Number, Prefixer, SealSource, SerderACDC, messagize
 from ...kering import AuthError, ConfigurationError, Vrsn_2_0
@@ -21,7 +22,13 @@ from ...peer import Exchanger
 
 
 def options(parser, *, author=False):
-    parser.add_argument('--native', action='store_true', help='use native v2 ACDC registries and wallet')
+    """Add explicit v2 selection and optional authoring controls to ``parser``.
+
+    ``author`` enables anchor timeout and exact group/bound-evidence options.
+    Existing v1 command behavior stays the default; --native aliases --v2.
+    """
+    parser.add_argument('--v2', '--native', dest='native', action='store_true',
+                        help='use v2 ACDC registries and IPEX (--native is an alias)')
     if author:
         parser.add_argument('--timeout', type=float, default=30.0,
                             help='seconds to wait for authenticated anchor acceptance')
@@ -37,20 +44,30 @@ def load(value):
 
 
 @contextmanager
-def opened(args):
-    # Habery can migrate an unencrypted Keeper when given a passcode. Native
-    # custody requires existing encryption, never an implicit AEID change.
+def opened(args, *, custody=False):
+    """Yield native evidence/inventory owners without changing Keeper encryption.
+
+    ``args`` supplies existing identity name/base/passcode. ``custody`` explicitly
+    composes the optional registry derivation owner; ordinary operations leave it
+    absent. Encrypted identities still authenticate through setupHby. A passcode
+    supplied for an unencrypted identity is ignored, preventing implicit AEID
+    migration. All opened stores close when this context exits.
+    """
     keeper = Keeper(name=args.name, base=args.base, reopen=True)
     try:
-        if not keeper.gbls.get('aeid'):
-            raise AuthError('native custody requires an existing authenticated encrypted Keeper')
+        aeid = keeper.gbls.get('aeid')
+        if aeid is None:
+            raise ConfigurationError('native operation requires an existing Keeper')
     finally:
         keeper.close()
-    hby = setupHby(name=args.name, base=args.base, bran=args.bran, version=Vrsn_2_0)
+    hby = setupHby(name=args.name, base=args.base,
+                   bran=args.bran if aeid else None, version=Vrsn_2_0)
     rgy = wallet = None
     try:
         rgy = Regery(hby=hby, name=args.name, base=args.base)
         wallet = Wallet(hby, rgy)
+        if custody:
+            wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
         yield hby, rgy, wallet
     finally:
         if wallet is not None:
@@ -69,18 +86,26 @@ def registry(rgy, name, hab=None):
     return reg
 
 
-def standing(wallet, reg, acdc):
+def standing(wallet, reg, acdc, *, derive=False):
+    """Return known current state, or unknown when a blinded head cannot be opened.
+
+    Public ``upd`` state needs no custody. Ordinary inventory supplies a Wallet
+    without derivation capability. ``derive`` opts in only after fresh authoring;
+    enumeration and historical retries never load a secret to infer standing.
+    """
     head = reg.store.headEvent(reg.regk)
     if head is not None and head.ilk == 'upd':
         return head.sad['ts'] if head.sad['td'] == acdc.said else 'unknown'
     if head is None or head.ilk != 'bup':
+        return 'unknown'
+    if not derive or wallet.custody is None:
         return 'unknown'
     sn = Number(numh=head.sad['n']).num
     retained = wallet.db.issued.get((acdc.said,))
     bound = (dict(bound=True, bsn=retained.bound['bn'], bd=retained.bound['bd'])
              if retained and retained.update == head.said and retained.bound else {})
     for state in ('issued', 'revoked'):
-        if wallet.derive(reg.regk, sn, acdc.said, state, **bound).said == head.sad['b']:
+        if wallet.custody.derive(reg.regk, sn, acdc.said, state, **bound).said == head.sad['b']:
             return state
     return 'unknown'
 
@@ -147,6 +172,14 @@ class NativeAuthor(doing.DoDoer):
             yield self.tock
 
     def update(self, wallet, reg, acdc, state):
+        """Stage an idempotent public or explicitly derived blinded update.
+
+        ``wallet`` supplies optional custody, ``reg`` the accepted history,
+        ``acdc`` the exact credential, and ``state`` its requested state. Return
+        the existing matching or newly staged event. Reject inconsistent group
+        proposals, missing capability, and conflicting pending work before
+        authoring a controller anchor.
+        """
         head = reg.store.headEvent(reg.regk)
         if head is None:
             raise ConfigurationError('registry inception is not accepted')
@@ -158,7 +191,10 @@ class NativeAuthor(doing.DoDoer):
         bound = wallet.boundEvent(acdc, boundEvent) if boundEvent else {}
 
         def opening(ordinal):
-            self.blinder = wallet.derive(reg.regk, ordinal, acdc.said, state, **bound)
+            """Derive the explicitly requested blinded update at ordinal."""
+            if wallet.custody is None:
+                raise ConfigurationError('blinded authoring requires provisioned registry custody')
+            self.blinder = wallet.custody.derive(reg.regk, ordinal, acdc.said, state, **bound)
             return self.blinder
         if self.proposedEvent is not None:
             event = self.proposedEvent
@@ -196,13 +232,22 @@ class NativeAuthor(doing.DoDoer):
         return event
 
     def run(self, tymth, tock=0.03125, **kwa):
+        """Run the selected authoring operation and yield to cooperative workers.
+
+        ``tymth`` supplies scheduler time and ``tock`` the recurrence interval.
+        CLI arguments choose identity, registry, public/blinded state, and
+        explicit custody provisioning. Children stop before stores close;
+        reported acceptance requires the normal verified registry transition.
+        """
         self.wind(tymth)
         self.tock = tock
         yield self.tock
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive')
-        with opened(args) as (hby, rgy, wallet):
+        wantsCustody = (getattr(args, 'with_custody', False) if self.operation == 'incept'
+                        else not args.unblinded)
+        with opened(args, custody=wantsCustody) as (hby, rgy, wallet):
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('native authoring requires a local alias')
@@ -217,7 +262,11 @@ class NativeAuthor(doing.DoDoer):
                 if args.proposal:
                     self.proposedEvent, self.proposedAnchor = self.group.registryProposal(Path(args.proposal).read_bytes())
                 if self.operation == 'incept':
-                    wallet._manager()  # fail before creating public state without encrypted custody
+                    if wantsCustody:
+                        # Explicit provisioning authenticates before public mutation.
+                        wallet.custody._manager()
+                    elif args.discloser:
+                        raise ConfigurationError('--discloser requires --with-custody')
                     if args.backers:
                         raise ConfigurationError('native registries use controller witnesses, not TEL backers')
                     if args.establishment_only:
@@ -243,13 +292,15 @@ class NativeAuthor(doing.DoDoer):
                     if self.proposedEvent is not None and self.proposedEvent.said != event.said:
                         raise ConfigurationError('group proposal is for a different registry inception')
                     yield from self.anchor(hby, reg, event, receiptor)
-                    if reg.sn > 0 and wallet.db.custody.get((reg.regk,)) is None:
-                        raise ConfigurationError('nonempty registry requires custody import; its secret cannot be regenerated')
+                    if not wantsCustody:
+                        print(json.dumps(dict(registry=reg.regk, name=name, controller=hab.pre,
+                                              accepted=True, custody='not requested')))
+                        return
                     if self.proposedEvent is not None and wallet.db.custody.get((reg.regk,)) is None:
                         print(json.dumps(dict(registry=reg.regk, name=name, controller=hab.pre,
                             accepted=True, custody='requires explicit protected import')))
                         return
-                    info = wallet.createCustody(reg.regk, args.discloser or hab.pre)
+                    info = wallet.custody.createCustody(reg.regk, args.discloser or hab.pre)
                     print(json.dumps(dict(registry=reg.regk, name=name, controller=hab.pre,
                                           discloser=info.discloser, accepted=True)))
                     return
@@ -286,14 +337,12 @@ class NativeAuthor(doing.DoDoer):
                     old = wallet.db.issued.get((acdc.said,))
                     event = reg.store.event(old.update) if old else self.update(wallet, reg, acdc, 'issued')
                     yield from self.anchor(hby, reg, event, receiptor)
-                    if old is not None and event.ilk == 'bup':
-                        params = dict(bound=True, bsn=old.bound['bn'], bd=old.bound['bd']) if old.bound else {}
-                        self.blinder = wallet.derive(reg.regk, Number(numh=event.sad['n']).num,
-                                                     acdc.said, 'issued', **params)
+                    # An exact issued-row retry reports retained history. Do not
+                    # re-derive an old opening or require healthy salt custody.
                     record = wallet.recordIssued(acdc, event.said,
                                                  blinder=self.blinder if event.ilk == 'bup' else None)
                     print(json.dumps(dict(credential=acdc.said, registry=reg.regk, update=record.update,
-                                          accepted=True, state=standing(wallet, reg, acdc))))
+                                          accepted=True, state=standing(wallet, reg, acdc, derive=old is None))))
                 else:
                     if args.send:
                         raise ConfigurationError('native revocation publication uses the registrar service')
@@ -310,10 +359,17 @@ class NativeAuthor(doing.DoDoer):
 
 
 def read(args, operation):
-    """Read existing native state or perform explicit protected custody handoff."""
+    """Return doers for inventory/evidence reads or explicit plaintext handoff.
+
+    ``args`` carries CLI options; ``operation`` selects the read/import/export.
+    Ordinary listing never enables custody. Full blinded evidence export and
+    explicit custody import/export may use the optional derivation owner.
+    """
     def run(tymth, tock=0.0, **kwa):
+        """Yield once, perform the selected operation, then close its owners."""
         yield tock
-        with opened(args) as (hby, rgy, wallet):
+        with opened(args, custody=(operation == 'import' or operation == 'export'
+                    and (args.custody or args.full))) as (hby, rgy, wallet):
             if operation == 'registries':
                 for name, reg in rgy.names.items():
                     head = reg.store.headEvent(reg.regk)
@@ -361,7 +417,7 @@ def read(args, operation):
                     raise ConfigurationError('unknown native export alias')
                 reg = registry(rgy, args.registry_name, hab)
                 if args.custody:
-                    path = wallet.exportCustody(reg.regk, args.output)
+                    path = wallet.custody.exportCustody(reg.regk, args.output)
                     print(json.dumps(dict(registry=reg.regk, custody_file=str(path))))
                 else:
                     record = wallet.db.issued.get((args.said,))
@@ -387,7 +443,7 @@ def read(args, operation):
                         event = reg.store.event(record.update)
                         if event.ilk == 'bup':
                             bound = dict(bound=True, bsn=record.bound['bn'], bd=record.bound['bd']) if record.bound else {}
-                            proof = wallet.derive(reg.regk, Number(numh=event.sad['n']).num, acdc.said, 'issued', **bound)
+                            proof = wallet.custody.derive(reg.regk, Number(numh=event.sad['n']).num, acdc.said, 'issued', **bound)
                             stream.extend(messagize(acdc, bonds=[proof.data], gvrsn=Vrsn_2_0))
                         else:
                             stream.extend(acdc.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
@@ -396,7 +452,7 @@ def read(args, operation):
                     with Path(args.output).open('xb') as output:
                         output.write(stream)
             elif operation == 'import':
-                wallet.importCustody(args.file, regid=args.registry, controller=args.controller,
-                                     discloser=args.discloser, rewrap=args.rewrap)
+                wallet.custody.importCustody(args.file, regid=args.registry, controller=args.controller,
+                                            discloser=args.discloser, rewrap=args.rewrap)
                 print(json.dumps(dict(registry=args.registry, custody_imported=True)))
     return [doing.doify(run)]

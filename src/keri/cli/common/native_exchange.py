@@ -12,7 +12,7 @@ from hio.core import http
 
 from keri import Vrsn_2_0, Kinds
 from keri.acdc import ipexing
-from keri.acdc.regeventing import issuerRegistry
+from keri.acdc.regeventing import issuerRegistry, vetBlind, vetBound, _blindCandidates
 from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import GroupHab, Notifier
 from keri.app.native_grouping import NativeGroup
@@ -124,13 +124,22 @@ class ExchangeDoer(doing.DoDoer):
             client.close()
 
     def run(self, tymth, tock=0.03125, **kwa):
+        """Execute one IPEX verb or serve intake with explicit capability owners.
+
+        ``tymth`` and ``tock`` drive cooperative scheduling. Retained holder
+        presentations need no custody; explicit derivation or issuer proof
+        generation enables it. All child work is cancelled before stores close.
+        Verification failures propagate without recording consent or delivery.
+        """
         self.wind(tymth)
         self.tock = tock
         yield tock
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
-        with (native.opened(args) as (hby, rgy, wallet),
+        derives = (getattr(args, 'derive', False) or
+                   self.verb == 'grant' and not args.from_grant and not getattr(args, 'opening', []))
+        with (native.opened(args, custody=derives) as (hby, rgy, wallet),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections,
               ExitStack() as activity):
             hab = hby.habByName(args.alias)
@@ -143,6 +152,8 @@ class ExchangeDoer(doing.DoDoer):
             activity.callback(self.remove, [peer.evidence])
             if getattr(args, 'refresh', False) and not args.from_grant:
                 raise ConfigurationError('--refresh requires an admitted --from-grant')
+            if (getattr(args, 'opening', []) or getattr(args, 'derive', False)) and args.from_grant and not args.refresh:
+                raise ConfigurationError('new openings for a held grant require --refresh')
             group = None
             if isinstance(hab, GroupHab):
                 # Group proposal/mailbox intake resolves the same schema evidence
@@ -298,7 +309,22 @@ class ExchangeDoer(doing.DoDoer):
                                   admitted=self.verb == 'admit')))
 
     def registryOrigin(self, wallet, rgy, credential, regid, *, retained=()):
-        """Open the known current history without changing the received ACDC view."""
+        """Attach specific verified openings without changing credential content.
+
+        ``retained`` supplies previously received Blinders. Explicit --opening
+        files supply CESR Blinders, never derivation salts. Only an explicitly
+        composed ``wallet.custody`` may derive missing openings. The accepted
+        ``rgy`` history selects commitments; common vetBlind/vetBound checks bind
+        each opening before the resulting credential stream is granted.
+        Missing capability/evidence raises ConfigurationError.
+        """
+        retained = list(retained)
+        for path in getattr(self.args, 'opening', []):
+            raw = Path(path).read_bytes().strip()
+            candidates = _blindCandidates(raw)
+            if len(candidates) != 1:
+                raise ConfigurationError('opening file must contain exactly one CESR Blinder')
+            retained.append(candidates[0])
         head = rgy.store.headEvent(regid)
         if head is None:
             raise ConfigurationError('registry evidence has not been acquired')
@@ -318,17 +344,21 @@ class ExchangeDoer(doing.DoDoer):
             parameters = explicit
             if not parameters and issued is not None and issued.update == update.said and issued.bound:
                 parameters = dict(bound=True, bsn=issued.bound['bn'], bd=issued.bound['bd'])
-            if found is None:
+            if found is None and wallet.custody is not None:
                 for target, state in ((credential.said, 'issued'), (credential.said, 'revoked'), ('', '')):
                     # A bound vacuous update has its specified empty coordinates.
                     args = (dict(bound=True, bsn=0, bd='') if parameters and not target
                             else parameters)
-                    proof = wallet.derive(regid, ordinal, target, state, **args)
+                    proof = wallet.custody.derive(regid, ordinal, target, state, **args)
                     if proof.said == update.sad['b']:
                         found = proof
                         break
             if found is None:
-                raise ConfigurationError('custody and explicit bound reference cannot open the current registry history')
+                raise ConfigurationError('current registry opening unavailable; supply --opening or provision custody and use --derive')
+            target, _ = vetBlind(found, blid=update.sad['b'])
+            if target and target != credential.said:
+                raise ConfigurationError('registry opening binds a different credential')
+            vetBound(found, acdc=credential, db=wallet.hby.db)
             bonds.append(found.data)
             if found.acdc:
                 binding = update

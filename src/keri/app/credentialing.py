@@ -1,49 +1,24 @@
-"""Private native wallet custody and explicit inventory over ordinary LMDB records.
+"""Explicit native credential inventory over ordinary LMDB application records.
+
+Private derivation custody is an optional registry_custody collaborator. Ordinary
+issued/admitted inventory and retained disclosure retrieval never load its salt.
 
 Protocol acceptance remains in KERIpy's registry and IPEX processors. The small
 issued/admitted reference model is adapted from KERI Foundation Locksmith
 3a5ad9ebcf98b4ec03baf1bbb91d928d49c168e4 (Apache-2.0 LICENSE; its package metadata
 incorrectly declares MIT). No Locksmith runtime or GUI dependency is used.
 """
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from base64 import b64encode, b64decode
-import json
-import os
-from pathlib import Path
-import stat
 
 from keri.acdc import regeventing
 from keri.acdc.ipexing import NativeVerification
-from keri.core import Blinder, BoundState, Number, Prefixer, Salter, SerderACDC
+from keri.core import Blinder, BoundState, Number, SerderACDC
 from keri.db import dbing, koming, subing
 from keri.help import helping
-from keri.kering import AuthError, ConfigurationError, ValidationError
+from keri.kering import ConfigurationError, ValidationError
 from keri.peer import exchanging
-
-
-@dataclass
-class CustodyInfo:
-    registry: str
-    controller: str
-    discloser: str
-    algorithm: str = 'keripy.Blinder.makeUUID'
-    version: int = 1
-    path: str = 'Number.snh'
-    tier: str = 'low'
-    kdf: str = 'argon2id13'
-    nonce: str = 'Salt_256'
-
-
-@dataclass
-class _Custody:
-    info: dict
-    salt: str = field(repr=False)
-
-
-@dataclass
-class EncryptedCustody:
-    aeid: str
-    cipher: str
+from .registry_custody import EncryptedCustody
 
 
 @dataclass
@@ -82,14 +57,13 @@ class WalletBaser(dbing.LMDBer):
 
 
 class Wallet:
-    """Privileged local application owner; public presentation code receives proofs only.
+    """Local issued/admitted references and immutable retained disclosure retrieval.
 
-Custody always requires an authenticated encrypted Keeper. Manager AEID changes
-do not migrate these application records: old custody fails closed until an
-explicit operator rewrap/import. This module never changes Manager or AEID.
-"""
-    def __init__(self, hby, rgy, *, exc=None, db=None, verification=None):
-        """Compose local inventory, custody storage, and native verification.
+    Optional RegistryCustody is an explicit collaborator for callers that derive
+    openings. Inventory itself never invokes it or reads encrypted salt records.
+    """
+    def __init__(self, hby, rgy, *, exc=None, db=None, verification=None, custody=None):
+        """Compose local inventory and native verification without loading secrets.
 
         Args:
             hby (Habery): Authenticated local identity and retained exchange owner.
@@ -99,160 +73,18 @@ explicit operator rewrap/import. This module never changes Manager or AEID.
             verification (NativeVerification | None): Explicit context returned by
                 native/app IPEX loadHandlers. None uses ordinary default policy;
                 configured applications must pass their actual shared context.
+            custody (RegistryCustody | None): Explicit optional private capability.
+                None is normal for ordinary holders and public-only issuers.
 
         Returns:
             None
         """
         self.hby, self.rgy, self.exc = hby, rgy, exc
+        self.custody = custody
         self.verification = (verification if verification is not None
                              else NativeVerification(hby, rgy))
         self.db = db if db is not None else WalletBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
-
-    def _manager(self):
-        mgr = self.hby.mgr
-        if not mgr.aeid or mgr.encrypter is None or mgr.decrypter is None:
-            raise AuthError('private credential custody requires an authenticated encrypted Keeper')
-        return mgr
-
-    def _binding(self, regid, controller, discloser, *, importing=False, rewrap=False):
-        try:
-            Prefixer(qb64=controller)
-            Prefixer(qb64=discloser)
-        except Exception:
-            raise ValidationError('invalid custody controller or discloser') from None
-        rip = self.rgy.store.seqEvent(regid, 0)
-        if rip is None or rip.sad['i'] != controller:
-            raise ValidationError('custody must match the accepted registry controller')
-        actor = discloser if importing else controller
-        local = self.hby.habByPre(actor)
-        if rewrap:
-            local = local or self.hby.habByPre(controller)
-        if local is None:
-            raise ValidationError('custody operation requires the intended local identifier')
-        if discloser not in self.hby.kevers:
-            raise ValidationError('designated discloser key state is unknown')
-
-    def _load(self, regid):
-        mgr = self._manager()
-        record = self.db.custody.get((regid,))
-        if record is None:
-            raise ConfigurationError('registry custody is not provisioned')
-        if record.aeid != mgr.aeid:
-            raise AuthError('custody encryption AEID changed; explicit operator rewrap is required')
-        try:
-            payload = json.loads(mgr.decrypter.decrypt(qb64=record.cipher, bare=True))
-            secret = _Custody(**payload)
-            info = CustodyInfo(**secret.info)
-            if info.registry != regid or info != CustodyInfo(info.registry, info.controller, info.discloser):
-                raise ValueError('unsupported derivation parameters')
-            Salter(qb64=secret.salt)
-        except Exception:
-            raise AuthError('unable to authenticate private registry custody') from None
-        return secret
-
-    def _retain(self, secret, *, rewrap=False):
-        mgr = self._manager()
-        regid = secret.info['registry']
-        previous = self.db.custody.get((regid,))
-        if previous is not None and previous.aeid == mgr.aeid:
-            if self._load(regid) != secret:
-                raise ValidationError('different registry custody is already retained')
-            return CustodyInfo(**secret.info)
-        if previous is not None and not rewrap:
-            raise AuthError('custody encryption AEID changed; explicit operator rewrap is required')
-        if previous is None and rewrap:
-            raise ValidationError('rewrap requires an existing custody record under a prior AEID')
-        cipher = mgr.encrypter.encrypt(ser=json.dumps(asdict(secret), separators=(',', ':')).encode())
-        if rewrap:
-            # Guard the exact old row in the same application-store transaction.
-            # This does not decrypt old custody or claim a cross-store transaction.
-            with self.db.env.begin(write=True) as txn:
-                key = self.db.custody._tokey((regid,))
-                if txn.get(key, db=self.db.custody.sdb) != self.db.custody._ser(previous):
-                    raise ValidationError('custody changed during explicit operator rewrap')
-                txn.put(key, self.db.custody._ser(EncryptedCustody(mgr.aeid, cipher.qb64)),
-                        db=self.db.custody.sdb)
-            return CustodyInfo(**secret.info)
-        if not self.db.custody.put((regid,), EncryptedCustody(mgr.aeid, cipher.qb64)):
-            if self._load(regid) != secret:
-                raise ValidationError('different registry custody was concurrently retained')
-        return CustodyInfo(**secret.info)
-
-    def createCustody(self, regid, discloser):
-        """Generate once for an accepted locally controlled registry; return no secret."""
-        self._manager()
-        rip = self.rgy.store.seqEvent(regid, 0)
-        if rip is None:
-            raise ValidationError('accepted registry inception is required before custody')
-        controller = rip.sad['i']
-        self._binding(regid, controller, discloser)
-        if self.db.custody.get((regid,)) is not None:
-            current = self._load(regid)
-            if current.info != asdict(CustodyInfo(regid, controller, discloser)):
-                raise ValidationError('registry custody has different designated bindings')
-            return CustodyInfo(**current.info)
-        return self._retain(_Custody(asdict(CustodyInfo(regid, controller, discloser)), Salter().qb64))
-
-    def derive(self, regid, ordinal, credential, state, *, bound=False, bsn=0, bd=''):
-        """Derive one event opening; never return the long-lived salt."""
-        if isinstance(ordinal, bool) or not isinstance(ordinal, int) or ordinal < 1:
-            raise ValidationError('update ordinal must be a positive integer')
-        secret = self._load(regid)
-        info = CustodyInfo(**secret.info)
-        if not (self.hby.habByPre(info.controller) or self.hby.habByPre(info.discloser)):
-            raise AuthError('this wallet is not a designated custody participant')
-        return Blinder.blind(salt=secret.salt, sn=ordinal, tier=info.tier,
-                             acdc=credential, state=state, bound=bound, bsn=bsn, bd=bd)
-
-    def exportCustody(self, regid, path):
-        """Create an owner-only plaintext operator handoff file, never overwrite it.
-
-        The operator transfers it over an authenticated private channel. This is
-        a protected local artifact, not an IPEX payload or a new wire protocol.
-        """
-        secret = self._load(regid)
-        path = Path(path)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        try:
-            with os.fdopen(fd, 'wb') as stream:
-                os.fchmod(stream.fileno(), 0o600)
-                stream.write(json.dumps(asdict(secret), separators=(',', ':')).encode())
-                stream.flush()
-                os.fsync(stream.fileno())
-        except BaseException:
-            path.unlink(missing_ok=True)
-            raise
-        return path
-
-    def importCustody(self, path, *, regid, controller, discloser, rewrap=False):
-        """Import a protected artifact; only explicit rewrap can replace old-AEID custody.
-
-        Rewrap trusts the authenticated operator handoff, retains its original
-        salt/profile, and encrypts it under the currently authenticated Keeper.
-        A normal import never overwrites different custody.
-        """
-        if not isinstance(rewrap, bool):
-            raise ValidationError('explicit rewrap must be a boolean')
-        self._manager()
-        self._binding(regid, controller, discloser, importing=True, rewrap=rewrap)
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as stream:
-            metadata = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600
-                    or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1):
-                raise ValidationError('custody file must be a regular owner-only mode0600 file')
-            raw = stream.read(16385)
-        if len(raw) > 16384:
-            raise ValidationError('custody file exceeds the supported size')
-        try:
-            secret = _Custody(**json.loads(raw))
-            if secret.info != asdict(CustodyInfo(regid, controller, discloser)):
-                raise ValueError('unexpected custody bindings or derivation parameters')
-            Salter(qb64=secret.salt)
-        except Exception:
-            raise ValidationError('custody file does not match the expected bindings and derivation profile') from None
-        return self._retain(secret, rewrap=rewrap)
 
     def boundEvent(self, acdc, said):
         """Resolve an explicitly selected accepted issuee event for bound derivation."""
@@ -264,7 +96,25 @@ explicit operator rewrap/import. This module never changes Manager or AEID.
         return dict(bound=True, bsn=event.sn, bd=event.said)
 
     def recordIssued(self, acdc, update, *, blinder=None):
-        """Retain native issuance only after its referenced issuance event is accepted."""
+        """Record verified issuance, or return an identical historical record.
+
+        Args:
+            acdc (SerderACDC): Exact issued credential view retained as bytes.
+            update (str): Accepted issuance event SAID in its registry.
+            blinder (Blinder | None): Explicit opening required for fresh blinded
+                issuance. Derived and supplied openings use the same core verifier.
+
+        Returns:
+            IssuedCredential: Newly verified issuance or identical retained history.
+                A history retry without an opening makes no current-standing claim.
+
+        Raises:
+            ConfigurationError: Fresh blinded recording lacks an explicit opening.
+            ValidationError: Ownership, accepted event, proof, or retained bytes differ.
+            KeriError: Core registry/KEL/opening authentication fails.
+
+        This inventory boundary never derives an opening or loads private custody.
+        """
         event = self.rgy.store.event(update)
         regid = regeventing.issuerRegistry(acdc)
         if regid is None and event is not None:
@@ -279,10 +129,17 @@ explicit operator rewrap/import. This module never changes Manager or AEID.
         old = self.db.issued.get((acdc.said,))
         if blinder is not None and (event.ilk != 'bup' or not isinstance(blinder, Blinder)):
             raise ValidationError('explicit issuance opening requires a native blinded update')
-        parameters = (dict(bound=True, bsn=old.bound['bn'], bd=old.bound['bd'])
-                      if old is not None and old.update == update and old.bound else {})
-        proof = (blinder if blinder is not None else self.derive(
-            regid, sn, acdc.said, 'issued', **parameters)) if event.ilk == 'bup' else None
+        if old is not None and blinder is None:
+            # Exact retained history can be inspected after custody loss/rotation.
+            # This is not a fresh proof or current-standing assertion.
+            expected = IssuedCredential(acdc.said, regid, rip.sad['i'], update,
+                b64encode(acdc.raw).decode('ascii'), 'base64', old.bound)
+            if old != expected or event.ilk not in ('upd', 'bup'):
+                raise ValidationError('different issuance is already retained for this credential')
+            return old
+        if event.ilk == 'bup' and blinder is None:
+            raise ConfigurationError('fresh blinded issuance requires an explicit event opening')
+        proof = blinder if event.ilk == 'bup' else None
         updates = [self.rgy.store.seqEvent(regid, ordinal) for ordinal in range(1, sn + 1)]
         verified = regeventing.vet(rip, updates, db=self.hby.db, acdc=acdc, blinder=proof)
         if verified.state != 'issued':

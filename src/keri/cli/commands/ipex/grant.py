@@ -44,7 +44,9 @@ native_exchange.options(parser, send=True)
 parser.add_argument('--from-grant', help='present this admitted grant disclosure')
 parser.add_argument('--disclose', action='append', default=[], help='attribute disclosure path rooted at a')
 parser.add_argument('--prior', help='accepted apply or agree SAID')
-parser.add_argument('--refresh', action='store_true', help='derive current registry openings for an admitted disclosure using provisioned custody')
+parser.add_argument('--refresh', action='store_true', help='use known current registry evidence for an admitted disclosure')
+parser.add_argument('--derive', action='store_true', help='explicitly use provisioned registry custody for missing openings')
+parser.add_argument('--opening', action='append', default=[], help='file containing one event-specific CESR Blinder, without a salt')
 parser.add_argument('--bound-event', help='explicit accepted issuee KEL event SAID for bound-state derivation')
 
 def handler(args):

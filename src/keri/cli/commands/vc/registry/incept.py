@@ -39,6 +39,8 @@ parser.add_argument('--usage', '-u', help='For multisig issuers, a message to ot
                     default=None)
 native.options(parser, author=True)
 parser.add_argument('--discloser', help='native registry designated disclosure identifier', default=None)
+parser.add_argument('--with-custody', action='store_true',
+                    help='explicitly provision encrypted per-registry derivation custody (native only)')
 
 
 def registryIncept(args):
