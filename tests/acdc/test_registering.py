@@ -45,7 +45,10 @@ def test_registry_store_clone_tel():
 
 
 def test_registry_store_replay_and_conflicting_ordinal():
-    """An old prefix is harmless, while a fork never changes accepted state."""
+    """Keep accepted state stable on exact old-prefix replay and refuse a different event at an occupied ordinal.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openLMDB(cls=RegBaser, name="registry-replay", temp=True) as baser:
         store = RegistryStore(baser)
         rip = messaging.regcept(israid=Diger(ser=b"issuer").qb64)
@@ -69,7 +72,10 @@ def test_registry_store_replay_and_conflicting_ordinal():
 
 
 def test_registry_store_rejects_gap_bad_prior_and_slot_mismatch():
-    """Only a matching contiguous event can extend accepted state."""
+    """Require contiguous accepted ordinals, exact predecessor digest, and matching event slot keys.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openLMDB(cls=RegBaser, name="registry-order", temp=True) as baser:
         store = RegistryStore(baser)
         rip = messaging.regcept(israid=Diger(ser=b"issuer").qb64)

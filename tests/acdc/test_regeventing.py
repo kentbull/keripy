@@ -378,7 +378,10 @@ def test_V9_anchor_in_strangers_kel_refused():
 
 
 def test_V10_bare_digest_seal_accepted():
-    """Digest-only maps are valid; bare strings are not KERI seal maps."""
+    """Accept a digest-only seal map while refusing a bare string as KERI seal evidence.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openIssuer("v10") as (hby, hab):
         ripper = makeRegistry(hab, anchored=False)
         anchor(hab, data=[dict(d=ripper.said)])  # digest-only seal
@@ -394,7 +397,10 @@ def test_V10_bare_digest_seal_accepted():
 
 
 def test_V11_multiple_seals_tolerated():
-    """An unrelated seal is harmless; every field of our seal must match."""
+    """Ignore unrelated key-event seals while requiring every field of the selected registry seal to match.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openIssuer("v11") as (hby, hab):
         ripper = makeRegistry(hab, anchored=False)
         noise1 = Diger(ser=b'some other commitment').qb64
@@ -709,7 +715,10 @@ def test_V23_no_salt_parameter_anywhere():
 
 
 def test_presentation_bindings_use_exact_anchored_head():
-    """Historical proof selects a TEL event, independently of receiver time."""
+    """Select historical presentation proof by an exact anchored TEL event, independently of receiver/controller time.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openIssuer("targeted-presentation") as (hby, hab):
         ripper = makeRegistry(hab)
 

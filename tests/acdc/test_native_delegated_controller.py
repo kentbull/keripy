@@ -12,10 +12,24 @@ from keri.peer import Exchanger
 
 class Notices:
     def add(self, attrs):
+        """Ignore accepted-notification attributes for this verifier-only test.
+
+        Args:
+            attrs (dict): Notification payload deliberately unused by the test.
+
+        Returns:
+            None. No notification side effects are needed to observe acceptance."""
         pass
 
 
 def test_native_delegated_issuer_recovers_after_real_authorization_and_reopen(tmp_path):
+    """Retain foreign TEL dependencies across reopen and accept only after real delegator authorization recovers the issuer KEL.
+
+    Parameters:
+        tmp_path: Pytest-owned durable registry directory for restart recovery.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with (openHby(name='native-delegator', version=Vrsn_2_0) as sender,
           openHby(name='native-delegation-receiver', version=Vrsn_2_0) as receiver):
         delegator = sender.makeHab(name='delegator')

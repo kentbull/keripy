@@ -9,6 +9,13 @@ from keri.core import IdrDex, Kevery, Parser, Siger, Tholder, messagize
 
 @pytest.mark.parametrize("sith", [2, "2", ["1/2", "1/2"]])
 def test_threshold_counts_distinct_verified_indices(sith):
+    """Require distinct verified key indexes under numeric and weighted threshold expressions.
+
+    Parameters:
+        sith: Numeric or weighted signing-threshold expression under test.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     tholder = Tholder(sith=sith)
     assert tholder.satisfy([0, 0]) is False
     assert tholder.satisfy([1, 1, 1]) is False
@@ -17,6 +24,13 @@ def test_threshold_counts_distinct_verified_indices(sith):
 
 @pytest.mark.parametrize("version", [Vrsn_1_0, Vrsn_2_0])
 def test_two_key_inception_requires_two_distinct_signers(version):
+    """Keep a two-key inception unaccepted when one key supplies alternate encodings, then accept the second actual signer.
+
+    Parameters:
+        version: Protocol/genus version used for the real signed inception stream.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="distinct-controller-issuer", version=version) as ihby, \
             openHby(name="distinct-controller-receiver", version=version) as rhby:
         issuer = ihby.makeHab(name="issuer", icount=2, isith=2, ncount=2, nsith=2,

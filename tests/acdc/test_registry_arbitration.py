@@ -12,7 +12,10 @@ from tests.acdc.test_observing import _copy_kel, _events, _seal
 
 
 def test_registry_siblings_across_escrows_use_verified_anchor_order():
-    """An earlier eligible missing-anchor candidate is considered before commit."""
+    """Consider earlier authenticated missing-anchor candidates before committing eligible out-of-order siblings.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="split-issuer", version=Vrsn_2_0) as ihby, \
             openHby(name="split-receiver", version=Vrsn_2_0) as rhby, \
             openLMDB(cls=RegBaser, name="split-escrows", temp=True) as reger:

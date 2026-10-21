@@ -1657,7 +1657,10 @@ def test_ipex_v2_builders_reject_registry_events_as_disclosed_nodes():
 
 
 def test_ipex_v2_offer_metadata_dag_binds_grant_nodes():
-    """Offer metadata may expand into the same credential DAG in a Grant."""
+    """Require exact issuer/registry/section promises when metadata Offer expands to the accepted Grant DAG.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with (openHby(name="ipex-v2-offer-metadata-dag-holder",
                   base="test",
                   version=Vrsn_2_0) as holderHby,
@@ -2362,7 +2365,10 @@ def test_ipex_v2_rejects_offer_with_unreachable_nested_node():
 
 
 def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
-    """Grant accepts valid edge-group shapes and valid leaf operator/schema semantics."""
+    """Accept supported closed disclosed graph shapes with valid leaf relationships and schema constraints.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-grant-graph-semantics",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -2496,7 +2502,10 @@ def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
 
 
 def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
-    """Grant rejects malformed graph closure and false leaf edge semantics."""
+    """Reject malformed graph closure, unreachable nests, and false/unsupported leaf semantics.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-bad-grant-graph-semantics",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -2703,7 +2712,17 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
 
 
 def _grant_with_false_commitment(hab, credential, correct, false):
-    """Sign malformed received bytes after the honest author builder finishes."""
+    """Sign malformed received bytes after the honest author builder has finished.
+
+    Args:
+        hab (Hab): Issuer signing the deliberately modified credential disclosure.
+        credential (SerderACDC): Honest credential whose serialized commitment to alter.
+        correct (str): Existing commitment spelling to replace in the received body.
+        false (str): False same-sized commitment inserted without honest recomputation.
+
+    Returns:
+        tuple: Grant/attachment material carrying deliberately inconsistent disclosure,
+        so receiver verification is tested independently of author-side repair."""
     origin = _signed(credential, hab)
     grant, attachments = ipexGrant(
         hab=hab, recp=hab.pre, message="Malformed received section",
@@ -2725,7 +2744,10 @@ def _grant_with_false_commitment(hab, credential, correct, false):
 
 
 def test_ipex_v2_rejects_false_attribute_section_said():
-    """Authenticated received bytes cannot carry a false attribute commitment."""
+    """Reject authenticated received credential bytes whose expanded attribute commitment is false.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-false-attribute-said", base="test",
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name="test")
@@ -2746,7 +2768,10 @@ def test_ipex_v2_rejects_false_attribute_section_said():
 
 
 def test_ipex_v2_rejects_false_nested_attribute_said():
-    """A valid outer section does not authenticate a false nested commitment."""
+    """Reject a false nested commitment even when the surrounding section was recomputed honestly.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-false-nested-attribute-said", base="test",
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name="test")
@@ -2769,7 +2794,10 @@ def test_ipex_v2_rejects_false_nested_attribute_said():
 
 
 def test_ipex_v2_rejects_false_aggregate_commitments():
-    """Received aggregate roots and member digests must each verify."""
+    """Require both aggregate root and disclosed member commitments to verify in the received stream.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-false-aggregate-commitments", base="test",
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name="test")
@@ -6786,7 +6814,13 @@ def test_ipex_v2_blind_registry_update_roundtrip_through_kram_two_haberies(fakeH
 
 
 def test_ipex_v2_two_node_registry_dag_roundtrip_through_kram_two_haberies(fakeHelpingClock):
-    """Run the full IPEX flow for a two-node DAG with node-local issuer-auth."""
+    """Run actual two-Habery IPEX/KRAM negotiation with two node-local issuer registries and explicit presentation binding.
+
+    Parameters:
+        fakeHelpingClock: Deterministic protocol clock fixture controlling real KRAM timeliness windows.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     clock = fakeHelpingClock
 
     kramConfig = {
@@ -7708,7 +7742,10 @@ def test_ipex_v2_successive_blind_registry_updates_roundtrip():
 
 
 def test_ipex_v2_finds_attribute_and_aggregate_presentation_registries():
-    """Presentation requirements may be declared in either ACDC section form."""
+    """Find presentation requirements in disclosed attribute/aggregate blocks without treating hidden declarations as absent.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-presentation-declarations",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -7748,7 +7785,10 @@ def test_ipex_v2_finds_attribute_and_aggregate_presentation_registries():
 
 
 def test_ipex_v2_presentation_registry_binds_proxy_grant():
-    """An issuee TEL can satisfy grant ax while sharing a nest with issuer proof."""
+    """Allow the Issuee TEL to bind a proxy Grant and satisfy its negotiated anchor requirement alongside issuer proof.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-presentation-registry",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -7977,7 +8017,10 @@ def test_ipex_v2_presentation_registry_binds_proxy_grant():
 
 
 def test_ipex_v2_rejects_substituted_presentation_registry():
-    """A valid registry cannot replace the registry declared by the issuer."""
+    """Refuse a valid foreign presentation registry substituted for the one committed by the issuer.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-substituted-presentation-registry",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -8032,7 +8075,10 @@ def test_ipex_v2_rejects_substituted_presentation_registry():
 
 
 def test_ipex_v2_verifies_presentation_registries_for_different_issuees():
-    """Every declared node-local presentation registry must bind the grant."""
+    """Require every disclosed node-local Issuee registry to bind the same actual Grant.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-multiple-presentation-registries",
                  base="test",
                  version=Vrsn_2_0) as hby:

@@ -70,7 +70,15 @@ def test_regbaser_store_contract():
 @pytest.mark.parametrize("sn", [0, 1])
 @pytest.mark.parametrize("staged", [False, True])
 def test_regbaser_accept_transaction_aborts_on_final_write(monkeypatch, sn, staged):
-    """A real LMDB failure on the head write rolls back body and ordinal too."""
+    """Inject a real LMDB head-write failure and prove body/ordinal/head rollback together while staged evidence survives.
+
+    Parameters:
+        monkeypatch: Pytest scoped substitution injecting the final durable head-write failure.
+        sn: Inception/update ordinal whose acceptance transaction is exercised.
+        staged: Whether the candidate body was already persisted before the failing transaction.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openLMDB(cls=regbasing.RegBaser, name="registry-atomic", temp=True) as baser:
         rip = messaging.regcept(israid=coring.Diger(ser=b"issuer").qb64)
         update = messaging.blindate(rip.said, rip.said, coring.Diger(ser=b"issued").qb64)
@@ -104,7 +112,13 @@ def test_regbaser_accept_transaction_aborts_on_final_write(monkeypatch, sn, stag
 
 
 def test_regbaser_accepted_history_survives_reopen(tmp_path):
-    """Reopen preserves head, replay protection, and ordinary Suber encodings."""
+    """Reopen real accepted history and verify head, exact replay protection, and unchanged Suber wire encodings.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent RegBaser directory.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     baser = regbasing.RegBaser(name="registry-reopen", temp=False,
                               headDirPath=str(tmp_path))
     rip = messaging.regcept(israid=coring.Diger(ser=b"issuer").qb64)
