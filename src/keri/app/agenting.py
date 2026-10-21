@@ -96,23 +96,7 @@ class Receiptor(doing.DoDoer):
             except (MissingEntryError, gaierror) as e:
                 logger.error(f"unable to create http client for witness {wit}: {e}")
 
-        # send to each witness and gather receipts
-        rcts = dict()
-        for wit, client in clients.items():
-            headers = dict()
-            if wit in auths:
-                headers["Authorization"] = auths[wit]
-
-            streamCESRRequests(client=client, dest=wit, ims=bytearray(msg), path="/receipts", headers=headers)
-            while not client.responses:
-                yield self.tock
-
-            rep = client.respond()
-            if rep.status == 200:
-                hab.psr.parseOne(bytearray(rep.body))
-                rcts[wit] = None
-            else:
-                print(f"invalid response {rep.status} from witnesses {wit}")
+        rcts = yield from self._collectReceipts(hab, clients, msg, auths)
 
         wigers = hab.db.wigs.get(keys=(ser.preb, ser.saidb))
         wigerByWit = {wits[wiger.index]: wiger for wiger in wigers}
@@ -148,6 +132,45 @@ class Receiptor(doing.DoDoer):
         self.remove(doers)
 
         return rcts.keys()
+
+    def _collectReceipts(self, hab, clients, msg, auths):
+        """Collect and verify receipt replies using the supplied live clients.
+
+        Args:
+            hab: Local controller habitat whose parser verifies each receipt.
+            clients: Witness-prefix to owned HTTP-client mapping.
+            msg: Exact controller event with matching attachment genus.
+            auths: Optional witness-prefix to authorization-header mapping.
+
+        Yields:
+            float: Cooperative network progress; no accepted rows are written here.
+
+        Returns:
+            dict: Witnesses returning HTTP 200. Only the habitat parser may retain
+                verified signatures; an HTTP response alone is not a valid receipt.
+
+        Extracted unchanged from Receiptor.receipt at 325f2507 before changing
+        scheduling. Client lifecycle and receipt propagation remain with receipt.
+        """
+        # send to each witness and gather receipts
+        rcts = dict()
+        for wit, client in clients.items():
+            headers = dict()
+            if wit in auths:
+                headers["Authorization"] = auths[wit]
+
+            streamCESRRequests(client=client, dest=wit, ims=bytearray(msg), path="/receipts", headers=headers)
+            while not client.responses:
+                yield self.tock
+
+            rep = client.respond()
+            if rep.status == 200:
+                hab.psr.parseOne(bytearray(rep.body))
+                rcts[wit] = None
+            else:
+                print(f"invalid response {rep.status} from witnesses {wit}")
+
+        return rcts
 
     def get(self, pre, sn=None):
         """
