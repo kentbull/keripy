@@ -276,3 +276,17 @@ cleanup, and the transport-only result are local CLI composition decisions.
 Observer requests still require HTTP response evidence. Six real-socket and
 invalid-destination tests pass, including multi-buffer byte preservation and an
 unavailable peer deadline. TCP send completion never claims receiver acceptance.
+
+### Finite StreamPoster TCP delivery
+
+Review of the new legacy negotiation default delivery found an inherited
+`streamMessengerFrom` TCP branch that discarded its `msg` argument and returned
+a perpetual queue service. The local repair gives `TCPStreamMessenger` a finite
+single-message contract matching existing `HTTPStreamMessenger`; the separate
+`TCPMessenger` remains a persistent queue/receipt service. KERIpy/HIO client
+ownership is reused, and no authenticated acceptance follows from buffer drain.
+
+Eleven focused tests pass: real controller and mailbox endpoint selection in
+both genus versions, empty/nonempty factory payloads, cancellation-owned socket
+closure, preservation of the persistent messenger, and existing HTTPS preference.
+The API change is limited to the stream class's sole in-tree factory caller.
