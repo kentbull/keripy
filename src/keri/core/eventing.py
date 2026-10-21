@@ -2856,7 +2856,7 @@ class Kever:
                     if toader.num != 0:  # invalid toad
                         raise ValidationError(f"Invalid toad = {toader.num} for wits = {wits}")
 
-                if len(windices) < toader.num:  # not fully witnessed yet
+                if len(set(windices)) < toader.num:  # distinct witnesses, not encodings
                     if self.escrowPWEvent(serder=serder, wigers=wigers, sigers=sigers,
                                           delsner=delsner, delsger=delsger,
                                           local=local):
@@ -5564,11 +5564,7 @@ class Kevery:
 
             kever = self.kevers[pre]
 
-            # get list of witness signatures to ensure we are presenting a fully witnessed event
-            wigers = self.db.wigs.get(keys=(pre, kever.serder.saidb))
-
-
-            if len(wigers) < kever.toader.num:
+            if not self.db.fullyWitnessed(kever.serder):
                 self.escrowQueryNotFoundEvent(serder=serder, prefixer=source, sigers=sigers, cigars=cigars)
                 msg = f"Query not found error on event route={route} SAID={serder.said}"
                 logger.debug(msg)

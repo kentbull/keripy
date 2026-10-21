@@ -1050,7 +1050,7 @@ def test_regery_rejects_duplicate_registry_key_creation():
         try:
             # Reuse deterministic rip inputs so a second create would reproduce the same regk
             kwa = dict(uuid="0AAAAAAAAAAAAAAAAAAAAAAA",
-                       stamp="2026-08-10T00:00:00+00:00")
+                       stamp="2026-08-10T00:00:00.000000+00:00")
             first = Registrar(rgy=rgy).makeRegistry(name="one",
                                                     prefix=hab.pre,
                                                     **kwa)

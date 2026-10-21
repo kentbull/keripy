@@ -378,8 +378,7 @@ def test_V9_anchor_in_strangers_kel_refused():
 
 
 def test_V10_bare_digest_seal_accepted():
-    """V10: a seal carrying only the digest, no s, is accepted -- matched by
-    digest; seal.s is a lookup hint, never load-bearing."""
+    """Digest-only maps are valid; bare strings are not KERI seal maps."""
     with openIssuer("v10") as (hby, hab):
         ripper = makeRegistry(hab, anchored=False)
         anchor(hab, data=[dict(d=ripper.said)])  # digest-only seal
@@ -387,24 +386,25 @@ def test_V10_bare_digest_seal_accepted():
         assert rec.said == ripper.said
         assert rec.sn == 0
 
-        # a seal as simple as the bare SAID string also anchors (spec :1918)
+        # KERI requires a seal map even when it carries only a digest.
         second = makeRegistry(hab, stamp=STAMP1, anchored=False)
         anchor(hab, data=[second.said])
-        rec2 = vet(rip=second, db=hby.db)
-        assert rec2.said == second.said
+        with pytest.raises(kering.MissingAnchorError):
+            vet(rip=second, db=hby.db)
 
 
 def test_V11_multiple_seals_tolerated():
-    """V11: the anchoring KEL event carries several seals, ours among them:
-    accepted.  A wrong s hint on our own seal is also tolerated (digest is
-    what matches)."""
+    """An unrelated seal is harmless; every field of our seal must match."""
     with openIssuer("v11") as (hby, hab):
         ripper = makeRegistry(hab, anchored=False)
         noise1 = Diger(ser=b'some other commitment').qb64
         noise2 = Diger(ser=b'yet another commitment').qb64
         anchor(hab, data=[dict(s='99', d=noise1),
-                          dict(s='7', d=ripper.said),  # wrong s hint, right d
+                          dict(s='7', d=ripper.said),  # wrong ordinal, right digest
                           dict(d=noise2)])
+        with pytest.raises(kering.MissingAnchorError):
+            vet(rip=ripper, db=hby.db)
+        anchor(hab, data=[dict(d=noise1), seal(ripper), dict(d=noise2)])
         rec = vet(rip=ripper, db=hby.db)
         assert rec.said == ripper.said
 
@@ -708,8 +708,8 @@ def test_V23_no_salt_parameter_anywhere():
     assert checked > 0  # the sweep saw a real API surface
 
 
-def test_presentation_bindings_use_historical_cutoff():
-    """Presentation proof resolves the registry head at KRAM acceptance."""
+def test_presentation_bindings_use_exact_anchored_head():
+    """Historical proof selects a TEL event, independently of receiver time."""
     with openIssuer("targeted-presentation") as (hby, hab):
         ripper = makeRegistry(hab)
 
@@ -737,7 +737,7 @@ def test_presentation_bindings_use_historical_cutoff():
             blinders=[proofA, vacuousA],
             target=grantA,
             controller=hab.pre,
-            cutoff=STAMP2,
+            at=eventVacuousA.said,
         )
         assert recordA.sn == 2
         assert recordA.acdc == grantA
@@ -752,7 +752,7 @@ def test_presentation_bindings_use_historical_cutoff():
             blinders=[proofB],
             target=grantB,
             controller=hab.pre,
-            cutoff=STAMP3,
+            at=eventB.said,
         )
         assert recordB.sn == 3
         assert recordB.acdc == grantB
@@ -760,7 +760,7 @@ def test_presentation_bindings_use_historical_cutoff():
         assert recordB.stamp == STAMP3
         assert recordB.binding == "presentation"
 
-        # At STAMP2 the vacuous n=2 event is the historical head.
+        # Select the vacuous n=2 event as the historical head.
         # But vacuousA is not disclosed
         with pytest.raises(kering.UnverifiedBlindError):
             regeventing.vetBinds(
@@ -770,11 +770,11 @@ def test_presentation_bindings_use_historical_cutoff():
                 blinders=[proofA],
                 target=grantA,
                 controller=hab.pre,
-                cutoff=STAMP2,
+                at=eventVacuousA.said,
             )
 
-        # At STAMP3 event B is inside the historical prefix, but proofB is
-        # omitted, so the verifier cannot determine the cutoff-head state.
+        # With event B selected, proofB is omitted, so the verifier cannot
+        # determine the authenticated historical head state.
         with pytest.raises(kering.UnverifiedBlindError):
             regeventing.vetBinds(
                 rip=ripper,
@@ -783,7 +783,7 @@ def test_presentation_bindings_use_historical_cutoff():
                 blinders=[proofA, vacuousA],
                 target=grantA,
                 controller=hab.pre,
-                cutoff=STAMP3,
+                at=eventB.said,
             )
 
         # With every state disclosed, the latest non-vacuous event binds grant

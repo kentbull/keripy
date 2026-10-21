@@ -204,6 +204,10 @@ def acdcmap(israid, ilk=Ilks.acm, uuid=None, regid=None, schema=None,
     if rule is not None:
         sad['r'] = rule
 
+    if pvrsn.major >= 2:
+        for label in ('s', 'a', 'A', 'e', 'r'):
+            if label in sad:
+                sad[label] = SerderACDC.saidifySection(sad[label], label, kind)
     return SerderACDC(sad=sad, makify=True, compactify=compactify)
 
 
@@ -278,6 +282,8 @@ def acdcatt(israid, uuid=None, regid=None, schema=None, attribute=None,
 
     sad = dict(v=vs, t=ilk, d='', u=uuid, i=israid, rd=regid,
                s=schema, a=attribute, e=edge, r=rule)
+    for label in ('s', 'a', 'e', 'r'):
+        sad[label] = SerderACDC.saidifySection(sad[label], label, kind)
     return SerderACDC(sad=sad, makify=True, compactify=compactify)
 
 
@@ -347,6 +353,8 @@ def acdcagg(israid, uuid=None, regid=None, schema=None, aggregate=None,
 
     sad = dict(v=vs, t=ilk, d='', u=uuid, i=israid, rd=regid,
                s=schema, A=aggregate, e=edge, r=rule)
+    for label in ('s', 'A', 'e', 'r'):
+        sad[label] = SerderACDC.saidifySection(sad[label], label, kind)
     return SerderACDC(sad=sad, makify=True, compactify=compactify)
 
 
@@ -370,7 +378,7 @@ def sectschema(schema, pvrsn=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json):
     """
     vs = versify(proto=Protocols.acdc, pvrsn=pvrsn, kind=kind, size=0, gvrsn=gvrsn)
     ilk = Ilks.sch
-    sad = dict(v=vs, t=ilk, d='', s=schema)
+    sad = dict(v=vs, t=ilk, d='', s=SerderACDC.saidifySection(schema, 's', kind))
     return SerderACDC(sad=sad, makify=True)
 
 
@@ -394,7 +402,7 @@ def sectattr(attribute, pvrsn=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json):
     """
     vs = versify(proto=Protocols.acdc, pvrsn=pvrsn, kind=kind, size=0, gvrsn=gvrsn)
     ilk = Ilks.att
-    sad = dict(v=vs, t=ilk, d='', a=attribute)
+    sad = dict(v=vs, t=ilk, d='', a=SerderACDC.saidifySection(attribute, 'a', kind))
     return SerderACDC(sad=sad, makify=True)
 
 
@@ -418,7 +426,7 @@ def sectaggr(aggregate, pvrsn=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json):
     """
     vs = versify(proto=Protocols.acdc, pvrsn=pvrsn, kind=kind, size=0, gvrsn=gvrsn)
     ilk = Ilks.agg
-    sad = dict(v=vs, t=ilk, d='', A=aggregate)
+    sad = dict(v=vs, t=ilk, d='', A=SerderACDC.saidifySection(aggregate, 'A', kind))
     return SerderACDC(sad=sad, makify=True)
 
 
@@ -442,7 +450,7 @@ def sectedge(edge, pvrsn=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json):
     """
     vs = versify(proto=Protocols.acdc, pvrsn=pvrsn, kind=kind, size=0, gvrsn=gvrsn)
     ilk = Ilks.edg
-    sad = dict(v=vs, t=ilk, d='', e=edge)
+    sad = dict(v=vs, t=ilk, d='', e=SerderACDC.saidifySection(edge, 'e', kind))
     return SerderACDC(sad=sad, makify=True)
 
 
@@ -466,7 +474,7 @@ def sectrule(rule, pvrsn=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json):
     """
     vs = versify(proto=Protocols.acdc, pvrsn=pvrsn, kind=kind, size=0, gvrsn=gvrsn)
     ilk = Ilks.rul
-    sad = dict(v=vs, t=ilk, d='', r=rule)
+    sad = dict(v=vs, t=ilk, d='', r=SerderACDC.saidifySection(rule, 'r', kind))
     return SerderACDC(sad=sad, makify=True)
 
 
@@ -588,8 +596,10 @@ def sectionate(israid, ilk=Ilks.acm, uuid=None, regid=None, schema=None,
             agg = sectaggr(aggregate, pvrsn=pvrsn, gvrsn=gvrsn, kind=kind)
 
 
-    edg = sectedge(edge, pvrsn=pvrsn, gvrsn=gvrsn, kind=kind)
-    rul = sectrule(rule, pvrsn=pvrsn, gvrsn=gvrsn, kind=kind)
+    edg = sectedge({} if edge is None else edge,
+                   pvrsn=pvrsn, gvrsn=gvrsn, kind=kind)
+    rul = sectrule({} if rule is None else rule,
+                   pvrsn=pvrsn, gvrsn=gvrsn, kind=kind)
 
     return (acdc, sch, att, agg, edg, rul)
 

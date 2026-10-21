@@ -739,10 +739,14 @@ class Exchanger:
             self.hby.db.ecigs.add(keys=(dig,), val=(cigar.verfer, cigar))
 
         exnDiger = Diger(qb64=serder.said)
-        self.hby.db.epath.pin(keys=(dig,), vals=[bytes(p) for p in pathed])
-        if nests:
-            self.hby.db.enst.pin(keys=(dig,),
-                                 vals=[bytes(serializeParsedSubstream(nest)) for nest in nests])
+        # One accepted grant identifies one retained disclosure. Supplemental
+        # authentication may accumulate, but a replay must not replace its
+        # credential view. A fuller disclosure uses a distinct grant SAID.
+        if self.hby.db.exns.get(keys=(dig,)) is None:
+            self.hby.db.epath.pin(keys=(dig,), vals=[bytes(p) for p in pathed])
+            if nests:
+                self.hby.db.enst.pin(keys=(dig,),
+                                     vals=[bytes(serializeParsedSubstream(nest)) for nest in nests])
         for texter in essrs:
             self.hby.db.essrs.add(keys=(dig,), val=texter)
         for prefixer, number, diger in sourceSeals:

@@ -4,8 +4,8 @@ keri.acdc.regeventing module
 
 Registry (TEL) event support
 
-Shared TEL support for ACDC v2 blindable state registries made of 'rip'
-(registry inception) and 'bup' (blindable update) events.
+Shared TEL support for ACDC v2 state registries made of 'rip' (inception),
+'bup' (blinded update), and 'upd' (public update) events.
 
 This module now holds three closely related concerns:
 
@@ -16,15 +16,15 @@ This module now holds three closely related concerns:
    handed to them; KEL verification remains the caller's job.
 2. Shared TEL validation and anchor helpers reused across verifier and issuer
    flows so registry-event rules live in one place.
-3. The private issuer-side local event engine used by registraring.py to
-   process, anchor, escrow, replay, and accept TEL events for registries the
-   local habitat controls.
-
-In short, regeventing.py owns the TEL-specific validation and event workflow.
+3. The shared event engine used by registraring.py and Rever to validate,
+   escrow, replay, and accept locally authored or foreign TEL events against
+   accepted controller KEL evidence.
 """
 
 from collections.abc import Mapping
 from collections import namedtuple
+import re
+from datetime import datetime
 
 from .. import help
 from ..kering import (Ilks, ValidationError, ConfigurationError,
@@ -119,9 +119,20 @@ def _normalizeEventRecord(evt):
     ilk = serder.ilk
 
     # The v2 ACDC TEL only supports registry inception and blind updates
-    if ilk not in (Ilks.rip, Ilks.bup):
+    if ilk not in (Ilks.rip, Ilks.bup, Ilks.upd):
         raise ValidationError(f"Unsupported registry event type {ilk} for "
                               f"event {serder.said}.")
+    sn = serder.sad['n']
+    if not isinstance(sn, str) or not re.fullmatch(r"0|[1-9a-f][0-9a-f]*", sn):
+        raise MissequenceError("native registry ordinal must be canonical hexadecimal")
+    stamp = serder.sad['dt']
+    if not isinstance(stamp, str) or not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}[+-][0-9]{2}:[0-9]{2}", stamp):
+        raise ValidationError("native registry timestamp requires microseconds and numeric offset")
+    try:
+        datetime.fromisoformat(stamp)
+    except ValueError as ex:
+        raise ValidationError("invalid native registry timestamp") from ex
     return _RegEventRecord(serder=serder,
                            said=serder.said,
                            ilk=ilk,
@@ -196,7 +207,7 @@ def _validateUpdate(evt, *, regid, prior=None):
     event = _normalizeEventRecord(evt)
 
     # Only blindable updates belong in this path
-    if event.ilk != Ilks.bup:
+    if event.ilk not in (Ilks.bup, Ilks.upd):
         raise ValidationError(f"Expected registry update ilk={Ilks.bup} got "
                               f"ilk={event.ilk} for event {event.said}.")
 
@@ -240,7 +251,10 @@ def _kelEvent(db, pre, claim):
         if dig is None:
             return None
         return db.evts.get(keys=(pre, dig))
-    return db.evts.get(keys=(pre, claim))
+    event = db.evts.get(keys=(pre, claim))
+    if event is None or db.kels.getLast(keys=pre, on=event.sn) != event.said:
+        return None
+    return event
 
 
 def sealDigests(serder):
@@ -265,25 +279,28 @@ def sealDigests(serder):
     return digs
 
 
-def _scanKel(db, pre, said):
-    """Scan the KEL of pre in db for a key event whose seals include a digest
-    equal to said.
+def _matchesRegistrySeal(candidate, event):
+    """Recognize the approved digest/couple/triple profile, matching all fields."""
+    if not isinstance(candidate, Mapping):
+        return False
+    if set(candidate) not in ({'d'}, {'s', 'd'}, {'i', 's', 'd'}):
+        return False
+    return (candidate['d'] == event.said
+            and ('s' not in candidate or candidate['s'] == event.serder.sad['n'])
+            and ('i' not in candidate or candidate['i'] == event.regk))
 
-    Returns:
-        couple (tuple|None): (sn, said) of the anchoring key event, or None
-            when no seal in the KEL matches
-    """
+
+def _scanKel(db, pre, serder):
+    """Find the earliest accepted, fully witnessed matching controller seal."""
     kever = _kever(db, pre)
     if kever is None:
         return None
+    event = _normalizeEventRecord(serder)
     for sn in range(kever.sn + 1):
-        dig = db.kels.getLast(keys=pre, on=sn)
-        if dig is None:
+        eserder = _kelEvent(db, pre, sn)
+        if eserder is None or not db.fullyWitnessed(eserder):
             continue
-        eserder = db.evts.get(keys=(pre, dig))
-        if eserder is None:
-            continue
-        if said in sealDigests(eserder):
+        if any(_matchesRegistrySeal(seal, event) for seal in eserder.sad.get('a', ())):
             return (sn, eserder.said)
     return None
 
@@ -326,23 +343,39 @@ def _verifyAnchorCouple(serder, *, db, issuer, number, diger):
     if aserder.said != diger.qb64 or not db.fullyWitnessed(aserder):
         return False
 
-    # Compare against the full TEL seal tuple used by the local issuer path,
-    # not just the TEL event digest.
     event = _normalizeEventRecord(serder)
+    return any(_matchesRegistrySeal(candidate, event)
+               for candidate in aserder.sad.get('a', ()))
 
-    # Build the seal tuple from the TEL event for comparison
-    seal = dict(i=event.regk, s=event.serder.sad['n'], d=event.said)
 
-    # Loop through the seals in serder and return True if any match the TEL event's seal
-    for candidate in aserder.ked.get("a", []):
-        if not isinstance(candidate, Mapping):
+def _validateSourceLocators(serder, *, db, issuer, sscs=(), ssts=()):
+    """Reject resolvable false source locators on this intake only.
+
+    Native TEL events identify their registry and authorized controller without
+    unsigned attachments. Source couples/triples locate evidence; they cannot
+    impose a persistent sender-controlled condition on later authentic replay.
+    Unavailable KEL evidence therefore follows ordinary anchor discovery/escrow.
+    """
+    locators = [(issuer, number, diger) for number, diger in sscs]
+    locators.extend((prefixer.qb64, number, diger)
+                    for prefixer, number, diger in ssts)
+    event = _normalizeEventRecord(serder)
+    for controller, number, diger in locators:
+        if issuer is not None and controller != issuer:
+            raise ValidationError('TEL source locator names a different controller')
+        if controller is None:
+            continue  # an implicit source cannot resolve before registry inception
+        if not isinstance(number, Number) or not isinstance(diger, Diger):
+            raise ValidationError('TEL source locator requires a number and digest')
+        accepted = db.kels.getLast(keys=controller, on=number.num)
+        if accepted is None:
             continue
-        if (candidate.get("i") == seal["i"] and
-                candidate.get("s") == seal["s"] and
-                candidate.get("d") == seal["d"]):
-            return True
-
-    return False
+        if accepted != diger.qb64:
+            raise ValidationError('TEL source locator conflicts with accepted KEL digest')
+        anchor = db.evts.get(keys=(controller, accepted))
+        if anchor is not None and not any(
+                _matchesRegistrySeal(seal, event) for seal in anchor.sad.get('a', ())):
+            raise ValidationError('TEL source locator does not seal this registry event')
 
 
 # Verifier-side public API
@@ -391,7 +424,9 @@ def vetAnchor(serder, *, db, issuer, source=None, told=()):
         eserder = _kelEvent(db, issuer, source)
         if eserder is not None:
             digs = sealDigests(eserder)
-            if serder.said in digs:
+            if (_verifyAnchorCouple(serder, db=db, issuer=issuer,
+                                    number=Number(num=eserder.sn),
+                                    diger=Diger(qb64=eserder.said))):
                 return (eserder.sn, eserder.said)
             if digs and not set(digs) & set(told):
                 raise RootSealError(f"Claimed anchoring key event "
@@ -404,14 +439,14 @@ def vetAnchor(serder, *, db, issuer, source=None, told=()):
                                     f"not supported.")
         # a claim that did not pan out is just a bad hint: fall through
 
-    couple = _scanKel(db, issuer, serder.said)
+    couple = _scanKel(db, issuer, serder)
     if couple is not None:
         return couple
 
     for pre in list(db.kevers):
         if pre == issuer:
             continue
-        if _scanKel(db, pre, serder.said) is not None:
+        if _scanKel(db, pre, serder) is not None:
             raise MisanchorError(f"Seal for registry event {serder.said} "
                                  f"found in the KEL of {pre}, which is not "
                                  f"the registry issuer {issuer}: an "
@@ -441,6 +476,24 @@ def vetUpdate(bup, rip):
     return _validateUpdate(bup, regid=vetRip(rip).said).serder
 
 
+def _blindCandidates(blinder):
+    """Decode exactly one blind or bound opening without ignoring trailing bytes."""
+    if isinstance(blinder, Blinder):
+        return [blinder]
+    qb64 = blinder.decode() if hasattr(blinder, "decode") else blinder
+    candidates = []
+    for clan in (BlindState, BoundState):
+        try:
+            candidate = Blinder(clan=clan, qb64=qb64)
+        except Exception:
+            continue
+        if candidate.qb64 == qb64:
+            candidates.append(candidate)
+    if not candidates:
+        raise UnverifiedBlindError("undecodable disclosed blind or bound opening")
+    return candidates
+
+
 def vetBlind(blinder, *, blid):
     """Verify a disclosed blinded-state attribute block against the BLID
     anchored by a blindable update (bup) event, by recomputing the BLID over
@@ -460,19 +513,7 @@ def vetBlind(blinder, *, blid):
         UnverifiedBlindError: the disclosure does not reproduce blid, so it
             proves nothing about the registry's state
     """
-    candidates = []
-    if isinstance(blinder, Blinder):
-        candidates.append(blinder)
-    else:
-        qb64 = blinder.decode() if hasattr(blinder, "decode") else blinder
-        for clan in (BlindState, BoundState):
-            try:
-                candidates.append(Blinder(clan=clan, qb64=qb64))
-            except Exception:
-                continue
-        if not candidates:
-            raise UnverifiedBlindError(f"Undecodable disclosed blinded-state "
-                                       f"block for blid={blid}.")
+    candidates = _blindCandidates(blinder)
 
     for candidate in candidates:
         crew = dict(candidate.crew._asdict())
@@ -484,6 +525,102 @@ def vetBlind(blinder, *, blid):
     raise UnverifiedBlindError(f"Disclosed blinded-state block does not "
                                f"reproduce the anchored blid={blid}: the "
                                f"disclosure proves nothing.")
+
+
+def vetBound(blinder, *, acdc, db):
+    """Validate a bound opening's exact historical Issuee KEL coordinates.
+
+    Call vetBlind first to authenticate this opening against its TEL BLID.
+    ACDC f0bd097d sections 2429-2478 define bn/bd as an Issuee key event,
+    not necessarily an establishment event or the receiver's latest event.
+    This verifies that reference; it does not infer wall-clock publication time.
+
+    Returns the accepted, fully witnessed Issuee key event for a non-vacuous
+    BoundState, or None for a BlindState or a strict all-empty placeholder.
+    Missing event/witness evidence is retryable; a conflicting accepted digest,
+    missing issuee, or substituted credential is a permanent binding failure.
+    """
+    blinder = _blindCandidates(blinder)[0]
+    if blinder.clan != BoundState:
+        return None
+    if not blinder.acdc and not blinder.state:
+        if blinder.bsn != 0 or blinder.bd:
+            raise MisbindingError("bound placeholder requires bn=0 and empty bd")
+        return None
+    if not blinder.bd:
+        raise MisbindingError("non-vacuous bound state requires an Issuee key event")
+    if acdc is None:
+        raise MisbindingError("bound state requires its disclosed target ACDC")
+    credential = _coerce(acdc)
+    if blinder.acdc != credential.said:
+        raise MisbindingError("bound state does not name the presented ACDC")
+    issuee = credential.iseaid
+    if not issuee:
+        raise MisbindingError("bound state requires the disclosed ACDC Issuee")
+    dig = db.kels.getLast(keys=issuee, on=blinder.bsn)
+    if dig is None:
+        raise MissingAnchorError(f"missing Issuee key event {issuee}:{blinder.bsn}")
+    if dig != blinder.bd:
+        raise MisanchorError("bound Issuee key event digest conflicts with accepted KEL")
+    event = db.evts.get(keys=(issuee, dig))
+    if event is None or not db.fullyWitnessed(event):
+        raise MissingAnchorError("bound Issuee key event is not fully witnessed")
+    return event
+
+
+BoundStateResult = namedtuple('BoundStateResult', 'valid assurance')
+
+
+def boundStateAt(transitions, *, issuee, issuer, sn):
+    """Interpret a complete, authenticated bound history at an issuance event.
+
+    ``transitions`` contains (state, bound ordinal) pairs in verified TEL order.
+    The caller must authenticate every transition and its exact Issuee event;
+    a partial history must not be passed as a complete history.
+
+    Published ACDC f0bd097d :2457/:2476 requires the bound event to be current
+    at publication. Under that issuer assertion, an update follows its bound
+    event and precedes the next Issuee event: issuance authority therefore has
+    ``issued.bn < sn <= revoked.bn``. Equal issuance is too early; equal
+    revocation is still before revocation. This is an interpretation of the
+    normative current-event premise, NOT independent proof of publication time.
+    The assurance is explicit because valid signatures cannot prove that an
+    issuer did not choose an old bound. Different KEL ordinals are incomparable.
+    """
+    if not issuee or issuer != issuee:
+        return BoundStateResult(None, 'incomparable-kels')
+    if type(sn) is not int or sn < 0:
+        return BoundStateResult(None, 'incomplete-bound-history')
+    prior = -1
+    state = None
+    for current, bound in transitions:
+        if type(bound) is not int or bound < 0 or bound < prior or current not in ('issued', 'revoked'):
+            return BoundStateResult(None, 'incomplete-bound-history')
+        prior = bound
+        if bound < sn:
+            state = current
+    return BoundStateResult(state == 'issued', 'issuer-current-event')
+
+
+def issuerRegistry(acdc):
+    """Read the disclosed issuer registry, including protected nested rd.
+
+    A top-level registry makes inner registries application/presentation
+    declarations. Without it, disclosed a/A blocks may carry the issuer rd.
+    No cached disclosure is consulted and no hidden block is expanded.
+    """
+    serder = _coerce(acdc)
+    if regid := serder.sad.get('rd'):
+        return regid
+    sections = [serder.sad.get('a')]
+    aggregate = serder.sad.get('A')
+    if isinstance(aggregate, list):
+        sections.extend(aggregate[1:])
+    registries = {section['rd'] for section in sections
+                  if isinstance(section, dict) and section.get('rd')}
+    if len(registries) > 1:
+        raise MisregistryError('multiple disclosed issuer registries without top-level rd')
+    return next(iter(registries), None)
 
 
 def vetBindings(acdc, *, regid, issuer, td):
@@ -521,7 +658,7 @@ def vetBindings(acdc, *, regid, issuer, td):
         raise MisbindingError(f"Presented ACDC issuer {serder.sad.get('i')} "
                               f"does not match presented registry issuer "
                               f"{issuer}.")
-    rd = serder.sad.get('rd')
+    rd = issuerRegistry(serder)
     if rd:
         if rd != regid:
             raise MisbindingError(f"Presented ACDC's registry said rd={rd} "
@@ -622,8 +759,12 @@ def vet(rip, updates=None, *, db, acdc=None, blinder=None, sources=None):
 
     head = chain[-1]
     acdcsaid = state = None
-    if head.ilk == Ilks.bup and blinder is not None:
+    if head.ilk == Ilks.upd:
+        acdcsaid = head.sad['td'] or None
+        state = head.sad['ts'] or None
+    elif head.ilk == Ilks.bup and blinder is not None:
         disclosed, toldState = vetBlind(blinder=blinder, blid=head.sad['b'])
+        vetBound(blinder, acdc=acdc, db=db)
         acdcsaid = disclosed or None
         state = toldState or None
 
@@ -645,16 +786,15 @@ def vet(rip, updates=None, *, db, acdc=None, blinder=None, sources=None):
 
 
 def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
-             acdc=None, sources=None, cutoff=None, requireSource=False):
+             acdc=None, sources=None, cutoff=None, at=None, requireSource=False):
     """Verify a TEL and a disclosed non-vacuous target binding.
 
     Every blinded update from the verified head back through the latest
     non-vacuous update must have exactly one matching disclosure, and that
-    non-vacuous update must bind ``target``.  When ``cutoff`` is provided, the
-    verified head is the latest event whose timestamp is at or before that
-    receiver-observed time.  Presentation registries use the grant's KRAM
-    acceptance time as this historical cutoff; issuer registries use the
-    current head by omitting it.
+    non-vacuous update must bind ``target``. ``at`` selects an exact TEL event
+    as the historical head; every event through it still needs a verified KEL
+    anchor. Omitting it checks the supplied current head. Controller timestamps
+    and request receipt timestamps do not establish KEL ordering.
 
     Parameters:
         rip (SerderACDC | bytes): Registry inception event.
@@ -665,8 +805,9 @@ def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
         controller (str | None): Required registry-controlling AID.
         acdc (SerderACDC | bytes | None): ACDC for issuer-registry bindings.
         sources (Mapping | None): Optional TEL-event anchor locations.
-        cutoff (str | None): Optional receiver-observed ISO datetime limiting
-            the verified TEL prefix.
+        cutoff: Obsolete timestamp cutoff; rejected because it proves no
+            historical ordering. Select an exact authenticated event instead.
+        at (str | None): SAID of the historical TEL head to verify.
         requireSource (bool): True requires an explicit source claim for the
             selected non-vacuous binding event.
 
@@ -683,27 +824,15 @@ def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
 
     sources = sources if sources is not None else {}
 
-    # Restrict presentation verification to receiver-known history.
     if cutoff is not None:
-        try:
-            # Parse the receiver's KRAM acceptance timestamp.
-            cutoffTime = help.fromIso8601(cutoff)
-
-            # Reject a registry created after the historical cutoff.
-            if help.fromIso8601(rip.sad['dt']) > cutoffTime:
-                raise MisbindingError(
-                    f"Registry {rip.said} did not exist by cutoff {cutoff}.")
-
-            # Ignore updates that occurred after Grant acceptance.
-            updates = [
-                update for update in updates
-                if help.fromIso8601(update.sad["dt"]) <= cutoffTime
-            ]
-
-        # Convert malformed timestamp input into a registry validation error.
-        except (TypeError, ValueError) as ex:
-            raise ValidationError(
-                f"Invalid registry historical cutoff {cutoff}.") from ex
+        raise ValidationError('datetime cutoff cannot establish anchored history; select at=TEL SAID')
+    if at is not None:
+        chain = [rip, *updates]
+        positions = [index for index, event in enumerate(chain) if event.said == at]
+        if len(positions) != 1:
+            raise MissingAnchorError(f'historical TEL head {at} is unavailable or ambiguous')
+        ordinal = Number(numh=chain[positions[0]].sad['n']).num
+        updates = [event for event in updates if Number(numh=event.sad['n']).num <= ordinal]
 
     # Verify the selected contiguous TEL prefix and all KEL anchors.
     record = vet(rip=rip, updates=updates, db=db, sources=sources)
@@ -725,18 +854,17 @@ def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
     # Inspect each update until the latest non-vacuous state is found.
     for update in newestFirst:
 
-        # Match this blinded update to exactly one disclosed state block.
-        matches = [blinder for blinder in blinders
-                   if blinder.said == update.sad['b']]
-
-        # Missing or duplicate disclosures cannot prove this update.
-        if len(matches) != 1:
-            raise UnverifiedBlindError(
-                f"Registry update {update.said} requires exactly one disclosure "
-                f"for blid={update.sad['b']}.")
-
-        # Verify and disclose this update's target and state.
-        td, state = vetBlind(blinder=matches[0], blid=update.sad['b'])
+        if update.ilk == Ilks.upd:
+            td, state = update.sad['td'], update.sad['ts']
+        else:
+            matches = [blinder for blinder in blinders
+                       if blinder.said == update.sad['b']]
+            if len(matches) != 1:
+                raise UnverifiedBlindError(
+                    f"Registry update {update.said} requires exactly one disclosure "
+                    f"for blid={update.sad['b']}.")
+            td, state = vetBlind(blinder=matches[0], blid=update.sad['b'])
+            vetBound(matches[0], acdc=acdc, db=db)
 
         # Skip vacuous updates while retaining their chain validation.
         if not td and not state:
@@ -776,7 +904,7 @@ class _RegEventer:
     and out-of-order escrows.
     """
 
-    def __init__(self, hab, store, regk=None, regd=None):
+    def __init__(self, hab=None, store=None, regk=None, regd=None, *, db=None, issuer=None):
         """Create one local TEL event engine bound to a habitat and store.
 
         Parameters:
@@ -790,6 +918,10 @@ class _RegEventer:
         # The engine needs the controlling habitat for local KEL inspection,
         # the registry store for persistence, and the current accepted TEL tip
         self.hab = hab
+        self.db = hab.db if hab is not None else db
+        self.issuer = hab.pre if hab is not None else issuer
+        if self.db is None or self.issuer is None or store is None:
+            raise ConfigurationError("registry processing requires KEL database, issuer and store")
         self.store = store
         self.regk = regk
         self.regd = regd
@@ -827,7 +959,7 @@ class _RegEventer:
         return self.store.seqEvent(self.regk, 0) if self.regk is not None else None
 
     # Public TEL event API
-    def processEvent(self, serder):
+    def processEvent(self, serder, *, sscs=(), ssts=()):
         """Store one TEL event and commit it when anchor and order allow.
 
         Parameters:
@@ -844,6 +976,8 @@ class _RegEventer:
         """
         # First apply shared TEL rules plus local store consistency checks.
         event, existing, prior = self._validateEvent(serder)
+        _validateSourceLocators(event.serder, db=self.db, issuer=self.issuer,
+                                sscs=sscs, ssts=ssts)
 
         # The first accepted or staged rip binds this engine instance to the
         # registry key it will manage from then on.
@@ -854,7 +988,8 @@ class _RegEventer:
         # Idempotent replay of an already accepted event is a success.
         if existing is not None:
             self.regk = event.regk
-            self.regd = existing.said
+            self.regd = self.store.head(event.regk).qb64
+            self.store.clearEscrows(event.regk, event.sn, event.said)
             return True
 
         # Persist the body before any escrow decision so later replay can load
@@ -924,8 +1059,8 @@ class _RegEventer:
             # path used by normal event ingestion and escrow replay.
             self._discoverAnchor(event)
         elif not _verifyAnchorCouple(event.serder,
-                                     db=self.hab.db,
-                                     issuer=self.hab.pre,
+                                     db=self.db,
+                                     issuer=self.issuer,
                                      number=number,
                                      diger=diger):
             raise ValidationError(f"invalid anchor for registry event {said}")
@@ -950,6 +1085,14 @@ class _RegEventer:
         Returns:
             None
         """
+        if self.regk is None:
+            return
+        # A crash may occur after acceptance but before escrow cleanup.
+        # Occupied ordinals are final, including their discarded siblings.
+        for escrow in (self.store.baser.maes, self.store.baser.ooes):
+            for _, sn, said in list(escrow.getTopItemIter(keys=self.regk)):
+                if self.store.seqSaider(self.regk, sn) is not None:
+                    self.store.clearEscrows(self.regk, sn, said)
         self._processMissingAnchors()
         self._processQueued()
 
@@ -994,11 +1137,11 @@ class _RegEventer:
         issuer = getattr(acdc, "israid", None)
         if issuer is None:
             issuer = acdc.sad.get("i")
-        if issuer != self.hab.pre:
-            raise ConfigurationError(f"acdc {acdc.said} has issuer {issuer} not {self.hab.pre}")
+        if issuer != self.issuer:
+            raise ConfigurationError(f"acdc {acdc.said} has issuer {issuer} not {self.issuer}")
 
         # Reject malformed credentials before deriving or staging an issuance event.
-        scheming.validateSchema(acdc=acdc, db=self.hab.db)
+        scheming.validateSchema(acdc=acdc, db=self.db)
 
         return self._blind(target=acdc.said, state=state, **kwa)
 
@@ -1087,11 +1230,11 @@ class _RegEventer:
                 raise ValidationError("registry must start with an inception event")
 
             # Validate the rip against the local habitat's AID
-            event = _validateRip(serder, issuer=self.hab.pre)
+            event = _validateRip(serder, issuer=self.issuer)
         else:
             # Once bound, reuse the shared TEL validators against the already
             # known registry id and local habitat issuer.
-            event = _validateRip(serder, issuer=self.hab.pre) if serder.ilk == Ilks.rip \
+            event = _validateRip(serder, issuer=self.issuer) if serder.ilk == Ilks.rip \
                 else _validateUpdate(serder, regid=self.regk)
 
         # Validate that the event belongs to the same registry
@@ -1153,30 +1296,17 @@ class _RegEventer:
                 local sealing event is visible yet.
         """
         
-        # Check if the anchor is already known and stored
-        if self.store.anchor(event.said) is not None:
-            return True
+        anchor = self.store.anchor(event.said)
+        if anchor is not None:
+            if _verifyAnchorCouple(event.serder, db=self.db, issuer=self.issuer,
+                                   number=anchor[0], diger=anchor[1]):
+                return True
+            self.store.baser.ancs.rem(keys=event.said)
 
-        # Ask the local habitat KEL for the latest key event whose seal payload
-        # points at this TEL event.
-        aserder = self.hab.db.fetchLastSealingEventByEventSeal(
-            pre=self.hab.pre,
-            seal=dict(i=event.regk, s=event.serder.sad['n'], d=event.said),
-        )
-        if aserder is None:
+        couple = _scanKel(self.db, self.issuer, event.serder)
+        if couple is None:
             return False
-
-        # Retrieve the sn and dig from the sealing event and verify the anchor couple
-        number = Number(num=aserder.sn)
-        diger = Diger(qb64=aserder.said)
-        if not _verifyAnchorCouple(event.serder,
-                                   db=self.hab.db,
-                                   issuer=self.hab.pre,
-                                   number=number,
-                                   diger=diger):
-            return False
-
-        self.store.putAnchor(event.said, number, diger)
+        self.store.putAnchor(event.said, Number(num=couple[0]), Diger(qb64=couple[1]))
         return True
 
     # Escrow replay helpers
@@ -1285,9 +1415,18 @@ class _RegEventer:
         while True:
             # Only the next sequence number after the accepted head can advance.
             sn = self.sn + 1
-            queued = [said for (said,) in self.store.baser.ooes.get(keys=self.regk, on=sn)]
+            queued = list(dict.fromkeys(
+                said for escrow in (self.store.baser.maes, self.store.baser.ooes)
+                for (said,) in escrow.get(keys=self.regk, on=sn)))
             if not queued:
                 return
+
+            # Discover every candidate before sorting: updates that arrived
+            # before inception have no cached anchor yet.
+            for said in queued:
+                replay = self._replayCandidate(said, sn)
+                if replay is not None:
+                    self._discoverAnchor(replay[0])
 
             advanced = False
             # Use the same sibling winner policy here as missing-anchor replay
@@ -1298,8 +1437,12 @@ class _RegEventer:
                     continue
 
                 event, prior = replay
-                # ooes only advances events whose anchors are already known.
+                # An update may precede inception, so its controller was
+                # unknown at first intake. Discover its anchor on replay too.
+                self._discoverAnchor(event)
                 if self.store.anchor(said) is None:
+                    self.store.escrowMissingAnchor(event.regk, event.sn, said)
+                    self.store.baser.ooes.rem(keys=event.regk, on=event.sn, val=said)
                     continue
 
                 # If the immediate predecessor still is not accepted, the event
@@ -1366,3 +1509,57 @@ class _RegEventer:
             tip = matches[0].serder
 
         return tip
+
+
+class Rever:
+    """Accept foreign native registries through the local registry event engine.
+
+    Only accepted, fully witnessed controller KEL evidence can release an
+    event from escrow. No local habitat, alias, or controller private key is
+    required. Pending bodies and dependencies live in the ordinary RegBaser.
+    """
+
+    def __init__(self, *, db, reger):
+        from .registering import RegistryStore
+        self.db = db
+        self.reger = reger
+        self.store = RegistryStore(reger)
+
+    def processEvent(self, serder, *, sscs=(), ssts=(), **kwa):
+        """Return acceptance, or False after durably escrowing dependencies."""
+        event = _normalizeEventRecord(serder)
+        if event.ilk == Ilks.rip:
+            _validateRip(event.serder)
+            rip = event.serder
+        else:
+            _validateUpdate(event.serder, regid=event.regk)
+            rip = self.store.event(event.regk)
+            if rip is None:
+                _validateSourceLocators(event.serder, db=self.db, issuer=None,
+                                        sscs=sscs, ssts=ssts)
+                self.store.putEvent(event.serder)
+                self.store.escrowOutOfOrder(event.regk, event.sn, event.said)
+                return False
+            _validateRip(rip)
+
+        engine = _RegEventer(db=self.db, issuer=rip.sad['i'],
+                            store=self.store, regk=event.regk)
+        return engine.processEvent(event.serder, sscs=sscs, ssts=ssts)
+
+    def processEscrows(self):
+        """Recover foreign work from durable escrow rows, including on reopen."""
+        regks = set()
+        for escrow in (self.reger.maes, self.reger.ooes):
+            for keys, _, _ in escrow.getTopItemIter():
+                regks.add(keys[0])
+        for regk in sorted(regks):
+            rip = self.store.event(regk)
+            if rip is None:
+                continue
+            try:
+                _validateRip(rip)
+                engine = _RegEventer(db=self.db, issuer=rip.sad['i'],
+                                    store=self.store, regk=regk)
+                engine.processEscrows()
+            except ValidationError as ex:
+                logger.info("Invalid registry inception in escrow %s: %s", regk, ex)

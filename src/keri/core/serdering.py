@@ -183,7 +183,7 @@ class Serdery:
             lsize = 0  # label size in bytes
             if not fixed:  # extract label for version field
                 labeler = Labeler(qb64b=ims[ctr.fullSize:])  # offset past ctr
-                lsize = labeler.fullsize
+                lsize = labeler.fullSize
 
             verser = Verser(qb64b=ims[ctr.fullSize+lsize:])  # in text domain
             proto, pvrsn, gvrsn = verser.versage
@@ -2932,6 +2932,12 @@ class SerderACDC(Serder):
         if self.gvrsn != gvrsn:
             raise ValidationError(f"Inconsistent genus version={self.gvrsn} from"
                                   f" deversify of sad.")
+        if self.pvrsn.major >= 2:
+            for label in ('s', 'a', 'A', 'e', 'r'):
+                if value := self.sad.get(label):
+                    if isinstance(value, (Mapping, list)):
+                        if self.saidifySection(value, label, self.kind) != value:
+                            raise ValidationError(f"Invalid disclosed {label} section commitment")
         # verified successfully since no exception
 
         if (not self.ilk or self.ilk in
@@ -2945,6 +2951,23 @@ class SerderACDC(Serder):
 
             if code not in PreDex:
                 raise ValidationError(f"Invalid issuer AID code = {code}.")
+
+    @staticmethod
+    def saidifySection(value, label, kind):
+        """Compute section commitments while retaining exactly its exposed nodes.
+
+        Builders use this to author valid section values; verification compares
+        the result with received values without rewriting authenticated bytes.
+        """
+        if label == 'A' and isinstance(value, list):
+            return Aggor(ael=value, makify=True, kind=kind).ael
+        if not isinstance(value, Mapping) or not value:
+            return value
+        if label == 's':
+            return Compactor(mad=value, makify=True, strict=False,
+                             saids={'$id': 'E'}, kind=kind).mad
+        section = Compactor(mad=value, makify=True, compactify=True, kind=kind)
+        return list(section.partials.values())[-1].mad if section.partials else section.mad
 
 
 

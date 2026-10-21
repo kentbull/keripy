@@ -181,7 +181,7 @@ class Parser:
 
     def __init__(self, ims=None, framed=True, piped=False, kvy=None,
                  tvy=None, exc=None, rvy=None, vry=None, local=False,
-                 version=Vrsn_2_0):
+                 version=Vrsn_2_0, rgy=None, scy=None):
         """
         Initialize instance:
 
@@ -196,6 +196,8 @@ class Parser:
             exc (Exchanger): route EXN message types to this instance
             rvy (Revery): reply (RPY) message handler
             vry (``Verfifier``): credential verifier with wallet storage
+            rgy (Rever): native registry event processor
+            scy (Sectioner): native credential and section evidence processor
             local (bool): True means event source is local (protected) for validation
                 False means event source is remote (unprotected) for validation
             version (Versionage): instance of version portion of genus version code
@@ -205,6 +207,8 @@ class Parser:
         self.piped = True if piped else False  # use pipeline processor
         self.kvy = kvy
         self.tvy = tvy
+        self.rgy = rgy
+        self.scy = scy
         self.exc = exc
         self.rvy = rvy
         self.vry = vry
@@ -351,7 +355,7 @@ class Parser:
 
     def parse(self, ims=None, framed=None, piped=None, kvy=None, tvy=None,
               exc=None, rvy=None, vry=None, local=None, version=None,
-              processive=True):
+              processive=True, rgy=None, scy=None):
         """Processes all messages from incoming message stream, ims,
         when provided. Otherwise process messages from .ims
         Returns when ims is empty.
@@ -392,7 +396,7 @@ class Parser:
                                     tvy=tvy,
                                     exc=exc,
                                     rvy=rvy,
-                                    vry=vry,
+                                    vry=vry, rgy=rgy, scy=scy,
                                     local=local,
                                     version=version,
                                     processive=processive)
@@ -409,7 +413,7 @@ class Parser:
 
     def parseOne(self, ims=None, framed=True, piped=False, kvy=None, tvy=None,
                  exc=None, rvy=None, vry=None, local=None, version=None,
-                 processive=True):
+                 processive=True, rgy=None, scy=None):
         """Processes one messages from incoming message stream, ims,
         when provided. Otherwise process message from .ims
         Returns once one message is processed.
@@ -450,7 +454,7 @@ class Parser:
                                      tvy=tvy,
                                      exc=exc,
                                      rvy=rvy,
-                                     vry=vry,
+                                     vry=vry, rgy=rgy, scy=scy,
                                      local=local,
                                      version=version,
                                      processive=processive)
@@ -466,7 +470,7 @@ class Parser:
 
     def allParsator(self, ims=None, framed=None, piped=None, kvy=None,
                     tvy=None, exc=None, rvy=None, vry=None, local=None,
-                    version=None, processive=True):
+                    version=None, processive=True, rgy=None, scy=None):
         """Returns generator to parse all messages from incoming message stream,
         ims until ims is exhausted (empty) then returns.
         Generator completes as soon as ims is empty.
@@ -508,6 +512,8 @@ class Parser:
         piped = piped if piped is not None else self.piped
         kvy = kvy if kvy is not None else self.kvy
         tvy = tvy if tvy is not None else self.tvy
+        rgy = rgy if rgy is not None else self.rgy
+        scy = scy if scy is not None else self.scy
         exc = exc if exc is not None else self.exc
         rvy = rvy if rvy is not None else self.rvy
         vry = vry if vry is not None else self.vry
@@ -524,7 +530,7 @@ class Parser:
                                                         tvy=tvy,
                                                         exc=exc,
                                                         rvy=rvy,
-                                                        vry=vry,
+                                                        vry=vry, rgy=rgy, scy=scy,
                                                         local=local,
                                                         version=version,
                                                         processive=processive)
@@ -557,7 +563,7 @@ class Parser:
 
     def onceParsator(self, ims=None, framed=None, piped=None, kvy=None,
                      tvy=None, exc=None, rvy=None, vry=None, local=None,
-                     version=None, processive=True):
+                     version=None, processive=True, rgy=None, scy=None):
         """Returns generator to parse one message from incoming message stream, ims.
         If ims not provided parse messages from .ims
 
@@ -597,6 +603,8 @@ class Parser:
         piped = piped if piped is not None else self.piped
         kvy = kvy if kvy is not None else self.kvy
         tvy = tvy if tvy is not None else self.tvy
+        rgy = rgy if rgy is not None else self.rgy
+        scy = scy if scy is not None else self.scy
         exc = exc if exc is not None else self.exc
         rvy = rvy if rvy is not None else self.rvy
         vry = vry if vry is not None else self.vry
@@ -618,6 +626,7 @@ class Parser:
                     logger.exception("Kevery sized group error: %s", ex)
                 else:
                     logger.error("Kevery sized group error: %s", ex)
+                return None
 
             except (ColdStartError, ExtractionError, Exception) as ex:  # some extraction error
                 if logger.isEnabledFor(logging.DEBUG):
@@ -625,6 +634,7 @@ class Parser:
                 else:
                     logger.error("Kevery msg extraction error: %s", ex)
                 del ims[:]  # delete rest of stream to force cold restart
+                return None
 
             if processive:
                 try:
@@ -633,7 +643,7 @@ class Parser:
                                             tvy=tvy,
                                             exc=exc,
                                             rvy=rvy,
-                                            vry=vry)
+                                            vry=vry, rgy=rgy, scy=scy)
 
                 except (ValidationError, Exception) as ex:  # non Extraction Error
                     # Non extraction errors happen after successfully extracted from stream
@@ -662,7 +672,7 @@ class Parser:
 
     def parsator(self, ims=None, framed=None, piped=None, kvy=None, tvy=None,
                  exc=None, rvy=None, vry=None, local=None, version=None,
-                 processive=True):
+                 processive=True, rgy=None, scy=None):
         """Returns generator to continually parse messages from incoming message
         stream, ims. Empty yields when ims is emply. Does not return.
         Useful for always running servers.
@@ -706,6 +716,8 @@ class Parser:
         piped = piped if piped is not None else self.piped
         kvy = kvy if kvy is not None else self.kvy
         tvy = tvy if tvy is not None else self.tvy
+        rgy = rgy if rgy is not None else self.rgy
+        scy = scy if scy is not None else self.scy
         exc = exc if exc is not None else self.exc
         rvy = rvy if rvy is not None else self.rvy
         vry = vry if vry is not None else self.vry
@@ -722,7 +734,7 @@ class Parser:
                                                    tvy=tvy,
                                                    exc=exc,
                                                    rvy=rvy,
-                                                   vry=vry,
+                                                   vry=vry, rgy=rgy, scy=scy,
                                                    local=local,
                                                    version=version,
                                                    processive=processive)
@@ -756,7 +768,7 @@ class Parser:
 
     def groupParsator(self, ims=None, framed=True, piped=False, kvy=None,
                     tvy=None, exc=None, rvy=None, vry=None, local=None,
-                    version=None, processive=True):
+                    version=None, processive=True, rgy=None, scy=None):
         """Returns generator to parse nested GenericGroups whose outermost nesting
         appears at the top-level of an incoming message stream.
 
@@ -785,6 +797,8 @@ class Parser:
                     testing and debugging"""
         if ims is None:
             ims = self.ims
+        rgy = rgy if rgy is not None else self.rgy
+        scy = scy if scy is not None else self.scy
 
         local = local if local is not None else self.local
         local = True if local else False
@@ -876,7 +890,7 @@ class Parser:
                                                 tvy=tvy,
                                                 exc=exc,
                                                 rvy=rvy,
-                                                vry=vry)
+                                                vry=vry, rgy=rgy, scy=scy)
 
                     except (ValidationError, Exception) as ex:  # post Extraction Error
                         # Validation errors happen in msgProcess which is called
@@ -1178,7 +1192,9 @@ class Parser:
                     del ims[:ctr.byteSize(cold=cold)]  # consume ctr itself
                     # compute enclosing attachment group size based on txt or bny
                     eags = ctr.byteCount(cold=cold)
-                    while len(ims) < eags and not framed:
+                    while len(ims) < eags:
+                        if framed:
+                            raise ShortageError("Incomplete attachment group")
                         yield
                     eims = ims[:eags]  # copy out substream enclosed attachments
                     del ims[:eags]  # strip off from ims consume contents from ims
@@ -1188,6 +1204,11 @@ class Parser:
                     if piped:
                         pass  # pass extracted ims to pipeline processor
                         return
+
+                    # An explicitly empty group is the complete foot of an
+                    # unsigned, anchor-authenticated native registry event.
+                    if eags == 0:
+                        return exts
 
                     # peek for version change
                     ctr = yield from self._extractor(ims=ims,
@@ -1316,7 +1337,7 @@ class Parser:
 
 
 
-    def msgProcess(self, exts, kvy, tvy, exc, rvy, vry):
+    def msgProcess(self, exts, kvy, tvy, exc, rvy, vry, rgy=None, scy=None):
         """Processes message + attachemnts contained in exts with respect to
         contexts in kvy, tvy,exc, rvy, and vry.
 
@@ -1517,7 +1538,17 @@ class Parser:
         elif isinstance(serder, SerderACDC):
             ilk = serder.ilk  # dispatch based on ilk
 
-            if ilk is None:  # default for ACDC
+            if ilk in (Ilks.rip, Ilks.bup, Ilks.upd):
+                if rgy is None:
+                    raise ValidationError("No native registry processor for ACDC TEL")
+                rgy.processEvent(serder=serder, sscs=exts['sscs'], ssts=exts['ssts'])
+            elif serder.pvrsn.major == 2 and ilk in (
+                    None, Ilks.acm, Ilks.act, Ilks.acg,
+                    Ilks.sch, Ilks.att, Ilks.agg, Ilks.edg, Ilks.rul):
+                if scy is None:
+                    raise ValidationError("No native section evidence processor for ACDC")
+                scy.processEvent(**exts)
+            elif ilk is None:  # legacy credential form
                 try:
                     # use last one if more than one
                     prefixer, number, diger = exts['ssts'][-1] if exts['ssts'] else (None, None, None)
