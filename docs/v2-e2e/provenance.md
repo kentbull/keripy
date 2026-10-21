@@ -168,3 +168,33 @@ standing and observer policy. This is application policy separation, not new
 KRAM or historical snapshot semantics. Five focused tests cover a real bound
 authority graph after revocation, current-reporting refusal, historical inspection
 across reopen, invalid proof refusal, retained privacy, and actual hook silence.
+
+## R6-A: authenticated local conflict evidence
+
+Targets: `RegBaser.reopen`/`recordConflict`, `regeventing.vet` documentation,
+`_RegEventer.processEvent`, `_validateEvent`, `_processConflict`,
+`_processOccupied`, `_commit`, escrow processing and arbitration documentation;
+all helpers/cases in `test_registry_conflict_policy.py` and the occupied-slot
+assertion in `test_observing.py`.
+
+- Inherited engine: Keanu's `c8f8797841a2dafc463a610694a634b0b795eab6`,
+  `60acc017f36bdb74ea6981a4db583b43f7e7352e`, and
+  `8332b8dc4271354af035f416226e34d4fa820f56`; later local escrow cleanup
+  `825229806db825fdce180cb2a11ec31ed66aee03` is now replaced. RegBaser scaffold
+  originates with Evan Asakawa's `0052b7f362692e0b14dd78729c120c644b4bc100`.
+  Atomic acceptance from `64a1a01d7537a3ef4dd8d52e5874160dbc60b093` is unchanged.
+- Local Codex policy/implementation: preserve the first authenticated accepted
+  candidate. Jointly queued candidates retain existing verified-anchor ordering;
+  neither ordering claims a globally consistent winner. Strict batch verification
+  refuses a supplied proven-conflicting bundle. Durable intake keeps its accepted
+  history and reports authenticated competitors separately.
+- An occupied slot alone proves no duplicity. Missing anchors remain pending;
+  an independently verified competing anchor produces `DuplicitousRegistryError`.
+  The additive `conflicts.` table retains one exact competing body per accepted
+  slot, with accepted and competing KEL references in existing anchor storage.
+  This is bounded local evidence, not exhaustive archiving or fork reconciliation.
+- Nine real independent-KEL cases cover opposite arrivals, both queue types,
+  delayed anchors, forged signatures/wrong locators, repeats, and reopen. All fail
+  with the pre-repair engine substituted. The new cases and existing registry/
+  observer modules pass 78 tests. An old assertion now correctly treats an
+  unanchored disagreement as pending rather than proven.

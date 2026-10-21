@@ -72,8 +72,10 @@ def test_foreign_registry_ordering_and_parser_replay():
         assert reger.ooes.get(keys=rip.said, on=1) == []
 
         fork = messaging.blindate(rip.said, rip.said, Diger(ser=b"fork").qb64)
-        with pytest.raises(ValidationError, match="conflicting registry event"):
-            rever.processEvent(fork)
+        # Occupancy alone is not proof: this unanchored rival remains pending.
+        assert rever.processEvent(fork) is False
+        assert reger.maes.get(keys=rip.said, on=1) == [(fork.said,)]
+        assert reger.conflicts.get((rip.said, '1')) is None
         assert rever.store.seqEvent(rip.said, 1).said == issued.said
         assert rever.store.headEvent(rip.said).said == revoked.said
 

@@ -697,7 +697,10 @@ def vet(rip, updates=None, *, db, acdc=None, blinder=None, sources=None):
     missing establishes nothing and the whole determination is retryable
     (MissingAnchorError), since concluding from an anchored prefix could
     silently bless an issuer's half-commitment or hide duplicity still in
-    flight.
+    flight. A bundle containing two independently anchored candidates for one
+    ordinal is refused. Durable ingestion instead preserves its first locally
+    authenticated accepted event and separately records a bounded conflict
+    proof; neither policy claims a globally arrival-independent winner.
 
     Returns:
         record (RegStateRecord): the verified registry state
@@ -918,7 +921,11 @@ class _RegEventer:
     It owns the local TEL workflow that ``Registry`` delegates to:
     shared TEL validation, local KEL anchor discovery and verification,
     acceptance into the ordered registry log, and replay of missing-anchor
-    and out-of-order escrows.
+    and out-of-order escrows. Immediate intake keeps the first authenticated
+    accepted candidate. Candidates jointly available in a queue are ordered by
+    earliest verified KEL anchor, then anchor digest and event SAID; this local
+    arbitration never rewrites an occupied slot. Proven rivals produce local
+    conflict evidence, not a general KEL duplicity/reconciliation service.
     """
 
     def __init__(self, hab=None, store=None, regk=None, regd=None, *, db=None, issuer=None):
@@ -981,6 +988,8 @@ class _RegEventer:
 
         Parameters:
             serder (SerderACDC): candidate local registry event to process.
+            sscs (Iterable): optional KEL source couples locating its anchor.
+            ssts (Iterable): optional KEL source triples locating its anchor.
 
         Returns:
             bool: True when the event commits immediately or replays
@@ -989,7 +998,10 @@ class _RegEventer:
 
         Raises:
             ValidationError: if the event fails shared TEL validation or
-                conflicts with accepted local registry state.
+                source-locator validation.
+            DuplicitousRegistryError: a different accepted-slot candidate has
+                an independently verified issuer anchor. The accepted event
+                stays stable and the first proof is durably retained.
         """
         # First apply shared TEL rules plus local store consistency checks.
         event, existing, prior = self._validateEvent(serder)
@@ -1003,6 +1015,8 @@ class _RegEventer:
             self.regd = event.said
 
         # Idempotent replay of an already accepted event is a success.
+        if existing is not None and existing.said != event.said:
+            return self._processConflict(event)
         if existing is not None:
             self.regk = event.regk
             self.regd = self.store.head(event.regk).qb64
@@ -1104,12 +1118,9 @@ class _RegEventer:
         """
         if self.regk is None:
             return
-        # A crash may occur after acceptance but before escrow cleanup.
-        # Occupied ordinals are final, including their discarded siblings.
-        for escrow in (self.store.baser.maes, self.store.baser.ooes):
-            for _, sn, said in list(escrow.getTopItemIter(keys=self.regk)):
-                if self.store.seqSaider(self.regk, sn) is not None:
-                    self.store.clearEscrows(self.regk, sn, said)
+        # An occupied slot is an acceptance guard, never evidence of duplicity.
+        # Recover pending rivals after a crash instead of discarding them.
+        self._processOccupied()
         self._processMissingAnchors()
         self._processQueued()
 
@@ -1234,8 +1245,8 @@ class _RegEventer:
         Raises:
             ValidationError: if the event does not belong to this registry, if
                 the first local event is not a ``rip``, if the issuer is
-                invalid, or if a different event already occupies the accepted
-                ``(regk, sn)`` slot.
+                invalid. A different accepted event is returned for independent
+                anchor authentication, not labeled proven by this boundary.
             MisregistryError, MissequenceError, MisdigestError: if shared TEL
                 validation fails for registry id, sequence number, or prior
                 linkage.
@@ -1259,11 +1270,8 @@ class _RegEventer:
             raise ValidationError(f"registry event {event.said} does not belong "
                                   f"to {self.regk}")
 
-        # Validate that the event's sequence number is not already accepted with a different SAID
+        # Occupancy is a fact, not proof that the competing event is authentic.
         existing = self.store.seqEvent(event.regk, event.sn)
-        if existing is not None and existing.said != event.said:
-            raise ValidationError(f"conflicting registry event at "
-                                  f"{event.regk}:{event.sn}")
 
         prior = None
         if event.ilk != Ilks.rip:
@@ -1276,6 +1284,51 @@ class _RegEventer:
 
         return event, existing, prior
 
+    def _processConflict(self, event):
+        """Authenticate an occupied-slot rival before reporting local conflict.
+
+        Parameters:
+            event (_RegEventRecord): structurally valid event with a different
+                accepted event at its slot and the same accepted predecessor.
+
+        Returns:
+            bool: False while its issuer anchor is unavailable; the exact body
+                remains in missing-anchor escrow and cannot displace the head.
+
+        Raises:
+            DuplicitousRegistryError: the rival independently anchor-verifies;
+                the first competing body and its KEL reference are retained.
+        """
+        if not self._discoverAnchor(event):
+            self.store.putEvent(event.serder)
+            self.store.escrowMissingAnchor(event.regk, event.sn, event.said)
+            return False
+        self.store.baser.recordConflict(event.regk, event.sn, event.serder)
+        self.store.clearEscrows(event.regk, event.sn, event.said)
+        raise DuplicitousRegistryError(
+            f"independently anchored registry conflict at {event.regk}:{event.sn}: {event.said}")
+
+    def _processOccupied(self):
+        """Retry queued rivals without changing any accepted ordinal.
+
+        Returns None. Exact replays are cleared, malformed candidates are
+        dropped, proven conflicts are retained, and unknown anchors stay
+        pending. ValidationError is consumed only after normal authentication
+        has classified the candidate; unexpected storage errors propagate.
+        """
+        pending = {(sn, said) for escrow in (self.store.baser.maes, self.store.baser.ooes)
+                   for _, sn, said in escrow.getTopItemIter(keys=self.regk)
+                   if self.store.seqSaider(self.regk, sn) is not None}
+        for sn, said in sorted(pending):
+            serder = self.store.event(said)
+            if serder is None:
+                self.store.clearEscrows(self.regk, sn, said)
+                continue
+            try:
+                self.processEvent(serder)
+            except ValidationError:
+                self.store.clearEscrows(self.regk, sn, said)
+
     def _commit(self, event):
         """Accept one verified TEL event into the ordered local registry log.
 
@@ -1287,16 +1340,15 @@ class _RegEventer:
             SerderACDC: committed TEL event serder.
         """
 
-        # Persist the winner into the ordered TEL and then clear all escrow
-        # entries for that exact slot because the slot is now decided.
+        # Persist the winner atomically; competing pending evidence still needs
+        # independent authentication even though it cannot change acceptance.
         self.store.accept(event.regk, event.sn, event.serder)
-        for escrowdb in (self.store.baser.maes, self.store.baser.ooes):
-            for (said,) in escrowdb.get(keys=event.regk, on=event.sn):
-                escrowdb.rem(keys=event.regk, on=event.sn, val=said)
+        self.store.clearEscrows(event.regk, event.sn, event.said)
 
         # Update the registry key and digest
         self.regk = event.regk
         self.regd = event.said
+        self._processOccupied()
 
         return event.serder
 
@@ -1328,7 +1380,7 @@ class _RegEventer:
 
     # Escrow replay helpers
     def _anchorWinnerKey(self, said):
-        """Return the deterministic sibling winner key for one staged event.
+        """Return the queue-local sibling arbitration key for a staged event.
 
         Parameters:
             said (str): SAID of the staged TEL event being ordered.
@@ -1366,11 +1418,6 @@ class _RegEventer:
             # of being retried forever.
             event, existing, prior = self._validateEvent(serder)
         except ValidationError:
-            self.store.clearEscrows(self.regk, sn, said)
-            return None
-
-        if existing is not None and existing.said != said:
-            # A different sibling has already claimed the accepted slot.
             self.store.clearEscrows(self.regk, sn, said)
             return None
 
