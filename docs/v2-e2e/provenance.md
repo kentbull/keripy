@@ -35,3 +35,31 @@ Targets: `scripts/v2-e2e/Dockerfile`, `scripts/v2-e2e/check.sh`, and
 documentation/provenance requirement. Reported execution results come from the
 specified commands. Retrospective origin research must cite evidence rather
 than silently attributing local implementation decisions to specification authors.
+
+## R7: exact blinded-opening digest verification
+
+Targets: `acdc.regeventing.vetBlind`; all constants, the `opening` helper, and
+test functions in `tests/acdc/test_blid_digest_profile.py`.
+
+- Inherited implementation: Daniel Hardman's
+  `1a2581ba667054e4486388ec99fc0c46bbc5c3c1`, originally
+  `acdc.registring.vetBlind`; renamed in
+  `11c5c51294bc83eff411701ca03727f37c3081e2`. These are recorded Git authorships.
+- Contract: pinned ACDC
+  [BLID calculation](https://github.com/trustoverip/kswg-acdc-specification/blob/f0bd097de318fbbe2d069a2b46cecd42550762e3/spec/spec-body.md#calculating-the-said-of-the-serialized-blinded-attribute-block)
+  commits to ordered CESR primitive serializations with the digest slot dummied.
+  Supported digest codes must serialize to 44 characters. State and bound-number
+  primitives retain their permitted original encodings.
+- Local correction: Codex implementation and independent Codex review for Kent.
+  The anchored `Diger` chooses the digest algorithm; its canonical encoding and
+  equality with opening `d` are checked. Verification hashes original primitives,
+  replacing only `d`, rather than reconstructing normalized semantic values.
+- Review changed the implementation: the initial algorithm-selection repair
+  still normalized `NumDex.Long` and `StrB64_L1`. Independent counterexamples
+  showed rejection of valid encodings and acceptance of invalid `verify=False`
+  objects. The 12 failing exact-encoding cases pass after exact-byte verification.
+- Tests are locally designed; SHA-256 also uses Python hashlib as an independent
+  oracle. Coverage includes five 256-bit codes, both clans, altered fields,
+  invalid/long/trailing digests, placeholder fields, and public empty nonce.
+  The 59-case profile and 27 existing registry tests pass in the installed Linux
+  wheel. This does not establish R6 conflict policy or complete qualification.

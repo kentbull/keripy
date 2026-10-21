@@ -23,13 +23,14 @@ optional-custody, standalone-Dolly, and operator-workflow gates.
 |---|---|---|
 | Linux-owned test source and installed KERIpy wheel | `V2_TEST_IMAGE=keripy-v2-refactor:runner V2_TEST_VOLUME=keripy-v2-refactor-runner scripts/v2-e2e/check.sh tests/core/test_threshold_distinct_indices.py` | 5 passed |
 | Released-peer runner without host mounts | `V2_MATRIX_IMAGE=keripy-v2-refactor:runner LEGACY_SKIP_BUILD=1 scripts/v2-e2e/legacy-peers/check.sh` | 2 passed, actual 1.2.14/1.3.6 peers |
+| R7 declared digest and exact opening bytes | `V2_TEST_IMAGE=keripy-v2-refactor:blid-exact V2_TEST_VOLUME=keripy-v2-refactor-blid-exact scripts/v2-e2e/check.sh tests/acdc/test_blid_digest_profile.py tests/acdc/test_regeventing.py` | 86 passed; independent review exposed and corrected encoding normalization |
 
 These targeted checks qualify the runner change, not the complete refactor.
 The historic 799-test result is not new evidence for the current changes.
 
 ## Remaining acceptance
 
-R1–R8 repairs, optional custody H1–H8, standalone Dolly/transport D1–D4,
+R1–R6/R8 repairs, optional custody H1–H8, standalone Dolly/transport D1–D4,
 dual-version KLI and six independent Bash scenarios C1–C3, provenance P1,
 human-reviewable commits Q2, and documentation Q3 remain open until their
 concrete evidence is recorded. The provenance inventory is incomplete until
