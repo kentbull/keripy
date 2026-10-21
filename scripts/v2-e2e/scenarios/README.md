@@ -115,3 +115,15 @@ Each retained its two hooks and privacy/refusal assertions. Locksmith rejects a
 withheld path during compaction, earlier than KLI's protocol-verification refusal;
 the test distinguishes those precise outcomes while retaining the no-hook check.
 Final clean common pins and live UI acceptance remain separate qualification gates.
+
+### Actual Locksmith controls
+
+With the Locksmith component image/profile, set `SCENARIO_LOCKSMITH_UI=1`
+to use its test-only Qt launcher for holder/presenter admission, Activity review,
+negotiated responses and inventory navigation. The launcher lives in Locksmith;
+this core harness only selects its executable. Setup, private provisioning and
+direct negative commands remain the ordinary driver. `uiActions` records the
+specific dialogs actually operated, and `uiScreenshots` hashes public rendered
+screens; neither field labels unoperated commands as UI coverage. Each story
+retains its ordinary Dolly hook and exact-view assertions. Default runs continue
+to use the headless application driver, and the original KLI profile is unchanged.

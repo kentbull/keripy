@@ -168,6 +168,10 @@ if __name__ == '__main__':
             value['applicationRoles'] = dict(issuer=(folder / 'issuer-profile.txt').read_text().strip()
                 if (folder / 'issuer-profile.txt').exists() else 'kli', holder='locksmith',
                 presenter='locksmith' if 'presenter' in roles else 'locksmith holder', verifier='dolly')
+        value['uiActions'] = {path.parent.name: [json.loads(line) for line in path.read_text().splitlines()]
+            for path in folder.glob('ui/*/actions.jsonl')}
+        value['uiScreenshots'] = {str(path.relative_to(folder)): hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in folder.glob('ui/*/*.png')}
         value['authorizationProfile'] = (folder / 'authorization.txt').read_text().strip()
         value['actors'] = dict(credentialIssuer=value['roles']['issuer']['aid'],
             credentialRecipient=value['roles']['holder']['aid'], holder=value['roles']['holder']['aid'],

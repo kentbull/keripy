@@ -78,7 +78,11 @@ spawn() {
     if [[ ${WALLET_PROFILE:-kli} == locksmith && ( $label == holder-intake || $label == presenter-intake ) ]]; then
         local role=${label%-intake}
         mkdir -p "$RUN_DIR/private/$role"
-        set -- python -m locksmith.driver run --name "${NAMES[$role]}" --base "$STORE_BASE" \
+        local runtime=(python -m locksmith.driver)
+        if [[ ${SCENARIO_LOCKSMITH_UI:-0} == 1 ]]; then
+            runtime=(python /component/scripts/scenarios/ui_runtime.py)
+        fi
+        set -- "${runtime[@]}" run --name "${NAMES[$role]}" --base "$STORE_BASE" \
             --alias "$role" --socket "$RUN_DIR/private/$role/operator.sock" --port "${PORTS[$role]}"
     fi
     "$@" > "$RUN_DIR/$label.log" 2>&1 &
