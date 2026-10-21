@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 import falcon
 from hio.base import doing
-from hio.core import http, tcp
+from hio.core import http
 
 from keri import Vrsn_2_0, Kinds
 from keri.acdc import ipexing
@@ -23,15 +23,27 @@ from keri.core import Codens, Compactor, Counter, Diger, Number, Parser, SealEve
 from keri.kering import ConfigurationError, MissingChainError, MissingSchemaError
 from keri.peer import exchanging
 from keri.db import openLMDB
-from keri.cli.common import native
+from keri.cli.common import native, cesr_sending
 
 
 class Notices:
+    """Adapt core notification calls when retained evidence drives CLI results.
+
+    This adapter owns no notification database. Receiving a notification is not
+    wallet consent, protocol acceptance, or transport acknowledgement."""
     def add(self, attrs):
+        """Ignore transient attrs; CLI decisions read the verified retained EXNs.
+
+        Return None and create no notification store or acceptance side effect."""
         pass
 
 
 class Peer:
+    """Share core proof processors between command intake and explicit admission.
+
+    The caller owns identity, registry, wallet, and independent section stores.
+    The peer composes verification and escrow processing; it grants no automatic
+    wallet consent and does not weaken the native KRAM requirement."""
     def __init__(self, hby, rgy, wallet, sections, *, graphPolicy=None):
         """Share section evidence and native policy across intake and admission.
 
@@ -57,6 +69,14 @@ class Peer:
                              exc=self.exc, scy=self.scy, version=Vrsn_2_0, local=False)
 
     def ingest(self, raw):
+        """Process complete native frames from raw bytes and report EXN acceptance.
+
+        Copy raw before incremental framing so the caller's bytes are unchanged.
+        Dispatch through the normal KEL, registry, section, and exchange processors;
+        only concrete retained dependency errors remain for escrow retry. Return a
+        list of exchange SAIDs with their current core accepted flags. Incomplete
+        framing raises ConfigurationError; other proof failures propagate. Neither
+        intake nor acceptance records wallet consent or claims delivery."""
         ims = bytearray(raw)
         grants = []
         while ims:
@@ -71,17 +91,29 @@ class Peer:
                     rgy=self.evidence.rever, exc=self.exc, scy=self.scy,
                     tvy=None, vry=None, rvy=None)
             except KEL_DEPENDENCIES + (MissingChainError, MissingSchemaError):
+                # The concrete core processor retained this exact dependency;
+                # unrelated proof or framing failures must still propagate.
                 pass
         self.process()
         return [{'exchange': said, 'accepted': self.exc.complete(said)} for said in grants]
 
     def process(self):
+        """Retry the shared KEL, registry, and exchange dependency escrows.
+
+        Return None; core processors determine which retained evidence can advance.
+        Scheduling this method does not manufacture observer freshness or admission."""
         self.evidence.kvy.processEscrows()
         self.evidence.rever.processEscrows()
         self.exc.processEscrow()
 
 
 def options(parser, *, send=False):
+    """Add shared native IPEX intake, evidence, group, and delivery arguments.
+
+    parser is mutated in place and returns no result. send additionally exposes
+    an explicit HTTP(S)/TCP endpoint. Native selection remains opt-in; observer
+    synchronization, public file handoff, and group proposals are explicit inputs,
+    not switches that disable core verification."""
     native.options(parser)
     parser.add_argument('--input', help='receive signed CESR evidence before this operation')
     parser.add_argument('--observer', help='configured native observer URL')
@@ -95,65 +127,27 @@ def options(parser, *, send=False):
 
 
 class ExchangeDoer(doing.DoDoer):
+    """Own one native IPEX action or a long-lived authenticated intake service.
+
+    Keep protocol acceptance, explicit wallet admission, and direct transport
+    completion distinct. Open only the capabilities required by the selected
+    operation and cancel scheduled child work before their store contexts exit."""
     def __init__(self, args, verb):
+        """Retain parsed args and verb and schedule one cooperative operation.
+
+        No stores or sockets open here. run later owns their lifetime and reports
+        proof, policy, authentication, timeout, and file errors through the CLI."""
         self.args, self.verb = args, verb
         super().__init__(doers=[doing.doify(self.run)])
 
     def request(self, url, body):
-        """Send exact CESR bytes with bounded, cooperatively scheduled transport.
+        """Yield through bounded direct delivery of exact CESR body bytes to url.
 
-        ``url`` selects HTTP(S) intake or a raw TCP host and explicit port;
-        ``body`` is the already authenticated message stream. HTTP returns the
-        response after checking its status. TCP returns only a transport marker
-        after its send buffer drains, never a receiver acceptance assertion.
-        The caller must observe authenticated protocol or application results.
-        All child sockets close on completion, failure, or cancellation.
-        """
-        target = urlsplit(url)
-        if target.scheme == 'tcp':
-            if (not target.hostname or not target.port or target.username or
-                    target.password or target.path not in ('', '/') or
-                    target.query or target.fragment):
-                raise ConfigurationError('TCP intake requires tcp://host:port')
-            client = tcp.clienting.Client(host=target.hostname, port=target.port)
-            owner = tcp.clienting.ClientDoer(client=client)
-            self.extend([owner])
-            try:
-                # Match KERIpy TCPMessenger's tx-buffer completion boundary.
-                # A drained buffer is not evidence of application acceptance.
-                client.tx(body)
-                deadline = self.tyme + self.args.timeout
-                while not client.connected or client.txbs:
-                    if client.cutoff:
-                        raise ConnectionError('native IPEX TCP peer closed before send completed')
-                    if self.tyme >= deadline:
-                        raise TimeoutError('native IPEX TCP send timed out')
-                    yield self.tock
-                return {'transport': 'tcp', 'sent': len(body)}
-            finally:
-                self.remove([owner])
-                client.close()
-        if target.scheme not in ('http', 'https') or not target.hostname:
-            raise ConfigurationError('an HTTP(S) or TCP endpoint is required')
-        client = http.clienting.Client(scheme=target.scheme, hostname=target.hostname,
-            port=target.port or (443 if target.scheme == 'https' else 80))
-        owner = http.clienting.ClientDoer(client=client)
-        self.extend([owner])
-        try:
-            client.request(method='POST', path=target.path or '/', body=body,
-                           headers={'Content-Type': CESR_CONTENT_TYPE})
-            deadline = self.tyme + self.args.timeout
-            while not client.responses and self.tyme < deadline:
-                yield self.tock
-            if not client.responses:
-                raise TimeoutError('native IPEX HTTP request timed out')
-            response = client.responses.popleft()
-            if not 200 <= response['status'] < 300:
-                raise ConfigurationError(f"native IPEX HTTP status {response['status']}")
-            return response
-        finally:
-            self.remove([owner])
-            client.close()
+        Use this command's timeout and child ownership. Return the checked HTTP
+        response or a TCP send-buffer marker; neither is authenticated receiver
+        acceptance. Network, timeout, and invalid-endpoint errors propagate after
+        shared transport cleanup."""
+        return (yield from cesr_sending.send(self, url, body, self.args.timeout))
 
     def run(self, tymth, tock=0.03125, **kwa):
         """Execute one IPEX verb or serve intake with explicit capability owners.
@@ -252,6 +246,8 @@ class ExchangeDoer(doing.DoDoer):
                 if self.verb == 'offer':
                     origin = credential
                 elif held is not None and not args.refresh:
+                    # Reuse only the admitted grant's retained proof and view.
+                    # Fuller cached sections must not enrich this disclosure.
                     if args.bound_event:
                         raise ConfigurationError('--bound-event requires --refresh for a held grant')
                     nodes = exchanging.loadParsedNestedSubstreams(hby, args.from_grant)
@@ -343,15 +339,18 @@ class ExchangeDoer(doing.DoDoer):
                                   admitted=self.verb == 'admit')))
 
     def registryOrigin(self, wallet, rgy, credential, regid, *, retained=()):
-        """Attach specific verified openings without changing credential content.
+        """Return the credential stream with exact verified registry opening evidence.
 
-        ``retained`` supplies previously received Blinders. Explicit --opening
-        files supply CESR Blinders, never derivation salts. Only an explicitly
-        composed ``wallet.custody`` may derive missing openings. The accepted
-        ``rgy`` history selects commitments; common vetBlind/vetBound checks bind
-        each opening before the resulting credential stream is granted.
-        Missing capability/evidence raises ConfigurationError.
-        """
+        wallet supplies inventory and optional custody, rgy the accepted public TEL,
+        credential the unchanged retained disclosure, and regid its issuer registry.
+        retained contains received Blinders; --opening files add event-specific CESR
+        Blinders, never salts. Only composed wallet.custody derives missing openings.
+        Walk from the accepted head through vacuous updates to the disclosed binding;
+        common vetBlind/vetBound checks bind every opening before it is attached.
+        An omitted issuer registry gets the exact binding event reference. Public
+        updates use an explicitly empty foot, with no invented BLID. Return bytes;
+        missing/conflicting capability or evidence raises ConfigurationError, while
+        core opening/bound-proof failures and file errors propagate."""
         retained = list(retained)
         for path in getattr(self.args, 'opening', []):
             raw = Path(path).read_bytes().strip()
@@ -407,7 +406,13 @@ class ExchangeDoer(doing.DoDoer):
                 credential.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
 
     def checkProposal(self, exn, args):
-        """Keep explicit CLI intent tied to the exact body being approved."""
+        """Refuse a group proposal that contradicts the explicit command selection.
+
+        exn is the parsed proposed body and args supplies requested verb, recipient,
+        credential/prior, disclosure plan, message, and timestamp. Return None when
+        those supplied constraints match; raise ConfigurationError on mismatch or
+        on disclosure-generation options that would rewrite the approved body.
+        Threshold authentication and final acceptance remain the group's job."""
         if exn.route != '/ipex/' + self.verb:
             raise ConfigurationError('group proposal has a different IPEX operation')
         if getattr(args, 'recipient', None) and exn.sad['ri'] != args.recipient:
@@ -429,6 +434,11 @@ class ExchangeDoer(doing.DoDoer):
 
     @staticmethod
     def prior(peer, said):
+        """Return a retained prior only after core route-specific revalidation.
+
+        peer supplies its accepted EXNs and configured native handlers; said selects
+        the exact prior. Missing acceptance, unknown routes, or failed semantic proof
+        raise ConfigurationError. This lookup does not imply wallet admission."""
         message = peer.hby.db.exns.get((said,))
         if message is None or not peer.exc.complete(said):
             raise ConfigurationError('prior IPEX message is not accepted')
@@ -439,10 +449,20 @@ class ExchangeDoer(doing.DoDoer):
 
 
 class Intake:
+    """Expose raw CESR intake for a shared native peer without wallet consent."""
     def __init__(self, peer):
+        """Retain the peer whose core processors own this endpoint's evidence.
+
+        No separate parser, identity, or store is created by the HTTP adapter."""
         self.peer = peer
 
     def on_post(self, req, rep):
+        """Dispatch the request's bounded CESR bytes and return intake status 202.
+
+        req and rep are Falcon request/response objects. Require application/cesr
+        or raise HTTPUnsupportedMediaType; framing/proof errors propagate through
+        the framework. The JSON lists core exchange acceptance, not wallet consent
+        or recipient delivery, and this adapter records no admission itself."""
         if (req.content_type or '').split(';')[0] != CESR_CONTENT_TYPE:
             raise falcon.HTTPUnsupportedMediaType()
         rep.media = self.peer.ingest(req.bounded_stream.read())
