@@ -33,6 +33,17 @@ cleanup() {
 k() {
     local role=$1
     shift
+    if [[ ${WALLET_PROFILE:-kli} == locksmith && ( $role == holder || $role == presenter ) ]]; then
+        case "${1:-}:${2:-}" in
+            ipex:*|vc:list|vc:import|vc:registry)
+                printf 'locksmith %q ' "$role" >> "$RUN_DIR/commands.log"
+                printf '%q ' "$@" >> "$RUN_DIR/commands.log"
+                printf '\n' >> "$RUN_DIR/commands.log"
+                python -m locksmith.driver.scenario "$RUN_DIR" "$role" "$@" | tee "$RUN_DIR/latest-$role.jsonl"
+                return "${PIPESTATUS[0]}"
+                ;;
+        esac
+    fi
     if [[ ${WITNESS_PROFILE:-kli} == hk && -f "$RUN_DIR/$role-hosted.json" ]]; then
         case "${1:-}:${2:-}:${3:-}" in
             rotate:*|vc:create:*|vc:revoke:*|vc:registry:incept|vc:registry:advance)
@@ -49,10 +60,27 @@ k() {
     if grep -q '^ERR:' "$RUN_DIR/latest-$role.jsonl"; then return 1; fi
 }
 
+# Both applications refuse material the selected admission does not contain.
+# KLI rejects during protocol verification; Locksmith's Compactor refuses earlier.
+assert_unavailable_disclosure() {
+    local path=$1
+    if [[ $WALLET_PROFILE == locksmith ]]; then
+        grep -q "Invalid disclosure path='a/private/value'" "$path"
+    else
+        grep -q 'locally authored IPEX message is pending verification' "$path"
+    fi
+}
+
 # Start label plus argv as an owned process; capture logs and record its PID.
 spawn() {
     local label=$1
     shift
+    if [[ ${WALLET_PROFILE:-kli} == locksmith && ( $label == holder-intake || $label == presenter-intake ) ]]; then
+        local role=${label%-intake}
+        mkdir -p "$RUN_DIR/private/$role"
+        set -- python -m locksmith.driver run --name "${NAMES[$role]}" --base "$STORE_BASE" \
+            --alias "$role" --socket "$RUN_DIR/private/$role/operator.sock" --port "${PORTS[$role]}"
+    fi
     "$@" > "$RUN_DIR/$label.log" 2>&1 &
     PIDS[$label]=$!
 }
@@ -103,6 +131,9 @@ prepare() {
     trap cleanup EXIT
     WITNESS_PROFILE=${SCENARIO_WITNESS_PROFILE:-kli}
     case "$WITNESS_PROFILE" in kli|hk) ;; *) printf 'Unknown witness profile: %s\n' "$WITNESS_PROFILE" >&2; exit 2;; esac
+    WALLET_PROFILE=${SCENARIO_WALLET_PROFILE:-kli}
+    case "$WALLET_PROFILE" in kli|locksmith) ;; *) printf 'Unknown wallet profile: %s\n' "$WALLET_PROFILE" >&2; exit 2;; esac
+    printf '%s\n' "$WALLET_PROFILE" > "$RUN_DIR/wallet-profile.txt"
     SERVICE_PROFILE=${SCENARIO_SERVICE_PROFILE:-kli}
     case "$SERVICE_PROFILE" in kli|kf) ;; *) printf 'Unknown service profile: %s\n' "$SERVICE_PROFILE" >&2; exit 2;; esac
     printf '%s\n' "$SERVICE_PROFILE" > "$RUN_DIR/service-profile.txt"
@@ -155,7 +186,15 @@ prepare() {
         if [[ $WITNESS_PROFILE == hk && ( $role == issuer || $role == holder || $role == presenter ) ]]; then
             configure_hosted_actor "$role"
         fi
-        k "$role" kel export -a "$role" --output "$RUN_DIR/$role-initial.cesr"
+        if [[ $WALLET_PROFILE == locksmith && ( $role == issuer || $role == holder || $role == presenter || $role == dolly ) ]]; then
+            local url="http://127.0.0.1:${PORTS[$role]}/"
+            if [[ $role == dolly && $TRANSPORT == tcp ]]; then url="tcp://127.0.0.1:${PORTS[dollytcp]}"; fi
+            k "$role" location add -a "$role" --version 2.0 --url "$url"
+            k "$role" ends add -a "$role" --version 2.0 --role controller --eid "${AIDS[$role]}"
+            k "$role" kel export -a "$role" --ends --output "$RUN_DIR/$role-initial.cesr"
+        else
+            k "$role" kel export -a "$role" --output "$RUN_DIR/$role-initial.cesr"
+        fi
     done
     cat "$RUN_DIR/witnesses.cesr" "$RUN_DIR"/*-initial.cesr > "$RUN_DIR/bootstrap-initial.cesr"
     for role in issuer holder dolly presenter; do
@@ -208,6 +247,15 @@ services() {
         --port "${PORTS[observer]}" --no-prompt
     fi
     python "$JSON" ready "${OBSERVER_URL}health" 15
+    if [[ $WALLET_PROFILE == locksmith ]]; then
+        for role in holder presenter; do
+            if [[ -v NAMES[$role] ]]; then
+                spawn "$role-intake" # The explicit Locksmith profile owns this runtime.
+                python "$JSON" tcp-ready 127.0.0.1 "${PORTS[$role]}" 15
+                python -m locksmith.driver.scenario "$RUN_DIR" "$role" setup --observer "$OBSERVER_URL"
+            fi
+        done
+    fi
     poll k holder vc registry query -a holder --endpoint "$OBSERVER_URL" --registry "$REGISTRY" --output "$RUN_DIR/holder-public.cesr"
     python "$JSON" config "$RUN_DIR/dolly-policy.json" "${AIDS[issuer]}" "$SCHEMA" "$OBSERVER_URL" "http://127.0.0.1:${PORTS[hook]}/hook"
     spawn hook python -u "$JSON" hook "${PORTS[hook]}" "$RUN_DIR/hooks.jsonl"
@@ -218,6 +266,7 @@ services() {
     python "$JSON" ready "http://127.0.0.1:${PORTS[dolly]}/health" 15
     for role in issuer holder presenter; do
         if [[ -v NAMES[$role] ]]; then
+            if [[ $WALLET_PROFILE == locksmith && ( $role == holder || $role == presenter ) ]]; then continue; fi
             spawn "$role-intake" kli ipex receive --v2 --name "${NAMES[$role]}" --base "$STORE_BASE" \
                 -a "$role" --port "${PORTS[$role]}"
             # Receiver POST readiness is checked by the bounded TCP connect.

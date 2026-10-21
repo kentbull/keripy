@@ -163,6 +163,10 @@ if __name__ == '__main__':
                 onboarding='incept, register, rotate to quorum two before credential issuance')
         value['versions'] = dict(kli=(folder / 'kli-version.txt').read_text().strip(),
             dolly=(folder / 'dolly-version.txt').read_text().strip())
+        value['walletProfile'] = (folder / 'wallet-profile.txt').read_text().strip()
+        if value['walletProfile'] == 'locksmith':
+            value['applicationRoles'] = dict(issuer='kli', holder='locksmith',
+                presenter='locksmith' if 'presenter' in roles else 'locksmith holder', verifier='dolly')
         value['authorizationProfile'] = (folder / 'authorization.txt').read_text().strip()
         value['actors'] = dict(credentialIssuer=value['roles']['issuer']['aid'],
             credentialRecipient=value['roles']['holder']['aid'], holder=value['roles']['holder']['aid'],

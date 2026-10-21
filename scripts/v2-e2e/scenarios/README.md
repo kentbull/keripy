@@ -91,3 +91,27 @@ storage or provisioning protocol.
 Development S1 passed with actual hosted provisioning/authorization, issuance,
 full-holder graduated presentation and both Dolly hooks. The remaining distinct
 stories and final clean installation remain separate gates.
+
+### Additive Locksmith application profile
+
+`SCENARIO_WALLET_PROFILE=locksmith` runs holder and separate-presenter operations
+through the installed `locksmith.driver` application adapter. One actual
+LocksmithApplication/QtTask owns each actor; public network intake enters its
+mailbox parser and outgoing messages use its durable outbox. The issuer remains
+KLI in this profile. Manifests name these roles explicitly; do not describe this
+as Locksmith issuer end-to-end coverage.
+
+Build the copied-source composition with Locksmith's
+`scripts/scenarios/Dockerfile` and its explicit core/Dolly/KF/hosted-witness build
+contexts. This retains six dedicated story scripts and the ordinary KLI profile.
+Signed controller endpoint introductions replace command-specific delivery
+addresses for Locksmith's normal sender. Query setup loads the pinned scenario
+schema and configures full-evidence observation. Separate-presenter permission
+is explicit local per-credential policy, not inferred from receipt or custody.
+
+All six development-image stories pass with the real upgraded KF services,
+three hosted-witness processes and Dolly. S2 additionally used TCP presentation.
+Each retained its two hooks and privacy/refusal assertions. Locksmith rejects a
+withheld path during compaction, earlier than KLI's protocol-verification refusal;
+the test distinguishes those precise outcomes while retaining the no-hook check.
+Final clean common pins and live UI acceptance remain separate qualification gates.

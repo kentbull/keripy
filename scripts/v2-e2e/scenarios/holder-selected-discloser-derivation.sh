@@ -107,7 +107,7 @@ UNAVAILABLE=$(value "$RUN_DIR/latest-dolly.jsonl" exchange)
 if k presenter ipex grant --v2 -a presenter -r "${AIDS[dolly]}" -s "$CREDENTIAL" --from-grant "$PRESENTED_HELD" --prior "$UNAVAILABLE" --refresh --derive --endpoint "$DOLLY_ENDPOINT" > "$RUN_DIR/unavailable-fuller.jsonl" 2>&1; then
     printf 'Unexpected withheld-field grant from partial admission\n' >&2; exit 1
 fi
-grep -q 'locally authored IPEX message is pending verification' "$RUN_DIR/unavailable-fuller.jsonl"
+assert_unavailable_disclosure "$RUN_DIR/unavailable-fuller.jsonl"
 python "$JSON" assert-hooks "$RUN_DIR/hooks.jsonl" 1 "$CREDENTIAL" "${AIDS[presenter]}"
 
 # Holder independently acquires event 2 before admitting its later disclosure.
