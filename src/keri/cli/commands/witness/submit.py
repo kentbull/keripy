@@ -63,14 +63,17 @@ class SubmitDoer(doing.DoDoer):
 
         hby = setupHby(name=name, base=base, bran=bran)
         self.hbyDoer = HaberyDoer(habery=hby)  # setup doer
-        self.mbx = MailboxDirector(hby=hby, topics=['/receipt', "/replay", "/reply"])
+        self.mbx = (None if endpoint else
+                    MailboxDirector(hby=hby, topics=['/receipt', "/replay", "/reply"]))
         self.alias = alias
         self.hby = hby
         self.force = force
         self.endpoint = endpoint
         self.authenticate = authenticate
 
-        doers = [self.hbyDoer, self.mbx, doing.doify(self.submitDo)]
+        doers = [self.hbyDoer, doing.doify(self.submitDo)]
+        if self.mbx is not None:
+            doers.append(self.mbx)
 
         super(SubmitDoer, self).__init__(doers=doers)
 
@@ -117,7 +120,9 @@ class SubmitDoer(doing.DoDoer):
 
         printIdentifier(self.hby, hab.pre)
 
-        toRemove = [self.hbyDoer, self.mbx]
+        toRemove = [self.hbyDoer]
+        if self.mbx is not None:
+            toRemove.append(self.mbx)
         self.remove(toRemove)
 
         return
