@@ -74,24 +74,54 @@ class NativeGroup(doing.DoDoer):
         super().__init__(doers=doers)
 
     def process(self):
+        """Advance group KEL, quorum, native TEL, and exchange dependency work.
+
+            Returns:
+                None. Only ordinary processors can accept evidence; delivery alone never
+                creates local approval. Unexpected processor/storage errors propagate."""
         self.mux.kvy.processEscrows()
         self.counselor.processEscrows()
         self.rever.processEscrows()
         self.exc.processEscrow()
 
     def escrowDo(self, tymth, tock=0.03125, **kwa):
+        """Schedule bounded group dependency passes for this coordinator's lifetime.
+
+            Args:
+                tymth: HIO scheduler clock supplied to this doer.
+                tock (float): Recurrence interval returned at each cooperative yield.
+                **kwa: Scheduler metadata unused by the escrow loop.
+
+            Yields:
+                float: Delay before the next process pass. Cancellation stops recurrence;
+                    the enclosing coordinator owns its other child doers."""
         yield tock
         while True:
             self.process()
             yield tock
 
     def receive(self, stream):
-        """Accept a member-authenticated proposal; it does not imply approval."""
+        """Process member-authenticated evidence without implicitly approving it.
+
+            Args:
+                stream (bytes): KEL, independent sections, or signed proposal stream.
+
+            Returns:
+                None. Parsing and normal dependency processing retain verified proposals;
+                explicit local approval is still required for wrapped exchange replay."""
         self.parser.parse(ims=bytearray(stream))
         self.process()
 
     def send(self, wrapper, attachments):
-        """Fan out one member proposal using the ordinary KERI transport owner."""
+        """Fan out a signed proposal through each remote member's ordinary transport.
+
+            Args:
+                wrapper (SerderKERI): Member-signed group proposal EXN.
+                attachments (bytes): Exact detached proposal evidence.
+
+            Returns:
+                None. Poster delivery doers join this coordinator and stop with it;
+                transmission is not remote acceptance or local member consent."""
         for member in self.hby.db.signingMembers(pre=self.ghab.pre):
             if member == self.ghab.mhab.pre:
                 continue
@@ -101,7 +131,19 @@ class NativeGroup(doing.DoDoer):
             self.extend(poster.deliver())
 
     def registryProposal(self, stream):
-        """Read an authenticated remote proposal without granting local approval."""
+        """Authenticate one exact registry proposal without signing its anchor.
+
+            Args:
+                stream (bytes): Signed group wrapper with proposed TEL and KEL bodies.
+
+            Returns:
+                tuple: Exact proposed registry event and controlling group anchor.
+
+            Raises:
+                ValidationError: Expected wrapper is absent, unauthenticated, or malformed.
+
+            receive may retain authenticated evidence, but this read path adds no local
+            signature and cannot substitute for approveRegistry."""
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False) or []
         proposals = [dom for dom in parsed if dom.serder.ilk == Ilks.exn
                      and dom.serder.route == '/multisig/registry']
@@ -116,7 +158,18 @@ class NativeGroup(doing.DoDoer):
                      for nest in proposal.nests)
 
     def exchangeProposal(self, stream):
-        """Authenticate an exact native IPEX proposal, including preceding KELs."""
+        """Authenticate one exact IPEX proposal and reconstruct its wrapped bytes.
+
+            Args:
+                stream (bytes): Member wrapper with preceding KEL evidence if needed.
+
+            Returns:
+                bytes: Original child exchange stream, retaining disclosed attachments.
+
+            Raises:
+                ValidationError: Wrapper count, authentication, or child structure fails.
+
+            The returned child remains unapproved locally until approveExchange signs it."""
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False) or []
         proposals = [dom for dom in parsed if dom.serder.ilk == Ilks.exn
                      and dom.serder.route == '/multisig/exn']
@@ -130,7 +183,21 @@ class NativeGroup(doing.DoDoer):
         return serializeParsedSubstream(proposal.nests[0])
 
     def approveRegistry(self, event, anchor=None):
-        """Sign the exact proposed anchor; accepted TEL state still awaits quorum."""
+        """Sign the exact proposed TEL anchor and start ordinary threshold completion.
+
+            Args:
+                event (SerderACDC): Native registry event this member explicitly approves.
+                anchor (SerderKERI | None): Exact proposed group KEL event; None reuses
+                    pending local work or authors a new suitable interaction/rotation.
+
+            Returns:
+                tuple: Member proposal wrapper and detached attachments for fanout.
+
+            Raises:
+                ValidationError: Anchor identity/type/body does not exclusively seal event.
+
+            Local retries reuse partial events rather than fork them. Acceptance still
+            requires Counselor quorum/witness/delegation and normal Rever verification."""
         seal = dict(s=event.sad['n'], d=event.said)
         if anchor is None:
             # A command retry reuses its partial event instead of forking it.
@@ -160,7 +227,19 @@ class NativeGroup(doing.DoDoer):
         return wrapper, attachments
 
     def approveExchange(self, stream):
-        """Add this member's signature to the exact EXN and retain its disclosure."""
+        """Add this member's signature to one exact group EXN and retain its view.
+
+            Args:
+                stream (bytes): One group-authored exchange with exact nested evidence.
+
+            Returns:
+                tuple: Signed member proposal wrapper and its attachments.
+
+            Raises:
+                ValidationError: Input has multiple messages, is not EXN, or uses another AID.
+
+            Parsing merges signatures through normal processors. This explicit consent
+            does not bypass native semantics, missing sections, or group thresholds."""
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False) or []
         if len(parsed) != 1:
             raise ValidationError('native group approval requires exactly one exchange')
@@ -177,4 +256,11 @@ class NativeGroup(doing.DoDoer):
         return wrapper, attachments
 
     def completeExchange(self, said):
+        """Check ordinary Exchanger completion for one group child exchange.
+
+            Args:
+                said (str): Child exchange identifier, not its proposal wrapper SAID.
+
+            Returns:
+                bool: Whether its authenticated threshold and semantic workflow completed."""
         return self.exc.complete(said)

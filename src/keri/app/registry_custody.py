@@ -66,11 +66,15 @@ class RegistryCustody:
         self.hby, self.rgy, self.db = hby, rgy, db
 
     def _manager(self):
-        """Return the authenticated encrypted Keeper Manager.
+        """Require an authenticated encrypted Keeper for a secret-bearing operation.
 
-        Raises:
-            AuthError: Keeper encryption or its authenticated decrypter is absent.
-        """
+            Returns:
+                Manager: Existing Keeper manager with matching encryption/decryption keys.
+
+            Raises:
+                AuthError: Keeper encryption or its authenticated decrypter is absent.
+
+            The check never enables encryption, rotates AEID, or recreates registry salt."""
         mgr = self.hby.mgr
         if not mgr.aeid or mgr.encrypter is None or mgr.decrypter is None:
             raise AuthError('private credential custody requires an authenticated encrypted Keeper')

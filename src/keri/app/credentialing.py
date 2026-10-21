@@ -23,6 +23,11 @@ from .registry_custody import EncryptedCustody
 
 @dataclass
 class IssuedCredential:
+    """Durable issued-history reference plus exact original credential bytes.
+
+        credential/registry/controller/update bind accepted issuance. raw is base64
+        under encoding='base64'; bound retains original issuee KEL coordinates for
+        explicitly supplied bound openings, never a salt or current-standing claim."""
     credential: str
     registry: str
     controller: str
@@ -34,6 +39,10 @@ class IssuedCredential:
 
 @dataclass
 class AdmittedCredential:
+    """Explicit local consent to one exact grant/admit disclosure pair.
+
+        credential and holder identify its origin/recipient; grant and admit retain
+        exchange provenance. admitted is local consent time, not issuer publication."""
     credential: str
     grant: str
     admit: str
@@ -47,6 +56,16 @@ class WalletBaser(dbing.LMDBer):
     AltTailDirPath = '.keri/wallet'
 
     def reopen(self, **kwa):
+        """Open existing inventory indexes and the unchanged optional custody table.
+
+            Args:
+                **kwa: Ordinary LMDBer path/reopen settings.
+
+            Returns:
+                bool: Whether the application environment is open.
+
+            The custody Komer is storage schema only: opening it does not enumerate or
+            decrypt secrets. Consent and its rebuildable credential index share a store."""
         super().reopen(**kwa)
         self.custody = koming.Komer(db=self, subkey='custody.', klas=EncryptedCustody)
         self.issued = koming.Komer(db=self, subkey='issued.', klas=IssuedCredential)
@@ -87,7 +106,19 @@ class Wallet:
             name=hby.name, base=hby.base, temp=hby.temp)
 
     def boundEvent(self, acdc, said):
-        """Resolve an explicitly selected accepted issuee event for bound derivation."""
+        """Resolve a selected accepted, witnessed issuee KEL event for derivation.
+
+            Args:
+                acdc (SerderACDC): Credential defining the issuee whose KEL is referenced.
+                said (str): Exact selected issuee event digest, not today's implicit head.
+
+            Returns:
+                dict: Explicit bound=True, sequence number, and digest for opening creation.
+
+            Raises:
+                ValidationError: Event is missing, unaccepted, or not fully witnessed.
+
+            This public evidence lookup loads no custody and does not derive an opening."""
         issuee = acdc.iseaid
         event = self.hby.db.evts.get((issuee, said)) if issuee else None
         if (event is None or self.hby.db.kels.getLast(keys=issuee, on=event.sn) != said
@@ -154,7 +185,19 @@ class Wallet:
         return record
 
     def issuedCredential(self, credential):
-        """Reconstruct exact issued bytes, including native binary serializations."""
+        """Reconstruct the exact originally issued credential bytes.
+
+            Args:
+                credential (str): Issued credential SAID indexing a durable inventory row.
+
+            Returns:
+                SerderACDC: Original view, including its binary serialization kind.
+
+            Raises:
+                ValidationError: Row/encoding is unsupported or bytes do not match its SAID.
+                ValueError: Corrupt stored base64 cannot be decoded.
+
+            Retrieval is historical and never infers present registry standing."""
         record = self.db.issued.get((credential,))
         if record is None or record.encoding != 'base64':
             raise ValidationError('issued credential with a supported encoding is required')
@@ -165,6 +208,21 @@ class Wallet:
         return acdc
 
     def _accepted(self, said, route):
+        """Require authenticated completed native exchange evidence at an exact route.
+
+            Args:
+                said (str): Retained EXN SAID.
+                route (str): Expected native IPEX route for this consent operation.
+
+            Returns:
+                SerderKERI: Authenticated retained exchange body.
+
+            Raises:
+                ConfigurationError: Wallet lacks its actual matching Exchanger/route.
+                ValidationError: Version, identity, route, completion, or signatures fail.
+
+            This check is insufficient for new admission by itself: _verification must
+            additionally re-run concrete native credential semantics under current policy."""
         if self.exc is None or self.exc.hby is not self.hby or route not in self.exc.routes:
             raise ConfigurationError('the wallet requires its actual IPEX Exchanger')
         exn = self.hby.db.exns.get((said,))
@@ -243,7 +301,21 @@ class Wallet:
         return self.db.admitted.get((grant,))
 
     def heldCredential(self, grant):
-        """Load this admitted disclosure's retained proof without merging later views."""
+        """Read one admitted grant's exact retained proof without merging later views.
+
+            Args:
+                grant (str): Grant SAID with existing explicit local consent.
+
+            Returns:
+                dict: Exact credential, serialized origin proof, other original artifacts,
+                    retained grant, and admit SAID. No cached fuller section is substituted.
+
+            Raises:
+                ValidationError: Consent, authenticated exchange evidence, or origin is absent.
+                ConfigurationError: Matching retained exchange processor is unavailable.
+
+            Current graph policy and private custody are unnecessary for historical proof
+            retrieval; onward acceptance still invokes the receiving semantic verifier."""
         record = self.db.admitted.get((grant,))
         if record is None:
             raise ValidationError('this grant has not been admitted to the wallet')
@@ -260,11 +332,27 @@ class Wallet:
         raise ValidationError('admitted grant origin evidence is missing')
 
     def inventory(self):
-        """Return durable references; never infer consent from received notifications."""
+        """List durable issued/admitted references without private capability access.
+
+            Returns:
+                dict: issued and held record lists. Notifications do not create consent;
+                    returned history makes no current-standing or freshness claim."""
         return {'issued': [record for _, record in self.db.issued.getTopItemIter()],
                 'held': [record for _, record in self.db.admitted.getTopItemIter()]}
 
     def admissions(self, credential):
+        """List distinct grant-specific consents for one credential commitment.
+
+            Args:
+                credential (str): Credential SAID, which may have several disclosure views.
+
+            Returns:
+                list[AdmittedCredential]: Existing consent rows referenced by its index.
+
+            Raises:
+                ValidationError: A credential index points to a missing consent record.
+
+            The index does not combine fuller views or promote notification-only receipt."""
         result = []
         for _, grant in self.db.credentials.getTopItemIter((credential, '')):
             record = self.db.admitted.get((grant,))
@@ -274,4 +362,9 @@ class Wallet:
         return result
 
     def close(self):
+        """Close this wallet's application environment after dependent work stops.
+
+            Returns:
+                None. Habery/Regery remain caller-owned. Optional RegistryCustody shares
+                this store and must not access it after closing; no secret is exported."""
         self.db.close()
