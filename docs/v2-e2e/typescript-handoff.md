@@ -45,10 +45,10 @@ prove global wall-clock publication.
 | `acdc.regbasing`, `acdc.registering` | Atomic accepted ordinal/body/head writes and durable dependency escrows. |
 | `acdc.scheming`, `acdc.ipexing` | Schema identity and one authenticated DAG evaluator; native IPEX semantics. |
 | `peer.exchanging` | Authentication, escrow and retained exact accepted grant view; new fuller disclosure uses a new exchange. |
-| `app.credentialing` | Encrypted private custody, issued inventory, explicit admission references. |
+| `app.credentialing`, `app.registry_custody` | Thin issued/admitted inventory and separately optional encrypted registry derivation custody. |
 | `app.registrar`, `app.observer` | Authorized hosting and independent bulk synchronization; queries read local verified cache. |
 | `app.native_grouping` | Existing group signer, counselor, multiplexor and transport composition with explicit member approval. |
-| `app.dolly`, `app.ipexing` | Version dispatch, current-standing/disclosure policy and actual webhook delivery. |
+| KERIpy `app.ipexing`; standalone Dolly `dolly.serving`, `dolly.projecting` | Shared protocol dispatch stays in KERIpy; reporting policy, exact disclosure projection and webhook delivery belong to Dolly. |
 | `cli.common.native`, `cli.common.native_exchange` | Operator workflows and truthful pending/accepted/transmitted/admitted output. |
 
 Reuse the existing TypeScript equivalents where they already own a responsibility.
@@ -66,9 +66,19 @@ promised. Pending bodies never imply accepted ordinal membership.
 Wallet records use `custody.`, `issued.`, `admitted.` and `credential-grants.`.
 Custody includes the designated controller/discloser and exact derivation
 parameters. The long-lived salt is encrypted under the authenticated Keeper;
-verifiers receive only per-event openings. AEID changes require explicit
-operator rewrap/import. Protected export/import is an operator step, not a new
-network protocol or automatic group-secret distribution mechanism.
+verifiers receive only per-event openings. Ordinary retained-material
+presentation and public registry updates require no custody record. A designated
+discloser may be separate from the holder; naming that role locally creates no
+verifiable authorization or new delegation protocol.
+
+Custody records do not yet participate in automatic Keeper AEID migration.
+An old-AEID record blocks the affected derivation operation while ordinary
+presentation remains usable with an otherwise authenticated identity. Explicit
+re-import encrypts supplied plaintext under the current Keeper; it does not
+decrypt and migrate old ciphertext. The optional R&D export is plaintext with
+mode-0600 filesystem permissions, not an encrypted transfer envelope. This is
+operator provisioning/recovery, not a new IPEX operation or automatic group-secret
+distribution mechanism.
 
 Section evidence uses `msgs.`, `parts.`, `views.`, `required.`, `pending.` and
 `failures.`. A raw-view digest distinguishes disclosures sharing the same ACDC
@@ -100,3 +110,20 @@ null with explicit disclosure metadata; an actual disclosed null is different.
 No hidden values or richer cached view may enter the projection. Delivery keys
 are grant-specific, so a later valid grant can reveal more of the same credential.
 No distributed exactly-once delivery promise is made.
+
+## Operator acceptance boundaries
+
+The six independently runnable Bash scenarios in `scripts/v2-e2e/scenarios/`
+distinguish initially full holder receipt, initially partial receipt, supplied
+state openings, holder derivation custody, and a separate holder-selected
+discloser with supplied openings or scoped custody. Those cases use installed
+KLI commands and real Dolly hooks. They do not replace the hostile protocol,
+group/delegation, revocation, or lifecycle regressions.
+
+Dolly owns the separate `scripts/operator/legacy-v1.sh` workflow: actual v1
+issuance, complete negotiation/admission, both HTTP and TCP reporting, and
+source-observed revocation. Newly generated v1 wire and separately installed
+released peers are distinct qualification gates. Use `scripts/v2-e2e/qualify.sh`
+for the composed gates; consult the qualification records for actual results
+and exact source/artifact pairs rather than treating these instructions as a
+claim that an unrun revision passed.

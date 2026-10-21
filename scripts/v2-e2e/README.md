@@ -34,7 +34,7 @@ runner alternates transports, shares one installed image, and isolates each
 story's identities and databases. Scripts use bounded polling, retain failure
 logs, and assert actual webhook content. Their manifests record public artifacts,
 exact credential/disclosure paths, actors, registry events, and observed results.
-The test passcode and identities are public fixtures. Secret provisioning files
+The generated passcode and identities are disposable test fixtures. Secret provisioning files
 are not public artifacts and must not appear in transcripts or webhooks.
 
 A full-disclosure assertion enumerates the expected leaf paths and values.
@@ -46,7 +46,20 @@ coverage in Dolly's `tests/test_native_e2e.py`. Dolly also owns its application,
 HTTP/TCP process tests, pinned schemas, and separately installed released-peer
 matrix. There is no Dolly application compatibility package in KERIpy.
 
-For the declared core, standalone application, released-peer, and Bash gates:
+Dolly owns a separate v1 operator story. It uses three witnesses/quorum two,
+actual legacy registry issuance and revocation, complete negotiation/admission,
+and HTTP plus raw TCP grants with real hooks. Its issuer evidence service is the
+generic `kli vc registry serve --version 1.0` command. The operator explicitly
+restarts that service after external issuance/revocation to refresh its accepted
+state cache. No KRAM requirement is added to v1.
+
+```sh
+KERI_SOURCE="$PWD" "$DOLLY_SOURCE/scripts/operator/run-legacy-v1.sh"
+```
+
+This current implementation's v1 workflow and the separately installed released
+1.2.14/1.3.6 peer matrix prove different compatibility boundaries. For the declared
+core, standalone application, released-peer, v1 Bash and six v2 Bash gates:
 
 ```sh
 ./scripts/v2-e2e/qualify.sh

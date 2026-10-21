@@ -7,13 +7,15 @@ optional-custody, standalone-Dolly, and operator-workflow gates.
 
 ## Baseline
 
-- Execution date: 2026-10-20 (America/Denver).
+- Execution began 2026-10-20; continued 2026-10-21 (America/Denver).
 - Upstream `WebOfTrust/keripy:main`, checked remotely at execution start:
   `c7e74adc3129ba36302db32e58056560b0927424`.
 - Integration branch `kentbull/keripy:v2-e2e`, clean at execution start:
   `e45f57fbf524ab0a9739baa4786dcbc5e6632ba2`; remote matched.
-- `kentbull/dolly` was empty when inspected and cloned. Dolly application code
-  will move there; no Dolly application compatibility package remains in KERIpy.
+- `kentbull/dolly` was empty when inspected and cloned. Standalone source,
+  schemas, application tests, and released-peer tooling are published on master
+  at `b0fc03699fd1762779ef20a0470e4f78cc2744c7`. KERIpy-side deletion
+  was committed separately in `157c23cb`; no compatibility package remains.
 - Source/state qualification uses copied Linux source and Docker-managed LMDB
   volumes. No host bind mount is required by either test runner.
 
@@ -36,13 +38,55 @@ optional-custody, standalone-Dolly, and operator-workflow gates.
 | Final history-retry correction | `V2_TEST_IMAGE=keripy-v2-refactor:optional-retry V2_TEST_VOLUME=keripy-v2-refactor-optional-retry scripts/v2-e2e/check.sh tests/app/test_native_cli.py` | 7 passed, including exact issuance retry after test custody-row loss |
 | Explicit version selector | `V2_TEST_IMAGE=keripy-v2-refactor:version-alias V2_TEST_VOLUME=keripy-v2-refactor-version-alias scripts/v2-e2e/check.sh tests/app/test_native_cli.py::test_native_option_is_explicit_and_legacy_remains_default` | 1 passed; v1 default, --v2 and --native aliases |
 
-These targeted checks qualify the runner change, not the complete refactor.
+These targeted checks qualify their named units, not the complete refactor.
+Paths in the table are the historical commands at execution time; Dolly tests
+and the released-peer runner now belong to the standalone Dolly repository.
 The historic 799-test result is not new evidence for the current changes.
+
+## Integration checkpoint (2026-10-21)
+
+| Review unit | Actual focused result |
+|---|---|
+| Restart-safe KRAM lookup | Four cold-cache counterexamples fail with the earlier lookup; 60 combined tests passed after read-through correction. |
+| One-shot StreamPoster TCP | 11 focused delivery tests passed; persistent TCPMessenger behavior remains separate. |
+| Shared direct sender and v1 negotiation | 24 protocol/transport/selector tests passed; final HTTP query/refusal plus installed apply/offer/agree/grant run passed 9. |
+| Public evidence/opening commands | 3 installed-CLI tests passed, including actual signed registrar/observer services and foreign admitted-credential derivation. |
+| Whole-block disclosure boundary | 92 IPEX tests passed, including aggregate withholding, opaque scalar ambiguity, and existing schema structural enforcement. |
+| Standalone Dolly | 25 application tests passed; both encrypted and unencrypted installed-console HTTP/TCP/restart cases passed. Two released-peer cases are skipped in the default suite and passed in the separate actual 1.2.14/1.3.6 matrix. |
+| Moved witnessed lifecycle | Dolly integration passed with three witnesses/quorum two, independent services, restart, revocation, and exact retained disclosures. |
+| S1–S4 Bash stories | All four passed in one installed working-source build, with explicit three-leaf full-disclosure assertions. Clean published-artifact rerun remains required. |
+| S6 separate discloser with custody | TCP run passed in the same six-scenario build: both real hooks, explicit holder consent grants, scoped custody, and later-event derivation. |
+| S5 separate discloser with openings | A real stale-known-TEL dependency failure was reproduced and corrected in `7e648d3a`; 336 related profile tests passed. The original Bash counterexample now passes in the same six-scenario build; final clean-artifact rerun remains required. |
+| Credential source-proof genus | `e49973a7` corrects v1 credentials carrying a v2 source-proof footer. A real Parser counterexample fails before the fix; four signing/direct-admission tests pass afterward, including v2 preservation. |
+| Direct v1 admission | `2b800136` adds explicit individual direct admission through existing credential verification. Installed CLI test passes wrong-recipient and missing-schema refusals, dependency arrival, successful admit, and issuer receipt authentication. |
+| Established-version witness | `f42647d1` makes persisted witness protocol select endpoint framing. Real installed v1/v2 HTTP requests both return core-verified receipts; the v1 Bash three-witness bootstrap now passes. |
+| Grant lifecycle after direct transport | `f55d6077` distinguishes HIO selective child removal from full owner exit. Actual HTTP CLI regression passes, including subsequent normal admission. |
+| Noninteractive schema import | `96c54093`: two installed CLI cases preserve encrypted/plain Keeper AEIDs; wrong encrypted-store authentication refuses before importing. |
+| Established-version author commands | `b0d30d05`: actual registry inception, issue and revoke pass for v1 and explicit native v2; all four exported KEL events retain the selected version. |
+| V1 Bash operator story | Development run passed three witnesses/quorum two, genuine issuance, negotiated HTTP/TCP grants, two hooks, local admission, genuine revocation and refusal without a third hook. The explicit v1 replay-genus refinement is covered by `c380866b`; the exact clean published pair remains required. |
+| Generic v1 evidence source | `c380866b`: signed allowlisted queries, fixed replies, hostile framing/field/factor refusals, bounded queue/cue cleanup, cold-reader reopening and exact v1 replay source coordinates. Two socket tests pass; development Dolly reporting separately passed core source-state acceptance. |
+| Integrated core checkpoint | 973 passed, one obsolete mandatory-custody test expectation failed. `486650ad` corrects the public group contract and checks both custody stores stay empty; focused rerun passed. Final integrated run remains required after later CLI work. |
+
+S5 establishes a specific recovery gap: the receiver has accepted registry event
+1, and a signed grant supplies a valid opening for event 2. Semantic verification
+returns permanent failure before the ordinary EXN dependency escrow retains the
+grant, so Dolly cannot acquire the missing observer evidence. The fix retains existing authentication and exact-proof requirements and uses
+normal EXN dependency escrow for an unknown self-verified target opening. Such
+an opening proves no newer ordinal or acceptance; known contradictions remain
+permanent refusals. No KRAM timing rule is added.
 
 ## Remaining acceptance
 
-Optional custody H1–H8, standalone Dolly/transport D1–D4,
-dual-version KLI and six independent Bash scenarios C1–C3, provenance P1,
-human-reviewable commits Q2, and documentation Q3 remain open until their
-concrete evidence is recorded. The provenance inventory is incomplete until
-all prior branch contributions and current edits are reconciled.
+The current implementation is not yet the qualified TypeScript reference.
+Rerun all six independent Bash stories against one clean published installed
+source pair, repeat the dedicated v1 Bash operator workflow, and run integrated
+and clean-published-checkout qualification. Pin the final dependency and record
+artifact hashes, public manifests, and actual transcripts.
+
+Dolly extraction and the operator-link update are committed. Complete final
+provenance reconciliation for all earlier and new contributions. Documentation-only source
+and test batches are checked for executable AST equality; a symbol inventory is
+not a substitute for substantive origin/review coverage. Optional custody,
+standalone application, CLI, provenance, and human documentation gates close only
+when their named evidence is reconciled here. Unknown historical authorship must
+remain explicit, never fabricated.

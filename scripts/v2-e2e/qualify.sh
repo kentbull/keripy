@@ -15,7 +15,10 @@ keri_source=$(CDPATH= cd -- "$here/../.." && pwd)
     tests/app/test_native_cli.py tests/app/test_native_ipex_cli.py tests/app/test_native_groups.py \
     tests/app/test_registry_custody.py tests/app/test_public_evidence_cli.py \
     tests/app/test_native_ipex_transport.py tests/app/test_legacy_negotiation_cli.py \
-    tests/app/test_tcp_stream_delivery.py \
+    tests/app/test_tcp_stream_delivery.py tests/app/test_signing.py \
+    tests/app/test_signing_stream_genus.py tests/app/test_legacy_evidence_cli.py \
+    tests/app/test_witness_protocol_cli.py tests/app/test_schema_import_cli.py \
+    tests/app/test_legacy_author_cli.py \
     tests/app/test_native_group_pruning.py tests/app/test_native_service_pruning.py \
     tests/core/test_kraming.py \
     tests/app/test_forwarding.py tests/app/test_indirecting.py \
@@ -24,4 +27,5 @@ keri_source=$(CDPATH= cd -- "$here/../.." && pwd)
     tests/cli/test_kli_commands.py tests/cli/commands/vc/test_vc_schema_validation.py
 KERI_SOURCE="$keri_source" "$DOLLY_SOURCE/scripts/check.sh"
 "$DOLLY_SOURCE/scripts/legacy-peers/check.sh"
+KERI_SOURCE="$keri_source" "$DOLLY_SOURCE/scripts/operator/run-legacy-v1.sh"
 exec "$here/scenarios/run-all.sh"

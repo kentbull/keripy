@@ -13,11 +13,24 @@ themselves qualify the separate legacy v1 path, revocation/staleness behavior,
 group/delegated authoring, hostile core cryptographic cases, or storage failure.
 Those gates must remain separately named in the integrated qualification ledger.
 
-During construction, S1–S4 and S6 passed their respective real CLI paths.
-S6 also passed the concrete required-leaf full plan and secret-output checks. S5 exposed a
-stale-known-TEL retry defect: a valid newer opening could return false before the
-EXN entered the semantic dependency escrow, preventing Dolly observer refresh.
-The script retains the old-head bootstrap and wrong-recipient rejection that
-exposed it. It must pass with the repaired receiver; relocating that negative
-case does not close the defect. Final qualification results must name completed
-runs after the repair rather than infer success from an alternate setup.
+All six stories passed against one installed working-source build on 2026-10-21,
+with explicit required-leaf full plans and secret-output checks. S5 initially
+exposed a stale-known-TEL retry defect: a valid newer opening could return false
+before the EXN entered the semantic dependency escrow, preventing Dolly observer
+refresh. The original old-head bootstrap and wrong-recipient rejection remain
+in the passing script; the negative case was not relocated to avoid the defect.
+The focused repair is committed in `7e648d3a` and its related profile run passed
+336 tests.
+
+That six-story run was developmental evidence, not final clean qualification:
+its KERIpy manifest named `157c23cbc8eafb4d81384d5a29919421e2d0e5fe` with
+`dirty=true`; Dolly named `89788c5c64feea640b40a9160769fb48c8d8dd54` clean.
+The installed wheel SHA-256 values were:
+
+- KERIpy: `9d57afd576146eec7d5d28de7f7021bbe5b89f5cd8e622780424f206cea59c2b`
+- Dolly: `79ea2727baa31dc5897e24f6f9df90d7d86f3ca52b884affbbcbaa8f11ed3956`
+
+Final acceptance requires another complete run from the exact clean published
+source pair, including the final proof-validation refinements and v1 changes.
+Record that pair and its public manifests/transcripts separately; do not relabel
+the developmental artifact as clean.
