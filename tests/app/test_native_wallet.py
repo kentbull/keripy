@@ -485,6 +485,123 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
             rgy.close()
 
 
+@pytest.mark.parametrize('arrival', ['before', 'after', 'restart'])
+@pytest.mark.parametrize('schemaUse', ['own', 'edge'])
+def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arrival, schemaUse):
+    """Use actual Peer parsing for schema-before/schema-after Grant arrival and retained revalidation without widening the partial view.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+        arrival: Whether the independent schema arrives before or after the Grant.
+        schemaUse: Whether the schema constrains the node itself or a disclosed edge.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    from copy import deepcopy
+    from keri.acdc import messaging
+    from keri.acdc.sectioning import SectionBaser
+    from keri.cli.common.native_exchange import Peer
+    from keri.core import Codens, Counter
+    from keri.db import openLMDB
+
+    key = Signer(transferable=False)
+    name = f'sections-{schemaUse}-{arrival}'
+    sectionOpts = dict(cls=SectionBaser, name=name, temp=False, headDirPath=str(tmp_path))
+    with encrypted(name, tmp_path, key) as hby:
+        issuer, holder = hby.makeHab(name='issuer'), hby.makeHab(name='holder')
+        rgy = regery(hby, tmp_path)
+        wallet = Wallet(hby, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        try:
+            with openLMDB(**sectionOpts) as sections:
+                peer = Peer(hby, rgy, wallet, sections)
+                # This non-default schema exists only in the independent section.
+                section = messaging.sectschema({'$id': '', 'version': '1.0.0',
+                    'title': 'independent own or edge constraint', 'type': 'object'})
+                schema = section.sad['s']['$id']
+                full = acdcmap(israid=issuer.pre, iseaid=holder.pre, uuid=Noncer().qb64,
+                    schema=schema if schemaUse == 'own' else None,
+                    attribute={'d': '', 'u': Noncer().qb64,
+                               'shown': {'d': '', 'value': 'visible'},
+                               'private': {'d': '', 'value': 'later cached'}})
+                compact = Compactor(mad=deepcopy(full.sad['a']), makify=True, kind=Kinds.json)
+                compact.compact(paths=['a/shown/'], root='a')
+                partial = acdcmap(israid=full.israid, iseaid=holder.pre, uuid=full.sad['u'],
+                    schema=full.schema, attribute=compact.partials[('a/shown/',)].mad)
+                assert partial.said == full.said
+                origin, artifacts = partial, []
+                if schemaUse == 'edge':
+                    origin = acdcmap(israid=issuer.pre, iseaid=holder.pre,
+                        attribute={'d': '', 'purpose': 'independent edge schema'},
+                        edge={'d': '', 'member': {'d': '', 'n': partial.said,
+                                                  'o': 'NI2I', 's': schema}})
+                    artifacts = [signed(partial, issuer)]
+                plan = [[origin.schema if isinstance(origin.schema, str) else origin.schema['$id'], '/', []]]
+                if artifacts:
+                    plan.append([partial.schema['$id'], '/e/member/_/', []])
+                gexn, gatc = grant(issuer, holder.pre, 'independent schema',
+                    origin=signed(origin, issuer), artifacts=artifacts, modifiers={'dp': [plan]})
+                def wire(message):
+                    """Frame one standalone section with an empty CESR attachment group."""
+                    return message.raw + Counter(Codens.AttachmentGroup,
+                        count=0, version=Vrsn_2_0).qb64b
+                # Tampered content cannot enter the store under the claimed SAID.
+                tampered = wire(section).replace(b'independent own or edge constraint',
+                                                b'XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX')
+                with pytest.raises((ConfigurationError, ValidationError)):
+                    peer.ingest(tampered)
+                assert sections.messages.get(section.said) is None
+                # A different valid schema cannot satisfy the committed SAID.
+                wrong = messaging.sectschema({'$id': '', 'version': '1.0.0',
+                    'title': 'wrong content', 'type': 'object'})
+                peer.ingest(wire(wrong))
+                assert hby.db.schema.get(schema) is None
+                assert not list(sections.parts.getTopItemIter(('s', schema, '')))
+                if arrival == 'before':
+                    peer.ingest(wire(section))
+                peer.ingest(gexn.raw + gatc)
+                if arrival != 'before':
+                    assert not peer.exc.complete(gexn.said)
+                    assert hby.db.emse.get((gexn.said, schema)) is not None
+                if arrival == 'after':
+                    peer.ingest(wire(section))
+                if arrival != 'restart':
+                    assert peer.exc.complete(gexn.said)
+                    assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
+            # Reopen the section owner and construct the peer again. The delayed
+            # case also reopens the Habery below before receiving its dependency.
+        finally:
+            wallet.close()
+            rgy.close()
+    with encrypted(name, tmp_path, key) as hby:
+        rgy = regery(hby, tmp_path)
+        wallet = Wallet(hby, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        try:
+            with openLMDB(**sectionOpts) as sections:
+                peer = Peer(hby, rgy, wallet, sections)
+                if arrival == 'restart':
+                    assert hby.db.emse.get((gexn.said, schema)) is not None
+                    peer.ingest(wire(section))
+                assert peer.exc.complete(gexn.said)
+                assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
+                aexn, aatc = admit(hby.habByName('holder'), 'retain this exact view', gexn)
+                peer.ingest(aexn.raw + aatc)
+                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
+                before = wallet.heldCredential(gexn.said)
+                # Cache a fuller attribute section. Retained evidence and any
+                # caller projecting that evidence still see only the original.
+                peer.ingest(wire(messaging.sectattr(full.sad['a'])))
+                after = wallet.heldCredential(gexn.said)
+                assert after['proof'] == before['proof']
+                retained = after['credential'] if schemaUse == 'own' else next(
+                    nest.serder for nest in loadParsedNestedSubstreams(hby, gexn.said)
+                    if nest.serder.said == partial.said)
+                assert isinstance(retained.sad['a']['private'], str)
+                assert hby.db.schema.get(schema) is None
+        finally:
+            wallet.close()
+            rgy.close()
+
+
 @pytest.mark.parametrize('operator', ['AVG', 'WAVG'])
 def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, operator):
     """Share explicit AVG/WAVG policy across intake/admission and reopen; unavailable/refusing policy preserves history but cannot freshly admit.
