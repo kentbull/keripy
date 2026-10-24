@@ -18,7 +18,7 @@ from keri.acdc.ipexing import _validDisclosurePath
 from keri.app import openCF, openHby
 from keri.core import (Aggor, Blinder, Codens, Compactor, Counter, Diger, GenDex,
                        Kevery, Kramer, Noncer, Number, Parser, Schemer, SealEvent,
-                       SealSource, messagize, SerderKERI, Serdery, Texter, exchange)
+                       SealSource, messagize, SerderACDC, SerderKERI, Serdery, Texter, exchange)
 from keri.db import reopenDB
 from keri.kering import Colds, MissingSignatureError, sniff
 from keri.help import helping
@@ -1657,7 +1657,10 @@ def test_ipex_v2_builders_reject_registry_events_as_disclosed_nodes():
 
 
 def test_ipex_v2_offer_metadata_dag_binds_grant_nodes():
-    """Offer metadata may expand into the same credential DAG in a Grant."""
+    """Require exact issuer/registry/section promises when metadata Offer expands to the accepted Grant DAG.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with (openHby(name="ipex-v2-offer-metadata-dag-holder",
                   base="test",
                   version=Vrsn_2_0) as holderHby,
@@ -1668,6 +1671,7 @@ def test_ipex_v2_offer_metadata_dag_binds_grant_nodes():
         verifier = verifierHby.makeHab(name="verifier")
 
         # Build the credential DAG promised by the Offer
+        # This disclosure relationship is nondelegative; use explicit NI2I.
         child = acdcmap(israid=holder.pre,
                         uuid=Noncer().qb64,
                         attribute=dict(d="", u=Noncer().qb64, role="member"),
@@ -1675,7 +1679,7 @@ def test_ipex_v2_offer_metadata_dag_binds_grant_nodes():
         origin = acdcmap(israid=holder.pre,
                          uuid=Noncer().qb64,
                          attribute=dict(d="", u=Noncer().qb64, LEI="254900OPPU84GM83MG36"),
-                         edge=_edge("holder", child, op="E1E"),
+                         edge=_edge("holder", child, op="NI2I"),
                          rule=dict(d="", l="Use only for onboarding."),
                          iseaid=verifier.pre)
         schema = origin.sad["s"]["$id"]
@@ -1692,7 +1696,7 @@ def test_ipex_v2_offer_metadata_dag_binds_grant_nodes():
                               schema=origin.sad["s"]["$id"],
                               attribute=Compactor(mad=origin.sad["a"], makify=True,
                                                   kind=origin.kind).said,
-                              edge=_edge("holder", offerChild, op="E1E"),
+                              edge=_edge("holder", offerChild, op="NI2I"),
                               rule=origin.sad["r"])
 
         # Feed the verifier the holder's key state
@@ -2361,7 +2365,10 @@ def test_ipex_v2_rejects_offer_with_unreachable_nested_node():
 
 
 def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
-    """Grant accepts valid edge-group shapes and valid leaf operator/schema semantics."""
+    """Accept supported closed disclosed graph shapes with valid leaf relationships and schema constraints.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-grant-graph-semantics",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -2417,8 +2424,8 @@ def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
                         ["/e/holder/_/"])
 
         # Case 2: the edge schema allows `s` on a nested edge group. IPEX
-        # interprets that as one shared far-node schema pin for the group's
-        # children unless a leaf provides its own `s`.
+        # treats it as an additional inherited constraint; a leaf pin cannot
+        # release the group's constraint.
         groupedSchemaMember = acdcmap(israid=issuer.pre,
                                       attribute=dict(d="", role="member"),
                                       iseaid=issuer.pre)
@@ -2465,11 +2472,10 @@ def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
                         [orMember, orStaff],
                         ["/e/either/member/_/", "/e/either/staff/_/"])
 
-        # Case 4: a leaf edge may omit `o`. The V2 edge shape allows that, and
-        # IPEX does not infer an I2I/NI2I default when the operator is absent.
+        # Case 4: a missing operator defaults to I2I for a targeted far node.
         noOpChild = acdcmap(israid=issuer.pre,
                             attribute=dict(d="", role="member"),
-                            iseaid=subject.pre)
+                            iseaid=issuer.pre)
         noOpOrigin = acdcmap(israid=issuer.pre,
                              attribute=dict(d="", LEI="254900OPPU84GM83MG36"),
                              edge=_edge("holder", noOpChild),
@@ -2479,15 +2485,15 @@ def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
                         [noOpChild],
                         ["/e/holder/_/"])
 
-        # Case 5: SEDI edges may combine non-delegative and same-Issuee
-        # constraints in one conjunctive unary-operator list.
+        # Case 5: the latest conflicting relation wins. I2I would fail here,
+        # but the trailing NI2I explicitly removes that relationship requirement.
         listOpChild = acdcmap(israid=issuer.pre,
                               attribute=dict(d="", role="member"),
                               iseaid=subject.pre)
         listOpOrigin = acdcmap(israid=issuer.pre,
                                attribute=dict(d="", LEI="254900OPPU84GM83MG36"),
                                edge=_edge("holder", listOpChild,
-                                          op=["E1E", "NI2I"]),
+                                          op=["I2I", "NI2I"]),
                                iseaid=subject.pre)
         assert_accepted("Here is the conjunctive-operator DAG",
                         listOpOrigin,
@@ -2496,7 +2502,10 @@ def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
 
 
 def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
-    """Grant rejects malformed graph closure and false leaf edge semantics."""
+    """Reject malformed graph closure, unreachable nests, and false/unsupported leaf semantics.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-bad-grant-graph-semantics",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -2594,7 +2603,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                         wrongI2IOrigin,
                         [wrongI2IChild])
 
-        # E1E requires the near and far nodes to target the same issuee.
+        # E1E is not a published unary operator; this profile rejects it.
         wrongE1EChild = acdcmap(israid=issuer.pre,
                                 attribute=dict(d="", department="kitchen"),
                                 iseaid=issuer.pre)
@@ -2606,8 +2615,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                         wrongE1EOrigin,
                         [wrongE1EChild])
 
-        # Recognized but unevaluated operators are well-formed leaves whose
-        # relation is unsatisfied, instead of malformed graph input.
+        # NOT of an otherwise valid authenticated far-node claim is false.
         notChild = acdcmap(israid=issuer.pre,
                            attribute=dict(d="", role="member"),
                            iseaid=issuer.pre)
@@ -2623,9 +2631,10 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                                          nserder=notOrigin,
                                          inheritedSchema=None) is False
 
+        # This issuer is neither the far issuee nor delegated by that issuee.
         diChild = acdcmap(israid=issuer.pre,
                           attribute=dict(d="", role="member"),
-                          iseaid=issuer.pre)
+                          iseaid=subject.pre)
         diOrigin = acdcmap(israid=issuer.pre,
                            attribute=dict(d="", LEI="254900OPPU84GM83MG36"),
                            edge=_edge("holder", diChild, op="DI2I"),
@@ -2702,155 +2711,111 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                         [badSchemaChild])
 
 
+def _grant_with_false_commitment(hab, credential, correct, false):
+    """Sign malformed received bytes after the honest author builder has finished.
+
+    Args:
+        hab (Hab): Issuer signing the deliberately modified credential disclosure.
+        credential (SerderACDC): Honest credential whose serialized commitment to alter.
+        correct (str): Existing commitment spelling to replace in the received body.
+        false (str): False same-sized commitment inserted without honest recomputation.
+
+    Returns:
+        tuple: Grant/attachment material carrying deliberately inconsistent disclosure,
+        so receiver verification is tested independently of author-side repair."""
+    origin = _signed(credential, hab)
+    grant, attachments = ipexGrant(
+        hab=hab, recp=hab.pre, message="Malformed received section",
+        origin=origin,
+        modifiers=dict(dp=[[[credential.schema["$id"], "/", []]]]),
+    )
+    raw = credential.raw.replace(correct.encode(), false.encode(), 1)
+    malformed = SerderACDC(raw=raw, verify=False)
+    assert malformed.verify() is False
+    wrapped = Texter(raw=credential.raw).qb64b
+    assert wrapped in attachments
+    attachments = attachments.replace(wrapped, Texter(raw=malformed.raw).qb64b, 1)
+    # The nested foot has been enclosed by the exchange builder. Preserve its
+    # counters while replacing the issuer signature over the tampered body.
+    for old, new in zip(hab.sign(ser=credential.raw), hab.sign(ser=malformed.raw)):
+        assert old.qb64b in attachments
+        attachments = attachments.replace(old.qb64b, new.qb64b, 1)
+    return grant, attachments
+
+
 def test_ipex_v2_rejects_false_attribute_section_said():
-    """IPEX rejects an expanded attribute block with a false non-empty SAID."""
-    with openHby(name="ipex-v2-false-attribute-said",
-                 base="test",
+    """Reject authenticated received credential bytes whose expanded attribute commitment is false.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openHby(name="ipex-v2-false-attribute-said", base="test",
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name="test")
         recorder = Recorder()
         exc = Exchanger(hby=hby, handlers=[])
         loadHandlers(hby=hby, exc=exc, notifier=recorder)
-
-        # The ACDC serder accepts this false carried value because it computes
-        # the credential SAID from the canonical attribute commitment instead.
-        falseSaid = Diger(ser=b"not the attribute block").qb64
-        credential = acdcmap(
-            israid=hab.pre,
-            uuid=Noncer().qb64,
-            attribute=dict(d=falseSaid, role="member"),
-            iseaid=hab.pre,
-        )
-        assert credential.verify() is True
-
-        # Prove that the carried attribute SAID is not the value computed from
-        # the expanded attribute block.
-        compactor = Compactor(mad=dict(credential.sad["a"]),
-                              makify=True,
-                              kind=credential.kind)
-        compactor.compact()
-        assert credential.sad["a"]["d"] == falseSaid
-        assert compactor.said != falseSaid
-
-        # Send the malformed credential as a direct Grant.
-        grantExn, grantAtc = ipexGrant(
-            hab=hab,
-            recp=hab.pre,
-            message="Here is the credential",
-            origin=_signed(credential, hab),
-            modifiers=dict(dp=[[[credential.schema["$id"], "/", []]]]),
-        )
-        ims = bytearray(grantExn.raw + grantAtc)
+        credential = acdcmap(israid=hab.pre, uuid=Noncer().qb64,
+                             attribute=dict(d="", role="member"), iseaid=hab.pre)
+        grant, atc = _grant_with_false_commitment(
+            hab, credential, credential.sad["a"]["d"],
+            Diger(ser=b"not the attribute block").qb64)
+        ims = bytearray(grant.raw + atc)
         Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
-        assert ims == bytearray()
-
-        # IPEX rejects the Grant before it can be stored or announced.
-        assert hby.db.exns.get(keys=(grantExn.said,)) is None
-        assert hby.db.epse.get(keys=(grantExn.said,)) is None
+        assert not ims
+        assert hby.db.exns.get((grant.said,)) is None
+        assert hby.db.epse.get((grant.said,)) is None
         assert recorder.items == []
 
 
 def test_ipex_v2_rejects_false_nested_attribute_said():
-    """IPEX checks SAIDs inside an expanded attribute block recursively."""
-    with openHby(name="ipex-v2-false-nested-attribute-said",
-                 base="test",
+    """Reject a false nested commitment even when the surrounding section was recomputed honestly.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openHby(name="ipex-v2-false-nested-attribute-said", base="test",
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name="test")
         recorder = Recorder()
         exc = Exchanger(hby=hby, handlers=[])
         loadHandlers(hby=hby, exc=exc, notifier=recorder)
-
-        # Keep the outer attribute SAID correct while falsifying a nested SAID.
-        falseSaid = Diger(ser=b"not the nested attribute block").qb64
-        attribute = dict(d="",
-                         i=hab.pre,
-                         profile=dict(d=falseSaid, role="member"))
-        compactor = Compactor(mad=attribute, makify=True, kind=Kinds.json)
-        compactor.compact()
-        attribute["d"] = compactor.said
-        credential = acdcmap(israid=hab.pre,
-                             uuid=Noncer().qb64,
-                             attribute=attribute,
+        credential = acdcmap(israid=hab.pre, uuid=Noncer().qb64,
+                             attribute=dict(d="", i=hab.pre,
+                                            profile=dict(d="", role="member")),
                              iseaid=hab.pre)
-
-        # Ordinary ACDC verification sees the correct outer commitment.
-        assert credential.verify() is True
-        assert credential.sad["a"]["d"] == compactor.said
-        assert credential.sad["a"]["profile"]["d"] == falseSaid
-        assert compactor.leaves[".profile"].said != falseSaid
-
-        # IPEX also checks the nested commitment and rejects the Grant.
-        grantExn, grantAtc = ipexGrant(
-            hab=hab,
-            recp=hab.pre,
-            message="Here is the credential",
-            origin=_signed(credential, hab),
-            modifiers=dict(dp=[[[credential.schema["$id"], "/", []]]]),
-        )
-        ims = bytearray(grantExn.raw + grantAtc)
+        grant, atc = _grant_with_false_commitment(
+            hab, credential, credential.sad["a"]["profile"]["d"],
+            Diger(ser=b"not the nested attribute block").qb64)
+        ims = bytearray(grant.raw + atc)
         Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
-        assert ims == bytearray()
-
-        assert hby.db.exns.get(keys=(grantExn.said,)) is None
-        assert hby.db.epse.get(keys=(grantExn.said,)) is None
+        assert not ims
+        assert hby.db.exns.get((grant.said,)) is None
+        assert hby.db.epse.get((grant.said,)) is None
         assert recorder.items == []
 
 
 def test_ipex_v2_rejects_false_aggregate_commitments():
-    """IPEX checks an expanded aggregate's AGID and element SAIDs."""
-    with openHby(name="ipex-v2-false-aggregate-commitments",
-                 base="test",
+    """Require both aggregate root and disclosed member commitments to verify in the received stream.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openHby(name="ipex-v2-false-aggregate-commitments", base="test",
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name="test")
         recorder = Recorder()
         exc = Exchanger(hby=hby, handlers=[])
         loadHandlers(hby=hby, exc=exc, notifier=recorder)
-
-        # First build an aggregate with a correct element and a false AGID.
-        rootElement = dict(d="", u=Noncer().qb64, i=hab.pre, role="member")
-        rootAggor = Aggor(ael=["", rootElement], makify=True, kind=Kinds.json)
-        falseAgid = Diger(ser=b"not the aggregate block").qb64
-        badRoot = acdcagg(israid=hab.pre,
-                          uuid=Noncer().qb64,
-                          aggregate=[falseAgid, rootAggor.ael[1]])
-        assert badRoot.verify() is True
-        assert badRoot.sad["A"][0] == falseAgid
-        assert rootAggor.agid != falseAgid
-
-        # Then keep the AGID correct while falsifying one aggregate element.
-        falseElementSaid = Diger(ser=b"not the aggregate element").qb64
-        falseElement = dict(d=falseElementSaid,
-                            u=Noncer().qb64,
-                            i=hab.pre,
-                            role="administrator")
-        elementAggor = Aggor(ael=["", falseElement],
-                             makify=True,
-                             kind=Kinds.json)
-        badElement = acdcagg(israid=hab.pre,
-                             uuid=Noncer().qb64,
-                             aggregate=[elementAggor.agid, falseElement])
-        assert badElement.verify() is True
-        assert badElement.sad["A"][0] == elementAggor.agid
-        assert badElement.sad["A"][1]["d"] == falseElementSaid
-        assert elementAggor.ael[1]["d"] != falseElementSaid
-
-        # Both malformed credentials are rejected as direct Grants.
-        for message, credential in (("Here is a false aggregate root", badRoot),
-                                    ("Here is a false aggregate element", badElement)):
-            grantExn, grantAtc = ipexGrant(
-                hab=hab,
-                recp=hab.pre,
-                message=message,
-                origin=_signed(credential, hab),
-                modifiers=dict(dp=[[[credential.schema["$id"], "/", []]]]),
-            )
-            ims = bytearray(grantExn.raw + grantAtc)
+        credential = acdcagg(israid=hab.pre, uuid=Noncer().qb64,
+                             aggregate=["", dict(d="", u=Noncer().qb64,
+                                                 i=hab.pre, role="member")])
+        for correct, false in (
+                (credential.sad["A"][0], Diger(ser=b"not aggregate root").qb64),
+                (credential.sad["A"][1]["d"], Diger(ser=b"not aggregate member").qb64)):
+            grant, atc = _grant_with_false_commitment(hab, credential, correct, false)
+            ims = bytearray(grant.raw + atc)
             Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
-            assert ims == bytearray()
-
-            assert hby.db.exns.get(keys=(grantExn.said,)) is None
-            assert hby.db.epse.get(keys=(grantExn.said,)) is None
-
+            assert not ims
+            assert hby.db.exns.get((grant.said,)) is None
+            assert hby.db.epse.get((grant.said,)) is None
         assert recorder.items == []
 
 
@@ -7777,7 +7742,10 @@ def test_ipex_v2_successive_blind_registry_updates_roundtrip():
 
 
 def test_ipex_v2_finds_attribute_and_aggregate_presentation_registries():
-    """Presentation requirements may be declared in either ACDC section form."""
+    """Find presentation requirements in disclosed attribute/aggregate blocks without treating hidden declarations as absent.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-presentation-declarations",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -7805,12 +7773,12 @@ def test_ipex_v2_finds_attribute_and_aggregate_presentation_registries():
                      A=[Diger(ser=b"aggregate").qb64,
                         Diger(ser=b"aggregate element").qb64]))
 
-        # Expanded presentation forms resolve the same requirement, while the
-        # explicit hidden issuer-registry form is rejected as unsupported.
+        # Expanded presentation forms resolve the same requirement. A hidden
+        # issuer registry is verified separately and is not a presentation rd.
         expected = [(issuee.pre, presentationReg)]
         assert IpexHandler._presentationRegistries(attribute) == expected
         assert IpexHandler._presentationRegistries(aggregate) == expected
-        assert IpexHandler._presentationRegistries(hiddenIssuer) is None
+        assert IpexHandler._presentationRegistries(hiddenIssuer) == []
         assert IpexHandler._presentationRegistries(compactAttribute) is None
         assert IpexHandler._presentationRegistries(compactAggregate) is None
         assert IpexHandler._presentationRegistries(partialAggregate) is None
@@ -8107,7 +8075,10 @@ def test_ipex_v2_rejects_substituted_presentation_registry():
 
 
 def test_ipex_v2_verifies_presentation_registries_for_different_issuees():
-    """Every declared node-local presentation registry must bind the grant."""
+    """Require every disclosed node-local Issuee registry to bind the same actual Grant.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-multiple-presentation-registries",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -8156,7 +8127,7 @@ def test_ipex_v2_verifies_presentation_registries_for_different_issuees():
                 attribute=dict(d="",
                                rd=originPresentationRegistry.regk,
                                entitlement="origin"),
-                edge=_edge("child", child),
+                edge=_edge("child", child, op="NI2I"),
                 iseaid=originIssuee.pre,
             )
 

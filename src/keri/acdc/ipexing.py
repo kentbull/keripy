@@ -901,7 +901,8 @@ class IpexHandler:
         if serder.ked.get("x", "") != pserder.ked.get("x", ""):
             return None
 
-        if self.response(pserder) is not None:
+        response = self.response(pserder)
+        if response is not None and response.said != serder.said:
             return None
 
         return pserder
@@ -941,13 +942,30 @@ class IpexHandler:
         return None
 
     def _verifyDisclosurePlan(self, plan, origin, nodes, order):
-        """Verify a disclosed Grant DAG against its negotiated disclose paths.
+        """Check exact disclosed nodes against the negotiated local path contract.
 
-        Each plan entry must select the corresponding node in breadth-first
-        graph order and match that node's schema. An empty field list ([]) permits
-        any valid compaction level, a sole empty-string path ([""]) requires the whole
-        ACDC, and other paths require their canonical ``Compactor`` disclosure
-        closure.
+        Args:
+            plan (list): Ordered (schema SAID, graph prefix, field-path list)
+                entries, one per node in the disclosed breadth-first traversal.
+            origin (str): Root credential SAID from the Grant.
+            nodes (dict): Exact received parsed node views indexed by SAID.
+            order (list[str]): Reachable node order already checked by _walkGraph.
+
+        Returns:
+            bool: Whether every selected node/schema and requested disclosure
+                closure matches, without resolving or expanding received views.
+
+        Empty fields require node presence at any valid compaction level. A sole
+        empty-string path requires expanded a/e/r section containers and visible
+        aggregate members. This is a provisional local whole-block contract, not
+        proof of universal recursive completeness: an unconstrained string may
+        be either ordinary data or a compacted nested block's SAID. Compactor
+        cannot recover that distinction from received bytes. Explicit leaf paths
+        or a schema requiring the relevant block structure provide stronger
+        guarantees; ordinary node-schema validation runs separately afterward.
+
+        Other paths require their canonical Compactor disclosure closure. Cached
+        fuller sections never satisfy an omitted path or enlarge these bytes.
         """
         selected = []
         for schema, prefix, fields in plan:
@@ -991,15 +1009,21 @@ class IpexHandler:
             if nodeSchema != schema:
                 return False
 
-            # The empty path selects the whole ACDC. Every present compactable
-            # section must therefore be carried instead of its bare SAID/AGID.
+            # Require expanded section containers under the local empty-path
+            # contract. A digest-valued arbitrary attribute remains ambiguous;
+            # its encoding alone cannot distinguish data from a hidden block.
             if fields == [""]:
                 for label in ("a", "e", "r"):
                     section = nserder.sad.get(label)
                     if section and not isinstance(section, Mapping):
                         return False
                 aggregate = nserder.sad.get("A")
-                if aggregate and not isinstance(aggregate, list):
+                if aggregate and (not isinstance(aggregate, list)
+                        or any(not isinstance(member, Mapping)
+                               for member in aggregate[1:])):
+                    # Aggregate positions are structurally blocks, unlike an
+                    # arbitrary attribute scalar. A bare member digest is known
+                    # selective withholding and cannot fulfill this request.
                     return False
                 continue
 
@@ -1310,6 +1334,7 @@ class IpexHandler:
                     raise MissingChainError(f"DI2I requires delegation authorization for {issuer}")
             issuer = delegator
         return False
+
     def _evaluateGraphNode(self, said, *, nodes, memo, active, averages):
         """Evaluate authenticated node validity once, retaining unknown as None.
 
@@ -1364,6 +1389,7 @@ class IpexHandler:
             return memo[said]
         finally:
             active.remove(said)
+
     @staticmethod
     def _edgeIssuee(serder):
         """Distinguish known untargeted from an undisclosed issuee section.
@@ -1383,6 +1409,7 @@ class IpexHandler:
                 return False, None
             block = aggregate[1]
         return (True, block.get("i")) if isinstance(block, Mapping) else (False, None)
+
     def _graphRegistry(self, serder, nest):
         """Resolve a disclosed registry declaration or explicit one-way source.
 
@@ -1404,6 +1431,7 @@ class IpexHandler:
         references = {prefixer.qb64 for prefixer, _, _ in parsed.get('ssts', [])
                       if prefixer.qb64 != serder.israid and prefixer.qb64 not in self.hby.kevers}
         return next(iter(references)) if len(references) == 1 else None
+
     def _boundEdgeValidity(self, near, far, *, nodes):
         """Evaluate supplied bound authority using authenticated local histories.
 
@@ -1503,6 +1531,7 @@ class IpexHandler:
             raise
         except (ValidationError, ValueError, TypeError):
             return None
+
     def _evaluateLeafEdge(self, group, *, nodes, nserder, inheritedSchema=None,
                           memo=None, active=None, averages=None):
         """Apply relation, all schema constraints, and optionally NOT of far truth.
@@ -1618,6 +1647,7 @@ class IpexHandler:
             return isfinite(value)
         except OverflowError:
             return False
+
     def _evaluateGroupEdge(self, group, *, nodes, nserder, nested,
                            inheritedSchema=None, memo=None, active=None, averages=None):
         """Reduce all members; uncertainty cannot be laundered by OR/NAND/NOR.
@@ -2352,7 +2382,18 @@ class IpexHandler:
         signatures from the same AID.
         Grants drop unresolved optional evidence after Exchanger requests the
         missing KEL. Other verbs reject foreign, invalid, or unresolved evidence.
-        """
+
+        Args:
+            serder (Serder): Sender-authenticated exchange under this handler's route.
+            tsgs (Iterable | None): Verified non-sender transferable signature groups.
+            cigars (Iterable | None): Verified non-sender nontransferable signatures.
+            sourceSeals (Iterable | None): Verified non-sender KEL source triples.
+            invalid (bool): Whether cryptographic attachment validation found bad evidence.
+            missing (Iterable | None): Attachment dependencies not yet resolved by KRAM.
+
+        Returns:
+            tuple | None: Accepted (tsgs, cigars, sourceSeals), or None for inadmissible
+            supplemental evidence. This filters evidence; it does not validate a Grant DAG."""
         # Normalize optional evidence collections for filtering.
         tsgs = tsgs if tsgs is not None else []
         cigars = cigars if cigars is not None else []
@@ -2370,7 +2411,8 @@ class IpexHandler:
             freshTsgs = []
             for prefixer, number, diger, sigers in tsgs:
                 # Resolve the endorser's current verified state.
-                kever = self.hby.db.kevers.get(prefixer.qb64)
+                kever = (self.hby.kevers[prefixer.qb64]
+                         if prefixer.qb64 in self.hby.kevers else None)
                 # Require exact current establishment coordinates.
                 if (kever is not None
                         and number.sn == kever.lastEst.s
@@ -2399,6 +2441,42 @@ class IpexHandler:
 
         # Accept an evidence-free non-Grant message.
         return [], [], []
+
+    def verifyAccepted(self, said):
+        """Revalidate retained IPEX semantics without logging or notifications.
+
+        An EXN body in Baser proves neither route registration nor credential
+        acceptance: generic Exchangers may retain authenticated unknown routes.
+        Reuse the same proof and transition checks, allowing only an identical
+        already recorded response. This is a current-evidence check, not an
+        assertion about a past application's policy decision.
+
+        Args:
+            said (str): SAID of the retained native exchange to revalidate.
+
+        Returns:
+            bool: Whether retained sender authentication, exact nests, and current
+            configured route semantics all verify. Unknown/wrong-route bodies return False.
+
+        Raises:
+            KeriError: Retained authentication or dependent evidence is missing/invalid,
+            including MissingChainError and MissingSchemaError for retryable dependencies."""
+        from ..peer.exchanging import verify
+        serder = self.hby.db.exns.get((said,))
+        if serder is None or serder.route != self.resource or serder.pvrsn.major != 2:
+            return False
+        tsgs, cigars = verify(self.hby, serder)
+        seals = [(Prefixer(qb64=keys[1]), number, diger)
+                 for keys, (number, diger) in self.hby.db.ests.getTopItemIter((said, ''))]
+        evidence = self.verifyEvidence(serder,
+            tsgs=[item for item in tsgs if item[0].qb64 != serder.pre],
+            cigars=[item for item in cigars if item.verfer.qb64 != serder.pre],
+            sourceSeals=[item for item in seals if item[0].qb64 != serder.pre])
+        if evidence is None:
+            return False
+        return self.verify(serder, nests=loadParsedNestedSubstreams(self.hby, said),
+            sscs=[(number, diger) for prefixer, number, diger in seals
+                  if prefixer.qb64 == serder.pre], evidence=evidence)
 
     def response(self, serder):
         """Look up the recorded response to a prior IPEX exchange.
@@ -2438,6 +2516,7 @@ class IpexHandler:
             m=attrs["m"],
         ))
 
+
 @dataclass(frozen=True)
 class NativeVerification:
     """Concrete native semantic context shared by intake and fresh admission.
@@ -2468,6 +2547,23 @@ class NativeVerification:
         """
         return IpexHandler(resource, self.hby, notifier, rgy=self.rgy,
                            verification=self)
+
+    def verifyAccepted(self, said, route):
+        """Re-run authenticated retained semantics under this exact context.
+
+        Args:
+            said (str): Retained exchange identifier.
+            route (str): Expected native IPEX route.
+
+        Returns:
+            bool: Whether authenticated evidence satisfies current semantics.
+
+        Raises:
+            MissingSchemaError: A required independently supplied schema is absent.
+            KeriError: Retained authentication or dependent evidence is invalid.
+        """
+        return self.handler(route).verifyAccepted(said)
+
 
 def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gvrsn=None, *, ax=None):
     """Create a signed V2 IPEX ``apply`` exchange.
@@ -3003,22 +3099,23 @@ def spurn(hab, message, spurned, recp=None, dt=None, kind=None, gvrsn=None):
     return serder, atc
 
 
-def loadHandlers(hby, exc, notifier, rgy=None):
-    """Register handlers for the six V2 IPEX verb routes.
+def loadHandlers(hby, exc, notifier, rgy=None, *, graphPolicy=None, sections=None):
+    """Register native IPEX routes with one explicit semantic context.
 
-    Parameters:
-        hby (Habery): Habitat environment and backing database.
-        exc (Exchanger): Exchange router to register handlers on.
-        notifier: Notifier-like object passed through to each handler.
-        rgy (Regery | None): Optional local registry manager reused by every
-            IPEX handler for verifier-side registry proof checks.
+    Schema lookup uses the same section store as the application's parser.
+
+    Args:
+        hby (Habery): Owner of KEL and EXN evidence.
+        exc (Exchanger): Router receiving the six native IPEX handlers.
+        notifier: Receiver of accepted-message notifications.
+        rgy (Regery | None): Issuer registry evidence owner.
+        graphPolicy: Explicit local graph policy, or None for default semantics.
+        sections (SectionBaser | None): Independent schema store used by parsing.
 
     Returns:
-        None
+        NativeVerification: Shared semantic context for explicit wallet injection.
     """
-    exc.addHandler(IpexHandler(resource="/ipex/apply", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/offer", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/agree", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/grant", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/admit", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/spurn", hby=hby, notifier=notifier, rgy=rgy))
+    verification = NativeVerification(hby, rgy, graphPolicy=graphPolicy, sections=sections)
+    for verb in Ipex:
+        exc.addHandler(verification.handler(f"/ipex/{verb}", notifier))
+    return verification

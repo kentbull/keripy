@@ -459,3 +459,37 @@ def signed(serder, hab):
     return messagize(serder, tsgs=[(hab.kever.prefixer,
         Number(sn=hab.kever.lastEst.s), Diger(qb64=hab.kever.lastEst.d),
         hab.sign(ser=serder.raw))], gvrsn=Vrsn_2_0, framed=False)
+
+
+def test_production_grant_uses_shared_graph_policy_and_rejects_bad_proof(graph):
+    """Exercise signed Grant intake with the configured graph policy and independently invalid issuer proof.
+
+    Parameters:
+        graph: Temporary real habitats/handler fixture defined above.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    hby, issuer, other, _ = graph
+    with openHby(name='graph-grant-receiver', version=Vrsn_2_0) as receiver:
+        holder = receiver.makeHab(name='holder')
+        kvy = Kevery(db=receiver.db, lax=False, local=False)
+        exc = Exchanger(hby=receiver, handlers=[])
+        policy = DeclaredScorePolicy()
+        loadHandlers(receiver, exc, Notices(), graphPolicy=policy)
+        parser = Parser(kvy=kvy, exc=exc, version=Vrsn_2_0)
+        parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0)))
+        far = credential(issuer.pre, eligible=False)
+        near = credential(issuer.pre, issuee=holder.pre,
+            edge=dict(d='', proof=dict(n=far.said, o='NOT')))
+        plan = dict(dp=[[[near.sad['s']['$id'], '/', []],
+                         [far.sad['s']['$id'], '/e/proof/_/', []]]])
+        exn, atc = grant(issuer, holder.pre, 'negative authenticated predicate',
+            origin=signed(near, issuer), artifacts=[signed(far, issuer)], modifiers=plan)
+        parser.parse(ims=bytearray(exn.raw + atc))
+        assert exc.complete(exn.said)
+        # Invalid issuer authentication is not a false claim that NOT can bless.
+        bad, batc = grant(issuer, holder.pre, 'invalid proof is not false',
+            origin=signed(near, issuer), artifacts=[signed(far, other)], modifiers=plan)
+        parser.parse(ims=bytearray(other.replay(gvrsn=Vrsn_2_0)))
+        parser.parse(ims=bytearray(bad.raw + batc))
+        assert not exc.complete(bad.said)
