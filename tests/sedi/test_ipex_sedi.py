@@ -74,6 +74,99 @@ _SEDI_SCHEMAS = (
     (ResidenceSchemaSaid, ResidenceSchema),
 )
 
+_ACDC_FIELDS = ["v", "t", "d", "u", "i", "rd", "s"]
+_RULE_FIELDS = ["r/d", "r/l"]
+_UNIT_FIELDS = _ACDC_FIELDS + [
+    "a/d",
+    "a/u",
+    "a/i",
+    "a/issuedDate",
+    "a/unit",
+] + _RULE_FIELDS
+_AGENT_FIELDS = _ACDC_FIELDS + [
+    "a/d",
+    "a/u",
+    "a/i",
+    "a/issuedDate",
+    "a/role",
+    "a/name/d",
+    "a/name/u",
+    "a/name/value",
+    "e/d",
+    "e/u",
+    "e/orgUnit/d",
+    "e/orgUnit/u",
+    "e/orgUnit/n",
+    "e/orgUnit/s",
+    "e/orgUnit/o",
+] + _RULE_FIELDS
+_CORE_FIELDS = _ACDC_FIELDS + [
+    "a/d",
+    "a/u",
+    "a/i",
+    "a/rd",
+    "a/primary",
+    *[
+        f"a/{field}/{leaf}"
+        for field in (
+            "givenName",
+            "middleName",
+            "familyName",
+            "nameSuffix",
+            "birthDate",
+            "facialImageProof",
+            "legalPresenceStatus",
+            "issuedDate",
+            "expirationDate",
+        )
+        for leaf in ("d", "u", "value")
+    ],
+    "e/d",
+    "e/u",
+    "e/utahAgent/d",
+    "e/utahAgent/u",
+    "e/utahAgent/n",
+    "e/utahAgent/s",
+    "e/utahAgent/o",
+] + _RULE_FIELDS
+_CORE_AUTHORITY_FIELDS = [
+    "a/i",
+    "a/rd",
+    "e/utahAgent/n",
+    "e/utahAgent/s",
+    "e/utahAgent/o",
+    "r/l",
+]
+_RESIDENCE_FIELDS = _ACDC_FIELDS + [
+    "a/d",
+    "a/u",
+    "a/i",
+    "a/rd",
+    *[
+        f"a/{field}/{leaf}"
+        for field in (
+            "street",
+            "city",
+            "county",
+            "state",
+            "postcode",
+            "country",
+            "issuedDate",
+        )
+        for leaf in ("d", "u", "value")
+    ],
+    "e/d",
+    "e/u",
+    "e/coreIdentity/d",
+    "e/coreIdentity/u",
+    "e/coreIdentity/n",
+    "e/coreIdentity/s",
+    "e/coreIdentity/o",
+] + _RULE_FIELDS
+_RESIDENCE_FIELDS_WITHOUT_PRESENTATION = [
+    field for field in _RESIDENCE_FIELDS if field != "a/rd"
+]
+
 
 class Recorder:
     """Collect accepted IPEX notices for workflow assertions."""
@@ -1068,15 +1161,11 @@ def test_core_sedi_offer_to_admit_flow_with_interleaved_kel_events():
                     hab=verifier,
                     recp=holder.pre,
                     message="Please present Core SEDI",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [CoreSchemaSaid, "/", [""]],
-                                [AgentSchemaSaid, "/e/utahAgent/_/", [""]],
-                                [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", [""]],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [CoreSchemaSaid, "/", _CORE_FIELDS],
+                        [AgentSchemaSaid, "/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
 
@@ -1395,15 +1484,11 @@ def test_core_sedi_rejects_missing_authority_chain():
                     hab=verifier,
                     recp=holder.pre,
                     message="Request Core SEDI",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [CoreSchemaSaid, "/", [""]],
-                                [AgentSchemaSaid, "/e/utahAgent/_/", [""]],
-                                [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", [""]],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [CoreSchemaSaid, "/", _CORE_FIELDS],
+                        [AgentSchemaSaid, "/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
                 _exchange(apply, applyAtc, verifierKvy, holderKvy)
@@ -1535,11 +1620,11 @@ def test_sedi_rejects_presentation_proof_for_different_grant():
                 verifierRgy.store.accept(sedi.coreRegistry.regk, 1, sedi.coreIssued)
                 verifierRgy.store.accept(presentationRegistry.regk, 0, sedi.presentationRip)
 
-                modifiers = dict(dp=[[
-                    [CoreSchemaSaid, "/", [""]],
-                    [AgentSchemaSaid, "/e/utahAgent/_/", [""]],
-                    [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", [""]],
-                ]])
+                modifiers = dict(dp=[
+                    [CoreSchemaSaid, "/", _CORE_FIELDS],
+                    [AgentSchemaSaid, "/e/utahAgent/_/", _AGENT_FIELDS],
+                    [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                ])
                 boundGrant, _ = ipexGrant(
                     hab=holder,
                     recp=verifier.pre,
@@ -1774,16 +1859,12 @@ def test_sedi_flow_survives_holder_and_verifier_rotations():
                     hab=verifier,
                     recp=holder.pre,
                     message="Prove state residence for voting-rights review",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [ResidenceSchemaSaid, "/", ["a/state/"]],
-                                [CoreSchemaSaid, "/e/coreIdentity/_/", []],
-                                [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", []],
-                                [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", []],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [ResidenceSchemaSaid, "/", ["a/state/value"]],
+                        [CoreSchemaSaid, "/e/coreIdentity/_/", _CORE_AUTHORITY_FIELDS],
+                        [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
 
@@ -1944,16 +2025,16 @@ def test_sedi_flow_survives_holder_and_verifier_rotations():
                     hab=verifier,
                     recp=holder.pre,
                     message="Prove local district for voting-rights review",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [ResidenceSchemaSaid, "/", ["a/state/", "a/county/", "a/postcode/"]],
-                                [CoreSchemaSaid, "/e/coreIdentity/_/", []],
-                                [AgentSchemaSaid,"/e/coreIdentity/_/e/utahAgent/_/", []],
-                                [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", []],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [ResidenceSchemaSaid, "/", [
+                            "a/state/value",
+                            "a/county/value",
+                            "a/postcode/value",
+                        ]],
+                        [CoreSchemaSaid, "/e/coreIdentity/_/", _CORE_AUTHORITY_FIELDS],
+                        [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
                 _exchange(districtApply, districtApplyAtc, verifierKvy, holderKvy)
@@ -2242,15 +2323,15 @@ def test_selective_sedi_grant_does_not_leak_hidden_fields():
                     hab=verifier,
                     recp=holder.pre,
                     message="Prove citizenship for voting-rights review",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [CoreSchemaSaid, "/", ["a/legalPresenceStatus/"]],
-                                [AgentSchemaSaid, "/e/utahAgent/_/", []],
-                                [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", []],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [CoreSchemaSaid, "/", [
+                            "a/legalPresenceStatus/d",
+                            "a/legalPresenceStatus/u",
+                            "a/legalPresenceStatus/value",
+                        ]],
+                        [AgentSchemaSaid, "/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
 
@@ -2483,16 +2564,12 @@ def test_residence_sedi_requires_every_rd_node_to_bind_grant():
                     hab=verifier,
                     recp=holder.pre,
                     message="Request Residence SEDI",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [ResidenceSchemaSaid, "/", [""]],
-                                [CoreSchemaSaid, "/e/coreIdentity/_/", [""]],
-                                [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", [""]],
-                                [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", [""]],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [ResidenceSchemaSaid, "/", _RESIDENCE_FIELDS],
+                        [CoreSchemaSaid, "/e/coreIdentity/_/", _CORE_FIELDS],
+                        [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],  # Anchor required for the next messages
                 )
 
@@ -2686,16 +2763,12 @@ def test_residence_sedi_uses_nested_core_presentation_registry():
                     hab=verifier,
                     recp=holder.pre,
                     message="Request Residence with supporting Core",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [ResidenceSchemaSaid, "/", [""]],
-                                [CoreSchemaSaid, "/e/coreIdentity/_/", [""]],
-                                [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", [""]],
-                                [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", [""]],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [ResidenceSchemaSaid, "/", _RESIDENCE_FIELDS_WITHOUT_PRESENTATION],
+                        [CoreSchemaSaid, "/e/coreIdentity/_/", _CORE_FIELDS],
+                        [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
                 _exchange(apply, applyAtc, verifierKvy, holderKvy)
@@ -2914,15 +2987,11 @@ def test_sedi_grant_escrows_for_presentation_anchor():
                     hab=verifier,
                     recp=holder.pre,
                     message="Request Core SEDI before anchor delivery",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [CoreSchemaSaid, "/", [""]],
-                                [AgentSchemaSaid, "/e/utahAgent/_/", [""]],
-                                [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", [""]],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [CoreSchemaSaid, "/", _CORE_FIELDS],
+                        [AgentSchemaSaid, "/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
                 _exchange(apply, applyAtc, verifierKvy, holderKvy)
@@ -3131,16 +3200,12 @@ def test_residence_sedi_rejects_invalid_issuee_relationship():
                     hab=verifier,
                     recp=holder.pre,
                     message="Request Residence SEDI with invalid relationship",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [ResidenceSchemaSaid, "/", [""]],
-                                [CoreSchemaSaid, "/e/coreIdentity/_/", [""]],
-                                [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", [""]],
-                                [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", [""]],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [ResidenceSchemaSaid, "/", _RESIDENCE_FIELDS],
+                        [CoreSchemaSaid, "/e/coreIdentity/_/", _CORE_FIELDS],
+                        [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
                 _exchange(apply, applyAtc, verifierKvy, holderKvy)
@@ -3352,16 +3417,12 @@ def test_residence_sedi_supporting_dag_through_ipex():
                     hab=verifier,
                     recp=holder.pre,
                     message="Please present Residence SEDI",
-                    modifiers=dict(
-                        dp=[
-                            [
-                                [ResidenceSchemaSaid, "/", [""]],
-                                [CoreSchemaSaid, "/e/coreIdentity/_/", [""]],
-                                [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", [""]],
-                                [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", [""]],
-                            ]
-                        ]
-                    ),
+                    modifiers=dict(dp=[
+                        [ResidenceSchemaSaid, "/", _RESIDENCE_FIELDS],
+                        [CoreSchemaSaid, "/e/coreIdentity/_/", _CORE_FIELDS],
+                        [AgentSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/", _AGENT_FIELDS],
+                        [UnitSchemaSaid, "/e/coreIdentity/_/e/utahAgent/_/e/orgUnit/_/", _UNIT_FIELDS],
+                    ]),
                     ax=[True],
                 )
 
