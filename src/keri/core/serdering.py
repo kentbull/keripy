@@ -168,7 +168,12 @@ class Serdery:
             fixed (bool): when CESR native message.
                                True means top-level fixed field
                                False means top-level field map
-        """
+
+        Framing boundary:
+            Native field-map inspection advances past the complete variable-size label
+            primitive (fullSize), then reads its version value. Extraction consumes the
+            selected message bytes; incomplete primitives raise ShortageError and invalid
+            protocol/version/framing raises the existing extraction/validation errors."""
         if ctr:  # parser sniffed and peekd so native and assigned ctr, size, fixed
             # parser already peeked to see .FixBodyGroup or .MapBodyGroup so
             # know it's native and assigned ctr, size, and fixed
@@ -183,7 +188,7 @@ class Serdery:
             lsize = 0  # label size in bytes
             if not fixed:  # extract label for version field
                 labeler = Labeler(qb64b=ims[ctr.fullSize:])  # offset past ctr
-                lsize = labeler.fullsize
+                lsize = labeler.fullSize
 
             verser = Verser(qb64b=ims[ctr.fullSize+lsize:])  # in text domain
             proto, pvrsn, gvrsn = verser.versage
