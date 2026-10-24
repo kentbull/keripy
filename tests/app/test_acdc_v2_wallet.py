@@ -21,7 +21,7 @@ from keri.peer.exchanging import Exchanger, loadParsedNestedSubstreams
 
 class Notices:
     def __init__(self):
-        """Create an in-memory notification recorder for accepted native exchanges.
+        """Create an in-memory notification recorder for accepted ACDC v2 IPEX exchanges.
 
         Returns:
             None. Each instance starts with an independent empty items list."""
@@ -55,14 +55,14 @@ def encrypted(name, root, key):
 
 
 def regery(hby, root):
-    """Open the persistent native registry environment beside one test identity.
+    """Open the persistent ACDC v2 registry environment beside one test identity.
 
     Args:
         hby (Habery): Caller-owned KEL evidence environment.
         root (Path): Pytest-owned persistent registry directory.
 
     Returns:
-        Regery: Caller-owned native registry manager; tests explicitly close it."""
+        Regery: Caller-owned ACDC v2 registry manager; tests explicitly close it."""
     return Regery(hby=hby, name=hby.name,
         baser=RegBaser(name=hby.name, temp=False, headDirPath=str(root)))
 
@@ -72,8 +72,8 @@ def receive(hby, raw, *, rgy=None, exc=None):
 
     Args:
         hby (Habery): Destination identity/evidence environment.
-        raw (bytes): Exact signed remote replay or native stream.
-        rgy (Regery | None): Native TEL owner, when the stream contains registry events.
+        raw (bytes): Exact signed remote replay or ACDC v2 evidence stream.
+        rgy (Regery | None): ACDC v2 registry TEL owner, when the stream contains registry events.
         exc (Exchanger | None): Shared exchange processor for IPEX route validation.
 
     Returns:
@@ -85,7 +85,7 @@ def receive(hby, raw, *, rgy=None, exc=None):
 
 
 def anchored(hab, registry, event):
-    """Seal one native event in a real controller interaction and require acceptance.
+    """Seal one ACDC v2 registry event in a real controller interaction and require acceptance.
 
     Args:
         hab (Hab): Registry controller creating the KEL seal.
@@ -139,7 +139,7 @@ def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_
             retained = iwallet.db.custody.get((registry.regk,))
             assert retained.aeid == issuer.mgr.aeid and salt not in retained.cipher
             assert salt.encode() not in Path(iwallet.db.path, 'data.mdb').read_bytes()
-            # Receiver accepts normal signed KEL and foreign native events, never copied accepted rows.
+            # Receiver accepts normal signed KEL and foreign ACDC v2 registry events, never copied accepted rows.
             receive(holder, ihab.replay(gvrsn=Vrsn_2_0))
             receiver = Rever(db=holder.db, reger=hrgy.baser)
             assert receiver.processEvent(rip)
@@ -217,7 +217,7 @@ def signed(acdc, hab):
         hab (Hab): Issuer habitat whose current keys sign the view.
 
     Returns:
-        bytearray: Native node stream with a real transferable signature group."""
+        bytearray: ACDC v2 credential node stream with a real transferable signature group."""
     return messagize(acdc, tsgs=[(hab.kever.prefixer, Number(sn=hab.kever.lastEst.s),
         Diger(qb64=hab.kever.lastEst.d), hab.sign(ser=acdc.raw))], framed=False, gvrsn=Vrsn_2_0)
 
@@ -363,7 +363,7 @@ def test_handlerless_retention_cannot_become_wallet_admission_after_registration
             with pytest.raises(ValidationError, match='semantic acceptance'):
                 wallet.recordAdmission(gexn.said, aexn.said, consent=True)
             wallet.verification = True
-            with pytest.raises(ConfigurationError, match='concrete native IPEX verification'):
+            with pytest.raises(ConfigurationError, match='concrete ACDC v2 IPEX verification'):
                 wallet.recordAdmission(gexn.said, aexn.said, consent=True)
             assert wallet.inventory()['held'] == []
             assert wallet.admissions(credential.said) == []
@@ -500,7 +500,7 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
     from copy import deepcopy
     from keri.acdc import messaging
     from keri.acdc.sectioning import SectionBaser
-    from keri.cli.common.native_exchange import Peer
+    from keri.cli.common.acdc_v2_ipex import Peer
     from keri.core import Codens, Counter
     from keri.db import openLMDB
 
@@ -612,7 +612,7 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
 
     Returns:
         None. Assertions check the stated evidence boundary."""
-    from keri.acdc.ipexing import NativeVerification
+    from keri.acdc.ipexing import AcdcV2IpexVerification
     from keri.app import ipexing as dispatching
 
     class ScorePolicy:
@@ -692,12 +692,12 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
             assert wallet.recordAdmission(*pairs[0], consent=True).grant == pairs[0][0]
             assert wallet.heldCredential(pairs[0][0])['credential'].said == origin.said
             for policy in (None, ScorePolicy(permitted=False)):
-                wallet.verification = NativeVerification(hby, rgy, graphPolicy=policy)
+                wallet.verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=policy)
                 assert not wallet.verification.verifyAccepted(pairs[1][0], '/ipex/grant')
                 with pytest.raises(ValidationError, match='semantic acceptance'):
                     wallet.recordAdmission(*pairs[1], consent=True)
                 assert len(wallet.inventory()['held']) == 1
-            wallet.verification = NativeVerification(hby, rgy, graphPolicy=ScorePolicy())
+            wallet.verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=ScorePolicy())
             assert wallet.recordAdmission(*pairs[1], consent=True).grant == pairs[1][0]
             assert len(wallet.inventory()['held']) == 2
         finally:

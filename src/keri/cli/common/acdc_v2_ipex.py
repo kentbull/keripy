@@ -1,4 +1,4 @@
-"""Native IPEX command composition using retained wallet views and core proofs."""
+"""ACDC v2 IPEX command composition using retained wallet views and core proofs."""
 from contextlib import ExitStack
 from dataclasses import asdict, replace
 import json
@@ -15,7 +15,7 @@ from keri.acdc import ipexing
 from keri.acdc.regeventing import issuerRegistry
 from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import GroupHab, Notifier
-from keri.app.native_grouping import NativeGroup
+from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from keri.app.credential_disclosing import registryProof
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.app.indirecting import createHttpServer
@@ -24,7 +24,7 @@ from keri.core import Compactor, Diger, Number, Parser, SerderACDC, messagize
 from keri.kering import ConfigurationError, MissingChainError, MissingSchemaError
 from keri.peer import exchanging
 from keri.db import openLMDB
-from keri.cli.common import native, cesr_sending
+from keri.cli.common import acdc_v2, cesr_sending
 
 
 class Notices:
@@ -44,13 +44,13 @@ class Peer:
 
     The caller owns identity, registry, wallet, and independent section stores.
     The peer composes verification and escrow processing; it grants no automatic
-    wallet consent and does not weaken the native KRAM requirement."""
+    wallet consent and does not weaken the ACDC v2 KRAM requirement."""
     def __init__(self, hby, rgy, wallet, sections, *, graphPolicy=None):
-        """Share section evidence and native policy across intake and admission.
+        """Share section evidence and ACDC v2 IPEX verification policy across intake and admission.
 
         Args:
             hby (Habery): Authenticated local identity and KEL/EXN evidence.
-            rgy (Regery): Native registry evidence owner.
+            rgy (Regery): ACDC v2 registry evidence owner.
             wallet (Wallet): Inventory owner configured to use this peer's context.
             sections (SectionBaser): Independently received section store; caller
                 owns closing it, including across CLI invocations/reopen.
@@ -70,7 +70,7 @@ class Peer:
                              exc=self.exc, scy=self.scy, version=Vrsn_2_0, local=False)
 
     def ingest(self, raw):
-        """Process complete native frames from raw bytes and report EXN acceptance.
+        """Process complete CESR-framed ACDC v2 IPEX messages and report EXN acceptance.
 
         Copy raw before incremental framing so the caller's bytes are unchanged.
         Dispatch through the normal KEL, registry, section, and exchange processors;
@@ -84,7 +84,7 @@ class Peer:
             size = len(ims)
             dom = self.parser.parseOne(ims=ims, processive=False)
             if dom is None or dom.serder is None or len(ims) >= size:
-                raise ConfigurationError('incomplete native IPEX stream')
+                raise ConfigurationError('incomplete ACDC v2 IPEX stream')
             if dom.serder.ilk == 'exn':
                 grants.append(dom.serder.said)
             try:
@@ -109,15 +109,15 @@ class Peer:
 
 
 def options(parser, *, send=False):
-    """Add shared native IPEX intake, evidence, group, and delivery arguments.
+    """Add shared ACDC v2 IPEX intake, evidence, group, and delivery arguments.
 
     parser is mutated in place and returns no result. send additionally exposes
-    an explicit HTTP(S)/TCP endpoint. Native selection remains opt-in; observer
+    an explicit HTTP(S)/TCP endpoint. ACDC v2 selection remains opt-in; observer
     synchronization, public file handoff, and group proposals are explicit inputs,
     not switches that disable core verification."""
-    native.options(parser)
+    acdc_v2.options(parser)
     parser.add_argument('--input', help='receive signed CESR evidence before this operation')
-    parser.add_argument('--observer', help='configured native observer URL')
+    parser.add_argument('--observer', help='configured ACDC v2 observer URL')
     parser.add_argument('--registry', action='append', default=[], help='registry SAID to synchronize from observer')
     parser.add_argument('--output', help='create a CESR message file without overwriting')
     parser.add_argument('--timeout', type=float, default=10.0)
@@ -128,7 +128,7 @@ def options(parser, *, send=False):
 
 
 class ExchangeDoer(doing.DoDoer):
-    """Own one native IPEX action or a long-lived authenticated intake service.
+    """Own one ACDC v2 IPEX action or a long-lived authenticated intake service.
 
     Keep protocol acceptance, explicit wallet admission, and direct transport
     completion distinct. Open only the capabilities required by the selected
@@ -165,12 +165,12 @@ class ExchangeDoer(doing.DoDoer):
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
         derives = getattr(args, 'derive', False)
-        with (native.opened(args, custody=derives) as (hby, rgy, wallet),
+        with (acdc_v2.opened(args, custody=derives) as (hby, rgy, wallet),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections,
               ExitStack() as activity):
             hab = hby.habByName(args.alias)
             if hab is None:
-                raise ConfigurationError('unknown native IPEX alias')
+                raise ConfigurationError('unknown ACDC v2 IPEX alias')
             peer = Peer(hby, rgy, wallet, sections)
             # This command owns KRAM maintenance, including when a group shares
             # the peer's Kramer. Stop child work before the stores leave scope.
@@ -184,7 +184,7 @@ class ExchangeDoer(doing.DoDoer):
             if isinstance(hab, GroupHab):
                 # Group proposal/mailbox intake resolves the same schema evidence
                 # as the peer's verifier without expanding retained disclosures.
-                group = NativeGroup(hby, rgy, hab, peer.exc, Notifier(hby=hby),
+                group = AcdcV2GroupCoordinator(hby, rgy, hab, peer.exc, Notifier(hby=hby),
                                     kramer=peer.evidence.kvy.kramer, scy=peer.scy)
                 self.extend([group])
                 activity.callback(self.remove, [group])
@@ -280,7 +280,7 @@ class ExchangeDoer(doing.DoDoer):
                 if self.verb == 'offer':
                     exn, attachment = ipexing.offer(hab, args.message, origin=origin,
                         apply=prior, recp=args.recipient, dt=args.time,
-                        modifiers={'dp': native.load(args.plan)} if args.plan else None)
+                        modifiers={'dp': acdc_v2.load(args.plan)} if args.plan else None)
                 else:
                     kwargs = {}
                     if prior is not None:
@@ -291,7 +291,7 @@ class ExchangeDoer(doing.DoDoer):
                         origin=origin, artifacts=artifacts, dt=args.time, **kwargs)
             elif self.verb == 'apply':
                 exn, attachment = ipexing.apply(hab, args.recipient, args.message,
-                    modifiers={'dp': native.load(args.plan)}, dt=args.time)
+                    modifiers={'dp': acdc_v2.load(args.plan)}, dt=args.time)
             elif self.verb in ('agree', 'spurn'):
                 prior = self.prior(peer, args.said)
                 if self.verb == 'agree':
@@ -301,10 +301,10 @@ class ExchangeDoer(doing.DoDoer):
             elif self.verb == 'admit':
                 grant = hby.db.exns.get((args.said,))
                 if grant is None or not peer.exc.routes['/ipex/grant'].verifyAccepted(args.said):
-                    raise ConfigurationError('grant has not passed native IPEX verification')
+                    raise ConfigurationError('grant has not passed ACDC v2 IPEX verification')
                 exn, attachment = ipexing.admit(hab, args.message, grant, dt=args.time)
             else:
-                raise ConfigurationError('unsupported native IPEX operation')
+                raise ConfigurationError('unsupported ACDC v2 IPEX operation')
             if not args.proposal:
                 raw = bytes(exn.raw + attachment)
             if group is not None:
@@ -318,7 +318,7 @@ class ExchangeDoer(doing.DoDoer):
                 deadline = self.tyme + args.timeout
                 while not group.completeExchange(exn.said):
                     if self.tyme >= deadline:
-                        raise TimeoutError(f'native group exchange {exn.said} is pending member approval or evidence')
+                        raise TimeoutError(f'ACDC v2 group exchange {exn.said} is pending member approval or evidence')
                     group.process()
                     yield tock
                 # Reconstruct the accepted threshold proof, including all
@@ -355,7 +355,7 @@ class ExchangeDoer(doing.DoDoer):
         core opening/bound-proof failures and file errors propagate."""
         retained = list(retained)
         for path in getattr(self.args, 'opening', []):
-            retained.append(native.loadOpening(path))
+            retained.append(acdc_v2.loadOpening(path))
         explicit = (wallet.boundEvent(credential, self.args.bound_event)
                     if self.args.bound_event else {})
         issued = wallet.db.issued.get((credential.said,))
@@ -389,7 +389,7 @@ class ExchangeDoer(doing.DoDoer):
         prior = args.said if self.verb in ('agree', 'admit', 'spurn') else getattr(args, 'prior', None)
         if prior and exn.sad.get('p') != prior:
             raise ConfigurationError('group proposal has a different prior exchange')
-        if getattr(args, 'plan', None) and exn.sad.get('q', {}).get('dp') != native.load(args.plan):
+        if getattr(args, 'plan', None) and exn.sad.get('q', {}).get('dp') != acdc_v2.load(args.plan):
             raise ConfigurationError('group proposal has a different disclosure plan')
         if args.message and exn.sad['a'].get('m') != args.message:
             raise ConfigurationError('group proposal has a different message')
@@ -403,7 +403,7 @@ class ExchangeDoer(doing.DoDoer):
     def prior(peer, said):
         """Return a retained prior only after core route-specific revalidation.
 
-        peer supplies its accepted EXNs and configured native handlers; said selects
+        peer supplies its accepted EXNs and configured ACDC v2 IPEX handlers; said selects
         the exact prior. Missing acceptance, unknown routes, or failed semantic proof
         raise ConfigurationError. This lookup does not imply wallet admission."""
         message = peer.hby.db.exns.get((said,))
@@ -416,7 +416,7 @@ class ExchangeDoer(doing.DoDoer):
 
 
 class Intake:
-    """Expose raw CESR intake for a shared native peer without wallet consent."""
+    """Expose raw CESR intake for a shared ACDC v2 peer without wallet consent."""
     def __init__(self, peer):
         """Retain the peer whose core processors own this endpoint's evidence.
 
@@ -436,5 +436,5 @@ class Intake:
         rep.status = falcon.HTTP_202
 
     # StreamPoster uses PUT at the recipient endpoint root. Both methods enter
-    # the same native verifier and neither implies wallet admission.
+    # the same ACDC v2 verifier and neither implies wallet admission.
     on_put = on_post

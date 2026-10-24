@@ -1,4 +1,4 @@
-"""Explicit native adapters for the existing credential command hierarchy."""
+"""Explicit ACDC v2 adapters for the existing credential command hierarchy."""
 from contextlib import contextmanager
 from dataclasses import asdict
 import json
@@ -15,7 +15,7 @@ from ...acdc.registraring import Regery
 from ...app import GroupHab, HaberyDoer, Keeper, Notifier, Organizer, Receiptor
 from ...app.credentialing import Wallet
 from ...app.registry_custody import RegistryCustody
-from ...app.native_grouping import NativeGroup
+from ...app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from ...core import Codens, Counter, Number, Prefixer, SealEvent, SealSource, SerderACDC, messagize
 from ...kering import AuthError, ConfigurationError, Vrsn_2_0
 from ...peer import Exchanger
@@ -28,16 +28,16 @@ def options(parser, *, author=False):
     """Add explicit v2 selection and optional authoring controls to parser.
 
     Mutate the argument parser and return None. author adds anchor timeout and
-    explicit witness authorization and exact group/bound-evidence options. --native aliases --v2; v1 remains the
-    command default. These flags never toggle the core's authentication policy."""
-    parser.add_argument('--v2', '--native', dest='native', action='store_true',
-                        help='use v2 ACDC registries and IPEX (--native is an alias)')
+    explicit witness authorization and exact group/bound-evidence options.
+    V1 remains the command default. This flag never toggles core authentication."""
+    parser.add_argument('--acdc-v2', dest='acdc_v2', action='store_true',
+                        help='use ACDC v2 registries and IPEX')
     if author:
         parser.add_argument("--witness-auth-file", help="JSON witness AID to short-lived authorization header map")
         parser.add_argument('--timeout', type=float, default=30.0,
                             help='seconds to wait for authenticated anchor acceptance')
         parser.add_argument('--bound-event', help='exact accepted issuee KEL event for a bound state update')
-        parser.add_argument('--proposal', help='approve this exact signed native group registry proposal')
+        parser.add_argument('--proposal', help='approve this exact signed ACDC v2 group registry proposal')
         parser.add_argument('--proposal-output', help='write a member proposal for file handoff instead of network fanout')
 
 
@@ -109,7 +109,7 @@ def issuanceOrigin(wallet, acdc, record, *, opening=None):
 
 @contextmanager
 def opened(args, *, custody=False):
-    """Yield native evidence/inventory owners without changing Keeper encryption.
+    """Yield ACDC v2 evidence/inventory owners without changing Keeper encryption.
 
     ``args`` supplies existing identity name/base/passcode. ``custody`` explicitly
     composes the optional registry derivation owner; ordinary operations leave it
@@ -121,7 +121,7 @@ def opened(args, *, custody=False):
     try:
         aeid = keeper.gbls.get('aeid')
         if aeid is None:
-            raise ConfigurationError('native operation requires an existing Keeper')
+            raise ConfigurationError('ACDC v2 operation requires an existing Keeper')
     finally:
         keeper.close()
     hby = setupHby(name=args.name, base=args.base,
@@ -142,14 +142,14 @@ def opened(args, *, custody=False):
 
 
 def registry(rgy, name, hab=None):
-    """Resolve one named native registry and optionally require its controller.
+    """Resolve one named ACDC v2 registry and optionally require its controller.
 
     rgy owns the registry inventory; name selects its local alias. If hab is
     provided, its AID must control that registry. Return the registry object or
     raise ConfigurationError for an unknown name or a different controller."""
     reg = rgy.registryByName(name)
     if reg is None:
-        raise ConfigurationError(f'unknown native registry {name}')
+        raise ConfigurationError(f'unknown ACDC v2 registry {name}')
     if hab is not None and reg.hab.pre != hab.pre:
         raise ConfigurationError('registry is controlled by a different identifier')
     return reg
@@ -182,14 +182,14 @@ def standing(wallet, reg, acdc, *, derive=False):
     return 'unknown'
 
 
-class NativeAuthor(doing.DoDoer):
-    """Author exact native registry events through individual or group controllers.
+class AcdcV2Author(doing.DoDoer):
+    """Author exact ACDC v2 registry events through individual or group controllers.
 
     Staging, KEL anchoring, authenticated receipt acceptance, and issued inventory
     recording are separate steps. Ordinary public updates need no custody; blinded
     authoring explicitly composes that capability. Exact retries preserve history."""
     def __init__(self, args, operation):
-        """Schedule one native inception, credential creation, or revocation.
+        """Schedule one ACDC v2 inception, credential creation, or revocation.
 
         args is the parsed command namespace and operation selects the action.
         Initialize pending group/anchor/opening references and one cooperative run
@@ -203,7 +203,7 @@ class NativeAuthor(doing.DoDoer):
         """Yield until the exact event is accepted through authenticated anchoring.
 
         hby owns KEL evidence, reg owns the target registry, event is the already
-        staged native event, and receiptor is the scheduled individual receipt worker.
+        staged ACDC v2 event, and receiptor is the scheduled individual receipt worker.
         Group work instead approves the exact proposed anchor and waits for member
         and witness evidence. Reuse an existing sealing event on retry; do not author
         a second anchor merely to poll. Return None only after accepted event equality;
@@ -232,7 +232,7 @@ class NativeAuthor(doing.DoDoer):
                 if accepted is not None and accepted.said == event.said:
                     return
                 if time.monotonic() >= deadline:
-                    raise TimeoutError(f'native group event {event.said} is pending member approval or witness receipts')
+                    raise TimeoutError(f'ACDC v2 group event {event.said} is pending member approval or witness receipts')
                 yield self.tock
 
         seal = dict(s=event.sad['n'], d=event.said)
@@ -259,7 +259,7 @@ class NativeAuthor(doing.DoDoer):
             if accepted is not None and accepted.said == event.said:
                 return
             if time.monotonic() >= deadline:
-                raise TimeoutError(f'native event {event.said} is pending authenticated anchor receipts')
+                raise TimeoutError(f'ACDC v2 event {event.said} is pending authenticated anchor receipts')
             yield self.tock
 
     def update(self, wallet, reg, acdc, state):
@@ -327,7 +327,7 @@ class NativeAuthor(doing.DoDoer):
         return event
 
     def run(self, tymth, tock=0.03125, **kwa):
-        """Execute one selected native authoring operation through normal acceptance.
+        """Execute one selected ACDC v2 authoring operation through normal acceptance.
 
         tymth/tock/kwa supply cooperative scheduling. args selects identity/registry,
         public or blinded state, explicit custody provisioning, and optional group
@@ -347,14 +347,14 @@ class NativeAuthor(doing.DoDoer):
         with opened(args, custody=wantsCustody) as (hby, rgy, wallet):
             hab = hby.habByName(args.alias)
             if hab is None:
-                raise ConfigurationError('native authoring requires a local alias')
+                raise ConfigurationError('ACDC v2 authoring requires a local alias')
             if set(self.auths) - set(hab.kever.wits):
                 raise ConfigurationError('witness authorization names an AID outside the controller witness set')
             if self.auths and isinstance(hab, GroupHab):
                 raise ConfigurationError('group authoring does not yet support per-command witness authorization')
             receiptor = Receiptor(hby=hby)
             if isinstance(hab, GroupHab):
-                self.group = NativeGroup(hby, rgy, hab, Exchanger(hby, handlers=[]), Notifier(hby=hby))
+                self.group = AcdcV2GroupCoordinator(hby, rgy, hab, Exchanger(hby, handlers=[]), Notifier(hby=hby))
             elif args.proposal or args.proposal_output:
                 raise ConfigurationError('group proposal options require a GroupHab alias')
             workers = [HaberyDoer(habery=hby), self.group or receiptor]
@@ -369,9 +369,9 @@ class NativeAuthor(doing.DoDoer):
                     elif args.discloser:
                         raise ConfigurationError('--discloser requires --with-custody')
                     if args.backers:
-                        raise ConfigurationError('native registries use controller witnesses, not TEL backers')
+                        raise ConfigurationError('ACDC v2 registries use controller witnesses, not TEL backers')
                     if args.establishment_only:
-                        raise ConfigurationError('native anchoring follows the controlling identifier establishment-only trait')
+                        raise ConfigurationError('ACDC v2 anchoring follows the controlling identifier establishment-only trait')
                     if args.discloser and args.discloser not in hby.kevers:
                         raise ConfigurationError('designated discloser key state is unknown')
                     name = args.registry_name or args.alias
@@ -413,9 +413,9 @@ class NativeAuthor(doing.DoDoer):
                     else:
                         data = load(args.data)
                         if not isinstance(data, dict):
-                            raise ConfigurationError('native credential --data must be a JSON object')
+                            raise ConfigurationError('ACDC v2 credential --data must be a JSON object')
                         if args.private and not (args.private_credential_nonce and args.private_subject_nonce):
-                            raise ConfigurationError('native --private requires both explicit nonce options or --credential')
+                            raise ConfigurationError('ACDC v2 --private requires both explicit nonce options or --credential')
                         attribute = dict(data)
                         attribute.setdefault('d', '')
                         if args.private_subject_nonce:
@@ -433,7 +433,7 @@ class NativeAuthor(doing.DoDoer):
                             attribute=attribute, iseaid=recipient, edge=load(args.edges), rule=load(args.rules),
                             uuid=args.private_credential_nonce)
                     if not acdc.verify() or acdc.sad.get('i') != hab.pre or issuerRegistry(acdc) not in (None, reg.regk):
-                        raise ConfigurationError('native credential does not match issuer and registry')
+                        raise ConfigurationError('ACDC v2 credential does not match issuer and registry')
                     scheming.validateSchema(acdc, hby.db)
                     old = wallet.db.issued.get((acdc.said,))
                     event = reg.store.event(old.update) if old else self.update(wallet, reg, acdc, 'issued')
@@ -446,10 +446,10 @@ class NativeAuthor(doing.DoDoer):
                                           accepted=True, state=standing(wallet, reg, acdc, derive=old is None))))
                 else:
                     if args.send:
-                        raise ConfigurationError('native revocation publication uses the registrar service')
+                        raise ConfigurationError('ACDC v2 revocation publication uses the registrar service')
                     record = wallet.db.issued.get((args.said,))
                     if record is None or record.registry != reg.regk:
-                        raise ConfigurationError('credential is not in this native issued inventory')
+                        raise ConfigurationError('credential is not in this ACDC v2 issued inventory')
                     acdc = wallet.issuedCredential(record.credential)
                     event = self.update(wallet, reg, acdc, 'revoked')
                     yield from self.anchor(hby, reg, event, receiptor)
@@ -460,7 +460,7 @@ class NativeAuthor(doing.DoDoer):
 
 
 def read(args, operation):
-    """Return scheduled native inventory/evidence reads or explicit handoff work.
+    """Return scheduled ACDC v2 inventory/evidence reads or explicit handoff work.
 
     args carries identity, filters, registry, file, and capability options;
     operation chooses registries/status/inventory/export/import. Return a list of
@@ -500,12 +500,12 @@ def read(args, operation):
                         print(raw.decode())
             elif operation == 'inventory':
                 if args.poll:
-                    raise ConfigurationError('native admission uses accepted IPEX and explicit wallet consent')
+                    raise ConfigurationError('ACDC v2 IPEX admission uses accepted IPEX and explicit wallet consent')
                 hab = hby.habByName(args.alias) if args.alias else None
                 if args.alias and hab is None:
-                    raise ConfigurationError('unknown native inventory alias')
+                    raise ConfigurationError('unknown ACDC v2 inventory alias')
                 if args.schema and not args.issued:
-                    raise ConfigurationError('native held inventory lists admitted references; schema filtering requires the accepted disclosure')
+                    raise ConfigurationError('ACDC v2 held inventory lists admitted references; schema filtering requires the accepted disclosure')
                 records = wallet.inventory()['issued' if args.issued else 'held']
                 for record in records:
                     owner = record.controller if args.issued else record.holder
@@ -526,7 +526,7 @@ def read(args, operation):
             elif operation == 'export':
                 hab = hby.habByName(args.alias)
                 if hab is None:
-                    raise ConfigurationError('unknown native export alias')
+                    raise ConfigurationError('unknown ACDC v2 export alias')
                 reg = registry(rgy, args.registry_name, hab)
                 if args.custody:
                     path = wallet.custody.exportCustody(reg.regk, args.output)
@@ -534,10 +534,10 @@ def read(args, operation):
                 else:
                     record = wallet.db.issued.get((args.said,))
                     if record is None or record.registry != reg.regk:
-                        raise ConfigurationError('native export requires an issued inventory credential')
+                        raise ConfigurationError('ACDC v2 export requires an issued inventory credential')
                     acdc = wallet.issuedCredential(record.credential)
                     if args.chains or (args.full and acdc.sad.get('e')):
-                        raise ConfigurationError('native chained evidence must be exported from its accepted IPEX disclosure')
+                        raise ConfigurationError('ACDC v2 chained evidence must be exported from its accepted IPEX disclosure')
                     # Authenticate the exact historical opening before constructing
                     # output. A salt-derived Blinder is only a candidate until vet.
                     origin = (issuanceOrigin(wallet, acdc, record,

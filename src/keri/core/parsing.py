@@ -195,8 +195,8 @@ class Parser:
             exc (Exchanger): route EXN message types to this instance
             rvy (Revery): reply (RPY) message handler
             vry (``Verfifier``): credential verifier with wallet storage
-            rgy (Rever): native registry event processor
-            scy (Sectioner): native credential and section evidence processor
+            rgy (Rever): ACDC v2 registry event processor
+            scy (Sectioner): ACDC v2 credential and section evidence processor
             local (bool): True means event source is local (protected) for validation
                 False means event source is remote (unprotected) for validation
             version (Versionage): instance of version portion of genus version code
@@ -390,8 +390,8 @@ class Parser:
                 Attachments must all have counters so know if txt or bny format for
                 attachments. So even when framed==True must still have counters.
 
-        Native processor parameters:
-            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+        ACDC v2 processor parameters:
+            rgy (Rever | None): Override ACDC v2 registry TEL intake; None retains the instance owner.
             scy (Sectioner | None): Override exact credential/section evidence intake;
             None retains the instance owner. Both propagate through nested dispatch and
             remain caller-owned. Parse-only mode invokes neither processor.
@@ -460,8 +460,8 @@ class Parser:
                 Attachments must all have counters so know if txt or bny format for
                 attachments. So even when framed==True must still have counters.
 
-        Native processor parameters:
-            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+        ACDC v2 processor parameters:
+            rgy (Rever | None): Override ACDC v2 registry TEL intake; None retains the instance owner.
             scy (Sectioner | None): Override exact credential/section evidence intake;
             None retains the instance owner. Both propagate through nested dispatch and
             remain caller-owned. Parse-only mode invokes neither processor.
@@ -530,8 +530,8 @@ class Parser:
                 Attachments must all have counters so know if txt or bny format for
                 attachments. So even when framed==True must still have counters.
 
-        Native processor parameters:
-            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+        ACDC v2 processor parameters:
+            rgy (Rever | None): Override ACDC v2 registry TEL intake; None retains the instance owner.
             scy (Sectioner | None): Override exact credential/section evidence intake;
             None retains the instance owner. Both propagate through nested dispatch and
             remain caller-owned. Parse-only mode invokes neither processor.
@@ -636,8 +636,8 @@ class Parser:
                 Attachments must all have counters so know if txt or bny format for
                 attachments. So even when framed==True must still have counters.
 
-        Native processor parameters:
-            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+        ACDC v2 processor parameters:
+            rgy (Rever | None): Override ACDC v2 registry TEL intake; None retains the instance owner.
             scy (Sectioner | None): Override exact credential/section evidence intake;
             None retains the instance owner. Both propagate through nested dispatch and
             remain caller-owned. Parse-only mode invokes neither processor.
@@ -764,8 +764,8 @@ class Parser:
                 Attachments must all have counters so know if txt or bny format for
                 attachments. So even when framed==True must still have counters.
 
-        Native processor parameters:
-            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+        ACDC v2 processor parameters:
+            rgy (Rever | None): Override ACDC v2 registry TEL intake; None retains the instance owner.
             scy (Sectioner | None): Override exact credential/section evidence intake;
             None retains the instance owner. Both propagate through nested dispatch and
             remain caller-owned. Parse-only mode invokes neither processor.
@@ -866,8 +866,8 @@ class Parser:
                 False means do not process parse only, useful for
                     testing and debugging
 
-        Native processor parameters:
-            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+        ACDC v2 processor parameters:
+            rgy (Rever | None): Override ACDC v2 registry TEL intake; None retains the instance owner.
             scy (Sectioner | None): Override exact credential/section evidence intake;
             None retains the instance owner. Both propagate through nested dispatch and
             remain caller-owned. Parse-only mode invokes neither processor.
@@ -1091,7 +1091,7 @@ class Parser:
             With framed=True, the supplied frame must contain the complete declared
             attachment group: a short group raises ShortageError rather than waiting for
             bytes outside the frame. An explicitly empty attachment group is a complete
-            unsigned foot, permitted for KEL-anchor-authenticated native registry events.
+            unsigned foot, permitted for KEL-anchor-authenticated ACDC v2 registry events.
             With framed=False, the generator yields for more bytes. It returns parsed
             structure only; dispatch/authentication is performed separately."""
         if ims is None:
@@ -1303,7 +1303,7 @@ class Parser:
                         return
 
                     # An explicitly empty group is the complete foot of an
-                    # unsigned, anchor-authenticated native registry event.
+                    # unsigned, anchor-authenticated ACDC v2 registry event.
                     if eags == 0:
                         return exts
 
@@ -1492,8 +1492,8 @@ class Parser:
             exc (Exchanger | None): Exchange route processor.
             rvy (Revery | None): Reply processor.
             vry (Verifier | None): Legacy credential verifier.
-            rgy (Rever | None): Native rip/upd/bup intake; required for these messages.
-            scy (Sectioner | None): Native credential/section intake; required for these
+            rgy (Rever | None): ACDC v2 registry rip/upd/bup intake; required for these messages.
+            scy (Sectioner | None): ACDC v2 credential/section intake; required for these
             v2 messages. Retaining a section neither admits it nor expands a prior view.
 
         Returns:
@@ -1652,13 +1652,13 @@ class Parser:
 
             if ilk in (Ilks.rip, Ilks.bup, Ilks.upd):
                 if rgy is None:
-                    raise ValidationError("No native registry processor for ACDC TEL")
+                    raise ValidationError("No ACDC v2 registry processor for ACDC TEL")
                 rgy.processEvent(serder=serder, sscs=exts['sscs'], ssts=exts['ssts'])
             elif serder.pvrsn.major == 2 and ilk in (
                     None, Ilks.acm, Ilks.act, Ilks.acg,
                     Ilks.sch, Ilks.att, Ilks.agg, Ilks.edg, Ilks.rul):
                 if scy is None:
-                    raise ValidationError("No native section evidence processor for ACDC")
+                    raise ValidationError("No ACDC v2 section evidence processor for ACDC")
                 scy.processEvent(**exts)
             elif ilk is None:  # legacy credential form
                 try:

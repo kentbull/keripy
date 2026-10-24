@@ -1,1 +1,1 @@
-"""Native registry hosting applications (separate from protocol acceptance)."""
+"""ACDC v2 registry hosting applications (separate from protocol acceptance)."""

@@ -4,7 +4,7 @@ keri.app.cli.commands module
 
 """
 import argparse
-from ...common import native_exchange, legacy_negotiation
+from ...common import acdc_v2_ipex, legacy_negotiation
 
 from hio.base import doing
 
@@ -37,19 +37,19 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
 parser.add_argument("--time", help="timestamp", required=False, default=None)
 
 
-native_exchange.options(parser, send=True)
+acdc_v2_ipex.options(parser, send=True)
 
 def handler(args):
-    """Select explicit native admission or the established legacy admit worker.
+    """Select explicit ACDC v2 IPEX admission or the established legacy admit worker.
 
     args supplies the local identity, retained grant SAID, message, and timestamp.
-    Return lifecycle Doers; native admission revalidates the accepted grant before
+    Return lifecycle Doers; ACDC v2 IPEX admission revalidates the accepted grant before
     recording explicit wallet consent. Core/authentication errors propagate during
-    scheduled work. Omitting --v2 keeps legacy protocol behavior. Explicit
+    scheduled work. Omitting --acdc-v2 keeps legacy protocol behavior. Explicit
     input/output/endpoint selects the bounded individual direct adapter; the
     existing mailbox/group worker remains the default otherwise."""
-    if args.native:
-        return [native_exchange.ExchangeDoer(args, 'admit')]
+    if args.acdc_v2:
+        return [acdc_v2_ipex.ExchangeDoer(args, 'admit')]
     if args.input or args.output or args.endpoint:
         return [legacy_negotiation.Negotiation(args, 'admit')]
     ed = AdmitDoer(name=args.name,

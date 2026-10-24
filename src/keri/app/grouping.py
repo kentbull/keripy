@@ -303,7 +303,7 @@ def loadHandlers(exc, mux):
         mux (Multiplexor): Multisig communication coordinator
 
     Returns:
-        None. Registers the existing multisig routes, including native registry
+        None. Registers the existing multisig routes, including ACDC v2 registry
         proposals, on the caller-owned Exchanger; registration grants no approval."""
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/icp", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rot", mux=mux))
@@ -754,7 +754,7 @@ def multisigExn(ghab, exn, version=None, kind=None):
     Args:
         ghab (GroupHab): Group whose local member signs the wrapper.
         exn (bytes): Exact signed child exchange stream, including its attachments.
-        version (Versionage | None): Genus/profile selector; v2 uses a native nest,
+        version (Versionage | None): Genus/profile selector; v2 uses a CESR-framed nest,
         otherwise the legacy embedded-exchange form is retained.
         kind (str | None): Wrapper body encoding, default JSON.
 
@@ -762,14 +762,14 @@ def multisigExn(ghab, exn, version=None, kind=None):
         tuple[Serder, bytearray]: Member-signed wrapper body and detached attachments.
 
     Raises:
-        ValueError: Native input does not parse as exactly one EXN.
+        ValueError: V2 input does not parse as exactly one EXN.
 
     The wrapper commits to the child's SAID; reception is a proposal, never local
     consent to issue a credential or send the child exchange."""
     if version is not None and version.major == Vrsn_2_0.major:
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(exn), processive=False)
         if len(parsed) != 1 or parsed[0].serder.ilk != Ilks.exn:
-            raise ValueError('native multisig exchange requires exactly one EXN')
+            raise ValueError('v2 multisig exchange requires exactly one EXN')
         child = parsed[0].serder
         wrapper = exchange(sender=ghab.mhab.pre, route='/multisig/exn',
             attributes=dict(gid=ghab.pre, exn=child.said), version=Vrsn_2_0,
@@ -798,11 +798,11 @@ def multisigExn(ghab, exn, version=None, kind=None):
 
 
 def multisigRegistryExn(ghab, tel, anc):
-    """Propose exact native TEL and group KEL bodies without custody secrets.
+    """Propose exact ACDC v2 registry TEL and group KEL bodies without custody secrets.
 
     Args:
         ghab (GroupHab): Group whose local member signs the proposal wrapper.
-        tel (bytes): One serialized native registry event with any attachments.
+        tel (bytes): One serialized ACDC v2 registry event with any attachments.
         anc (bytes): One serialized group key event intended to seal that TEL event.
 
     Returns:
@@ -818,7 +818,7 @@ def multisigRegistryExn(ghab, tel, anc):
     for stream in (tel, anc):
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False)
         if len(parsed) != 1:
-            raise ValueError('native registry proposal requires one TEL and one KEL event')
+            raise ValueError('ACDC v2 registry proposal requires one TEL and one KEL event')
         children.append(parsed[0])
     wrapper = exchange(sender=ghab.mhab.pre, route='/multisig/registry',
         attributes=dict(gid=ghab.pre, tel=children[0].serder.said,
@@ -882,7 +882,7 @@ class Multiplexor:
         Additional parameters:
             exc (Exchanger | None): Shared concrete exchange processor for approved child
             replay; None creates the existing empty-handler Exchanger.
-            rgy (Rever | None): Native registry processor for approved TEL child replay.
+            rgy (Rever | None): ACDC v2 registry processor for approved TEL child replay.
 
         Returns:
             None. Habery, notifier, and injected processors remain caller-owned; this
@@ -904,7 +904,7 @@ class Multiplexor:
             said (str): Accepted multisig wrapper whose exact retained children to replay.
 
         Returns:
-            None. Dispatches native children through the injected KEL/EXN/TEL processors,
+            None. Dispatches v2 nested child streams through the injected KEL/EXN/TEL processors,
             or legacy embedded children through the existing replay path.
 
         Parsing may escrow dependencies rather than complete a group operation. This
@@ -954,7 +954,7 @@ class Multiplexor:
 
         Args:
             serder (Serder): Sender-authenticated multisig proposal wrapper.
-            nests (Iterable | None): Exact parsed children for native v2 wrappers.
+            nests (Iterable | None): Exact parsed children for ACDC v2 wrappers.
 
         Returns:
             tuple | None: (proposal key, sender, route, wrapper SAID) for a supported
@@ -965,7 +965,7 @@ class Multiplexor:
             controller mismatch, or missing exact TEL seal in the proposed key event.
             ValueError: Local participant/group membership or sender membership fails.
 
-        This performs no writes and grants no local consent. Native registry proposals
+        This performs no writes and grants no local consent. ACDC v2 registry proposals
         use their anchoring key-event SAID as the aggregation key; exchange proposals use
         the signed child SAID, so distinct bodies cannot share approval accidentally."""
         ked = serder.ked
@@ -985,7 +985,7 @@ class Multiplexor:
             esaid = embed["d"]
         elif route == '/multisig/registry':
             if len(nests) != 2 or not isinstance(payload, dict):
-                raise ValidationError('native registry proposal requires TEL and KEL children')
+                raise ValidationError('ACDC v2 registry proposal requires TEL and KEL children')
             children = [nest['serder'] if isinstance(nest, dict) else nest.serder for nest in nests]
             tel, anchor = children
             if (tel.ilk not in (Ilks.rip, Ilks.bup, Ilks.upd)
@@ -993,14 +993,14 @@ class Multiplexor:
                     or anchor.pre != payload.get('gid')
                     or not tel.verify() or not anchor.verify()
                     or tel.said != payload.get('tel') or anchor.said != payload.get('anc')):
-                raise ValidationError('invalid native registry proposal bodies')
+                raise ValidationError('invalid ACDC v2 registry proposal bodies')
             regid = tel.said if tel.ilk == Ilks.rip else tel.sad['rd']
             if tel.ilk == Ilks.rip and tel.sad['i'] != anchor.pre:
-                raise ValidationError('native registry inception has a different controller')
+                raise ValidationError('ACDC v2 registry inception has a different controller')
             if not any(seal in anchor.sad.get('a', []) for seal in
                        (dict(d=tel.said), dict(s=tel.sad['n'], d=tel.said),
                         dict(i=regid, s=tel.sad['n'], d=tel.said))):
-                raise ValidationError('native registry proposal KEL does not seal its TEL')
+                raise ValidationError('ACDC v2 registry proposal KEL does not seal its TEL')
             esaid = anchor.said
         else:
             if len(nests) != 1:
@@ -1033,7 +1033,7 @@ class Multiplexor:
                 raise ValidationError(f"invalid multisig nested substream ilk {nserder.ilk} for route {route}")
             if route == '/multisig/exn' and (nserder.pvrsn.major != 2
                     or nserder.pre != payload.get('gid') or not nserder.route.startswith('/ipex/')):
-                raise ValidationError('native group exchange must be IPEX from this group')
+                raise ValidationError('ACDC v2 group exchange must be IPEX from this group')
 
             # Make sure the child event is saidive before validating the signed child SAID
             saids = nserder.Fields[nserder.proto][nserder.pvrsn][nserder.ilk].saids
@@ -1074,7 +1074,7 @@ class Multiplexor:
                     raise ValueError(f"invalid request to participate in group, not member of gid={gid}")
                 if ovrsn.major == 2 and route in ('/multisig/registry', '/multisig/exn'):
                     if sender not in self.hby.db.signingMembers(pre=gid):
-                        raise ValueError('native multisig proposal sender is not a signing member')
+                        raise ValueError('v2 multisig proposal sender is not a signing member')
 
             case _:
                 raise ValueError(f"invalid route {route} for multiplexed exn={ked}")

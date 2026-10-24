@@ -36,7 +36,7 @@ def test_legacy_apply_offer_agree_across_cli_processes(tmp_path, seeder):
         prior/recipient/credential links. An authenticated grant without its schema
         must remain unadmitted without an output file; importing that real dependency
         permits admission. Wrong accepted-agreement selections raise ConfigurationError.
-        No --v2 opt-in or synthetic native alias is used."""
+        No --acdc-v2 opt-in or removed --native selector is used."""
     base = 'legacy-negotiation-' + uuid.uuid4().hex
     names = {role: role + '-' + uuid.uuid4().hex for role in ('issuer', 'holder')}
     prefixes = {}

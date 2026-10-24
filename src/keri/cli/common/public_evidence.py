@@ -19,7 +19,7 @@ from keri.acdc.regeventing import vetBlind, vetBound
 from keri.app import Receiptor, HaberyDoer, Keeper
 from keri.app.httping import CESR_CONTENT_TYPE
 from keri.app.evidencing import EvidenceContext, KEL_DEPENDENCIES, signedQuery
-from keri.cli.common import native, setupHby
+from keri.cli.common import acdc_v2, setupHby
 from keri.core import Parser, SerderKERI, Number
 from keri.kering import ConfigurationError
 from keri.peer import exchanging
@@ -201,7 +201,7 @@ class Request(doing.DoDoer):
             OSError, ValueError: File, ASCII evidence, or response JSON decoding fails.
 
         Owns the scheduled HTTP client and evidence context; removes both children and
-        closes the socket before the surrounding native stores exit. Transmission/HTTP
+        closes the socket before the surrounding registry and wallet stores exit. Transmission/HTTP
         202 alone never supplies an application acceptance claim."""
         self.wind(tymth)
         yield tock
@@ -211,7 +211,7 @@ class Request(doing.DoDoer):
         target = urlsplit(args.endpoint)
         if target.scheme not in ('http', 'https') or not target.hostname:
             raise ConfigurationError('public evidence requests require an HTTP(S) endpoint')
-        with native.opened(args) as (hby, rgy, wallet):
+        with acdc_v2.opened(args) as (hby, rgy, wallet):
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('unknown signing alias')
@@ -295,11 +295,11 @@ def opening(args):
         no cached fuller credential is substituted. Store context managers own cleanup."""
         yield tock
         from keri.acdc.sectioning import SectionBaser
-        from keri.cli.common.native_exchange import Peer
+        from keri.cli.common.acdc_v2_ipex import Peer
         from keri.db import openLMDB
-        with (native.opened(args, custody=True) as (hby, rgy, wallet),
+        with (acdc_v2.opened(args, custody=True) as (hby, rgy, wallet),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections):
-            regid = args.registry or native.registry(rgy, args.registry_name).regk
+            regid = args.registry or acdc_v2.registry(rgy, args.registry_name).regk
             if args.from_grant:
                 # Reuse the same retained semantic context as ordinary holder
                 # presentation; possession of a grant reference is not consent.
@@ -322,7 +322,7 @@ def opening(args):
     return [doing.doify(run)]
 
 
-class Advance(native.NativeAuthor):
+class Advance(acdc_v2.AcdcV2Author):
     """Author an explicit new state-preserving blind with witnessed acceptance."""
 
     def __init__(self, args):
@@ -333,7 +333,7 @@ class Advance(native.NativeAuthor):
             optional bound event, and finite anchor-acceptance timeout.
 
         Returns:
-            None. Uses the existing NativeAuthor runtime; no update is authored yet."""
+            None. Uses the existing AcdcV2Author runtime; no update is authored yet."""
         super().__init__(args, 'advance')
 
     def run(self, tymth, tock=0.03125, **kwa):
@@ -357,18 +357,18 @@ class Advance(native.NativeAuthor):
             TimeoutError: Required anchor/witness evidence does not complete in time.
 
         Retries reuse one matching staged TEL/anchor instead of resealing. Owned Habery
-        and receipt child doers are removed before native store contexts close."""
+        and receipt child doers are removed before ACDC v2 store contexts close."""
         self.wind(tymth)
         self.tock = tock
         yield tock
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
-        self.auths = native.readWitnessAuth(getattr(args, 'witness_auth_file', None))
-        with native.opened(args, custody=True) as (hby, rgy, wallet):
+        self.auths = acdc_v2.readWitnessAuth(getattr(args, 'witness_auth_file', None))
+        with acdc_v2.opened(args, custody=True) as (hby, rgy, wallet):
             from keri.app import GroupHab
             hab = hby.habByName(args.alias)
-            reg = native.registry(rgy, args.registry_name, hab)
+            reg = acdc_v2.registry(rgy, args.registry_name, hab)
             if hab is None or isinstance(hab, GroupHab):
                 raise ConfigurationError('advance currently requires an individual registry controller')
             if set(self.auths) - set(hab.kever.wits):
@@ -402,7 +402,7 @@ class Advance(native.NativeAuthor):
 
 
 def inspect(args):
-    """Build an inspection operation reporting exact retained native EXN views.
+    """Build an inspection operation reporting exact retained ACDC v2 EXN views.
 
     Args:
         args (Namespace): Existing identity/store selection and exchange SAID.
@@ -410,10 +410,10 @@ def inspect(args):
     Returns:
         list[Doer]: One cooperative inspection operation, with no custody collaborator.
 
-    Execution freshly verifies the native route before printing retained disclosure;
+    Execution freshly verifies the ACDC v2 IPEX route before printing retained disclosure;
     it neither records consent nor loads unreceived credential content."""
     def run(tymth, tock=0.0, **kwa):
-        """Verify one retained native exchange and print its original parsed views.
+        """Verify one retained ACDC v2 IPEX exchange and print its original parsed views.
 
         Args:
             tymth (Callable): HIO injected clock, unused by this local inspection.
@@ -427,16 +427,16 @@ def inspect(args):
             None. Prints sender/recipient/thread, route, and exact retained node digests/maps.
 
         Raises:
-            ConfigurationError: Exchange is unknown, route is unavailable, or fresh native
+            ConfigurationError: Exchange is unknown, route is unavailable, or fresh ACDC v2
             semantic revalidation refuses it. Missing/invalid proof errors propagate.
 
-        Native/section store contexts own cleanup; inspection creates no admission,
+        Registry, wallet, and section store contexts own cleanup; inspection creates no admission,
         observer freshness, or private derivation authority."""
         yield tock
         from keri.acdc.sectioning import SectionBaser
-        from keri.cli.common.native_exchange import Peer
+        from keri.cli.common.acdc_v2_ipex import Peer
         from keri.db import openLMDB
-        with (native.opened(args) as (hby, rgy, wallet),
+        with (acdc_v2.opened(args) as (hby, rgy, wallet),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections):
             peer = Peer(hby, rgy, wallet, sections)
             event = hby.db.exns.get((args.said,))
@@ -444,7 +444,7 @@ def inspect(args):
                 raise ConfigurationError('exchange is not accepted')
             handler = peer.exc.routes.get(event.route)
             if handler is None or not handler.verifyAccepted(args.said):
-                raise ConfigurationError('exchange failed fresh native IPEX verification')
+                raise ConfigurationError('exchange failed fresh ACDC v2 IPEX verification')
             nests = exchanging.loadParsedNestedSubstreams(hby, args.said)
             nodes = [dict(credential=node.serder.said, disclosure=node.serder.sad,
                 sha256=hashlib.sha256(node.serder.raw).hexdigest()) for node in nests]

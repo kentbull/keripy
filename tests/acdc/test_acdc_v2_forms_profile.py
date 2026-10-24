@@ -1,4 +1,4 @@
-"""Pinned detailed-type ACDC/CESR native form and independent-section profile."""
+"""Pinned detailed-type ACDC/CESR ACDC v2 form and independent-section profile."""
 import copy
 from base64 import urlsafe_b64decode
 
@@ -19,7 +19,7 @@ ISSUER = Diger(ser=b'native-profile-issuer').qb64
 
 
 def credential(kind, form='explicit'):
-    """Author one native detailed-type credential with deterministic visible content.
+    """Author one ACDC v2 detailed-type credential with deterministic visible content.
 
     Args:
         kind (str): JSON, CBOR, MessagePack, or CESR body encoding.
@@ -40,7 +40,7 @@ def credential(kind, form='explicit'):
 
 
 def wire(event):
-    """Complete one native body with the prescribed empty attachment-group foot.
+    """Complete one ACDC v2 event body with the prescribed empty attachment-group foot.
 
     Args:
         event (SerderACDC): Body whose bytes to frame.
@@ -52,12 +52,12 @@ def wire(event):
 
 @pytest.mark.parametrize('kind', KINDS)
 @pytest.mark.parametrize('form', FORMS)
-def test_native_form_roundtrip_and_dispatch(kind, form):
+def test_acdc_v2_form_roundtrip_and_dispatch(kind, form):
     """Round-trip every supported detailed form and route its exact received bytes to Sectioner, including binary CESR.
 
     Parameters:
         kind: Selected body/section serialization encoding.
-        form: Selected native detailed credential form.
+        form: Selected ACDC v2 detailed credential form.
 
     Returns:
         None. Assertions check the stated evidence boundary."""
@@ -84,7 +84,7 @@ def test_native_form_roundtrip_and_dispatch(kind, form):
 
 
 @pytest.mark.parametrize('kind', KINDS)
-def test_native_aggregate_selective_disclosure_preserves_agid(kind):
+def test_acdc_v2_aggregate_selective_disclosure_preserves_agid(kind):
     """Preserve aggregate/credential commitments when hiding members; reject member permutation under the old AGID.
 
     Parameters:
@@ -119,7 +119,7 @@ def test_native_aggregate_selective_disclosure_preserves_agid(kind):
     (messaging.sectrule, 'r', {'d': '', 'usage': {'l': 'For the intended verifier'}}),
 ])
 def test_standalone_section_roundtrip(kind, builder, field, value):
-    """Check standalone section field order, native detailed type, commitment, and binary CESR round-trip.
+    """Check standalone section field order, ACDC v2 detailed type, commitment, and binary CESR round-trip.
 
     Parameters:
         kind: Selected body/section serialization encoding.
@@ -144,7 +144,7 @@ def test_standalone_section_roundtrip(kind, builder, field, value):
 
 
 @pytest.mark.parametrize('kind', KINDS)
-def test_native_schema_verifies_actual_encoding_without_rewriting(kind):
+def test_acdc_v2_schema_verifies_actual_encoding_without_rewriting(kind):
     """Validate the schema in its actual received encoding and reject altered content without rewriting credential bytes.
 
     Parameters:
@@ -222,7 +222,7 @@ def test_sections_arrive_after_restart_with_explicit_resolution(kind, tmp_path):
             assert isinstance(minimal.sad['e'], str)
 
 
-def test_fixed_acm_is_rejected_by_native_detailed_type_profile():
+def test_fixed_acm_is_rejected_by_acdc_v2_detailed_type_profile():
     """Reject the obsolete fixed-body acm spelling rather than interpreting it as a supported detailed type.
 
     Returns:
@@ -235,12 +235,12 @@ def test_fixed_acm_is_rejected_by_native_detailed_type_profile():
 
 @pytest.mark.parametrize('kind', KINDS)
 @pytest.mark.parametrize('form', FORMS)
-def test_native_hidden_and_one_way_registry_construction(kind, form):
-    """Preserve hidden inner registry declarations across all native forms and compact representations.
+def test_acdc_v2_hidden_and_one_way_registry_construction(kind, form):
+    """Preserve hidden inner registry declarations across all ACDC v2 forms and compact representations.
 
     Parameters:
         kind: Selected body/section serialization encoding.
-        form: Selected native detailed credential form.
+        form: Selected ACDC v2 detailed credential form.
 
     Returns:
         None. Assertions check the stated evidence boundary."""
@@ -262,7 +262,7 @@ def test_native_hidden_and_one_way_registry_construction(kind, form):
 
 
 @pytest.mark.parametrize('kind', KINDS)
-def test_native_bundled_schema_commitment_uses_section_encoding(kind):
+def test_acdc_v2_bundled_schema_commitment_uses_section_encoding(kind):
     """Validate bundled schema resource commitments in the enclosing section encoding and reject content tampering.
 
     Parameters:
@@ -381,8 +381,8 @@ def test_required_aggregate_does_not_expand_an_already_disclosed_view(kind):
         assert owner.received(view).raw == received.raw
 
 
-def test_fragmented_mixed_native_stream_routes_to_concrete_owners():
-    """Route fragmented interleaved native TEL and section messages through their distinct concrete owners.
+def test_fragmented_mixed_acdc_v2_stream_routes_to_concrete_owners():
+    """Route fragmented interleaved ACDC v2 registry TEL and section messages through their distinct concrete owners.
 
     Returns:
         None. Assertions check the stated evidence boundary."""

@@ -1,4 +1,6 @@
-"""Native service proof acquisition uses real processors and cooperative sockets."""
+"""ACDC v2 evidence service proof acquisition uses real processors and cooperative sockets."""
+import socket
+
 import pytest
 from falcon import testing
 from hio.base import doing
@@ -15,11 +17,11 @@ from keri.core import Blinder, Counter, Codens, Parser, Diger, SerderKERI, Serde
 from keri.kering import ConfigurationError
 
 
-def native(*events):
-    """Serialize native TEL bodies with complete empty attachment-group feet.
+def frame_v2_events(*events):
+    """Serialize ACDC v2 registry TEL bodies with complete empty attachment-group feet.
 
     Args:
-        *events: Ordered native registry events to send to actual service intake.
+        *events: Ordered ACDC v2 registry events to send to actual service intake.
 
     Returns:
         bytes: Concatenated exact bodies and prescribed v2 foot counters."""
@@ -28,7 +30,7 @@ def native(*events):
 
 
 def issue(hab):
-    """Create a genuinely KEL-anchored native registry and blinded issuance.
+    """Create a genuinely KEL-anchored ACDC v2 registry and blinded issuance.
 
     Args:
         hab (Hab): Controller creating both TEL and signed sealing key events.
@@ -51,7 +53,7 @@ def post(client, hab, route, query=None, path='/', suffix=b''):
     Args:
         client (TestClient): Registrar or observer app under test.
         hab (Hab): Requester signing the query.
-        route (str): Native service query resource.
+        route (str): ACDC v2 evidence service query resource.
         query (dict | None): Query attributes.
         path (str): HTTP route, default root.
         suffix (bytes): Deliberately appended framing material for hostile-input cases.
@@ -79,7 +81,7 @@ def test_resolved_wrong_anchor_locator_is_not_dropped_at_service_intake(contextT
         wrong = hab.kever.serder
         ctx = contextType(registrar)
         try:
-            assert not ctx.ingest(hab.replay(gvrsn=Vrsn_2_0) + native(rip))['rejected']
+            assert not ctx.ingest(hab.replay(gvrsn=Vrsn_2_0) + frame_v2_events(rip))['rejected']
             supplied = messagize(update, bonds=[SealSource(s=wrong.snh, d=wrong.said)],
                                  gvrsn=Vrsn_2_0)
             result = ctx.ingest(supplied)
@@ -88,7 +90,7 @@ def test_resolved_wrong_anchor_locator_is_not_dropped_at_service_intake(contextT
             assert ctx.store.event(update.said) is None
             # The bad unsigned hint is not retained as poison. Normal discovery
             # of the actual matching controller anchor still permits acceptance.
-            result = ctx.ingest(native(update))
+            result = ctx.ingest(frame_v2_events(update))
             assert not result['rejected'] and not result['pending']
             assert ctx.store.headEvent(rip.said).said == update.said
         finally:
@@ -114,7 +116,7 @@ def test_authorized_foreign_hosting_and_independent_cache(tmp_path):
         obs = Observer(observer, readers=[controller.pre], observations=observations,
                        urls=['http://registrar/'])
         try:
-            # Ordinary authenticated KEL bootstrap; never populate accepted native tables.
+            # Ordinary authenticated KEL bootstrap; never populate accepted ACDC v2 registry tables.
             assert not reg.ingest(controller.replay(gvrsn=Vrsn_2_0))['rejected']
             assert not reg.ingest(observerHab.replay(gvrsn=Vrsn_2_0))['rejected']
             assert not obs.ingest(controller.replay(gvrsn=Vrsn_2_0))['rejected']
@@ -128,7 +130,7 @@ def test_authorized_foreign_hosting_and_independent_cache(tmp_path):
                 headers={'Content-Type': CESR_CONTENT_TYPE}).status_code == 401
             assert post(inner, observerHab, 'tels/bulk', suffix=signedQuery(observerHab, 'tels/bulk')).status_code == 400
             published = post(inner, controller, 'tels/publish',
-                             {'stream': native(rip, update).decode()}, '/ingest')
+                             {'stream': frame_v2_events(rip, update).decode()}, '/ingest')
             assert published.status_code == 200
             assert published.json['accepted'][rip.said] == 2
             assert not registrar.habByPre(controller.pre)
@@ -137,7 +139,7 @@ def test_authorized_foreign_hosting_and_independent_cache(tmp_path):
             assert post(cache, controller, 'tels', {'i': rip.said}).status_code == 404
             bulk = post(inner, observerHab, 'tels/bulk')
             assert bulk.status_code == 200
-            # A separate store acquires both accepted KEL and native TEL over the public contract.
+            # A separate store acquires both accepted KEL and ACDC v2 registry TEL over the public contract.
             result = obs.observe('http://registrar/', bulk.content)
             assert not result['pending'] and not result['rejected']
             assert obs.store.head(rip.said).qb64 == update.said
@@ -149,7 +151,7 @@ def test_authorized_foreign_hosting_and_independent_cache(tmp_path):
             assert previous.heads == {rip.said: update.said}
             # An old valid prefix or omitted known scope is not a fresh
             # observation of the cached newer head.
-            obs.observe('http://registrar/', native(rip))
+            obs.observe('http://registrar/', frame_v2_events(rip))
             assert observations.observations.get(('http://registrar/',)) == previous
             obs.observe('http://registrar/', b'')
             assert observations.observations.get(('http://registrar/',)) == previous
@@ -192,7 +194,7 @@ def test_reopened_observer_requires_observation_from_active_registrar_url(tmp_pa
     with openHby(name='source-rotation-issuer', version=Vrsn_2_0) as issuer:
         controller = issuer.makeHab(name='issuer')
         rip, update = issue(controller)
-        public = controller.replay(gvrsn=Vrsn_2_0) + native(rip, update)
+        public = controller.replay(gvrsn=Vrsn_2_0) + frame_v2_events(rip, update)
 
         def context(hby, urls):
             """Reopen one persistent observer using the explicitly active registrar URLs.
@@ -239,8 +241,8 @@ def test_reopened_observer_requires_observation_from_active_registrar_url(tmp_pa
                 obs.close()
 
 
-def test_pending_native_evidence_survives_reopen_and_remains_unservable(tmp_path):
-    """Persist incomplete native evidence across restart without serving it as accepted or observed state.
+def test_pending_acdc_v2_registry_evidence_survives_reopen_and_remains_unservable(tmp_path):
+    """Persist incomplete ACDC v2 evidence across restart without serving it as accepted or observed state.
 
     Parameters:
         tmp_path: Pytest-owned persistent registry/observation directories for restart assertions.
@@ -256,7 +258,7 @@ def test_pending_native_evidence_survives_reopen_and_remains_unservable(tmp_path
         reger = RegBaser(name='pending-reg', headDirPath=str(tmp_path), temp=False)
         obs = Observer(receiver, readers=[reader.pre], reger=reger, urls=['http://registrar/'])
         try:
-            result = obs.observe('http://registrar/', native(rip, update))
+            result = obs.observe('http://registrar/', frame_v2_events(rip, update))
             assert result['pending'] and not result['accepted']
             assert not obs.observations.observations.get(('http://registrar/',))
             assert post(testing.TestClient(obs.app), reader, 'tels', {'i': rip.said}).status_code == 503
@@ -302,9 +304,13 @@ def test_cooperative_socket_poll_and_cancellation():
                 requests.append(req.path)
 
         reg.app.add_middleware(Requests())
-        server = http.Server(host='127.0.0.1', port=0, app=reg.app)
+        # HIO interprets port 0 as its default HTTP port, not an ephemeral port.
+        with socket.socket() as reserve:
+            reserve.bind(('127.0.0.1', 0))
+            port = reserve.getsockname()[1]
+        server = http.Server(host='127.0.0.1', port=port, app=reg.app)
         try:
-            assert not reg.ingest(controller.replay(gvrsn=Vrsn_2_0) + native(rip, update))['rejected']
+            assert not reg.ingest(controller.replay(gvrsn=Vrsn_2_0) + frame_v2_events(rip, update))['rejected']
             assert not reg.ingest(observerHab.replay(gvrsn=Vrsn_2_0))['rejected']
             assert server.reopen()
             url = f'http://127.0.0.1:{server.servant.ha[1]}/'
@@ -340,8 +346,12 @@ def test_cooperative_socket_poll_and_cancellation():
             assert obs.observations.observations.get((url,)).heads[rip.said] == update.said
             assert puller.client is None
             # A second owner is cancelled while its request cannot complete.
-            stalled = RegistrarPuller(observerHab, obs, ['http://127.0.0.1:1/'], timeout=10)
-            doing.Doist(real=True, limit=0.1, tock=0.01).do(doers=[stalled])
+            with socket.socket() as waiting:
+                waiting.bind(('127.0.0.1', 0))
+                waiting.listen()
+                stalled_url = f'http://127.0.0.1:{waiting.getsockname()[1]}/'
+                stalled = RegistrarPuller(observerHab, obs, [stalled_url], timeout=10)
+                doing.Doist(real=True, limit=0.1, tock=0.01).do(doers=[stalled])
             assert stalled.client is None
         finally:
             server.close()
@@ -377,7 +387,7 @@ def test_witness_dependency_retains_following_tel_and_recovers_after_store_reope
         reger = RegBaser(name='pending-witness-service', headDirPath=str(tmp_path))
         ctx = Registrar(receiver, reger=reger)
         try:
-            result = ctx.ingest(kel + native(rip, update))
+            result = ctx.ingest(kel + frame_v2_events(rip, update))
             assert not result['rejected']
             assert result['pending'][f'kel:{controller.pre}'] == 3
             assert result['pending'][rip.said] == 2
@@ -418,7 +428,7 @@ def test_conflicting_supplied_sibling_is_rejected_after_escrow_resolution():
         controller.interact(data=[dict(s=other.sad['n'], d=other.said)])
         ctx = Registrar(receiver)
         try:
-            result = ctx.ingest(controller.replay(gvrsn=Vrsn_2_0) + native(first, other, rip))
+            result = ctx.ingest(controller.replay(gvrsn=Vrsn_2_0) + frame_v2_events(first, other, rip))
             assert result['accepted'] == {rip.said: 2}
             assert result['rejected'] == {rip.said: 1}
             assert result['pending'] == {}
@@ -446,8 +456,8 @@ def test_occupied_slot_rival_is_pending_until_signed_anchor_arrives():
         ctx = Registrar(receiver)
         try:
             assert not ctx.ingest(controller.replay(gvrsn=Vrsn_2_0)
-                                  + native(rip, first))['rejected']
-            result = ctx.ingest(native(rival))
+                                  + frame_v2_events(rip, first))['rejected']
+            result = ctx.ingest(frame_v2_events(rival))
             assert result == dict(accepted={}, pending={rip.said: 1}, rejected={}, heads={})
             assert ctx.reger.conflicts.get((rip.said, '1')) is None
             assert ctx.store.head(rip.said).qb64 == first.said
@@ -458,7 +468,7 @@ def test_occupied_slot_rival_is_pending_until_signed_anchor_arrives():
             assert not result['pending'] and not result['rejected']
             assert ctx.reger.conflicts.get((rip.said, '1')).raw == rival.raw
             assert ctx.store.head(rip.said).qb64 == first.said
-            assert ctx.ingest(native(rival))['rejected']
+            assert ctx.ingest(frame_v2_events(rival))['rejected']
 
             # A KEL seal may mention the rival; accepted TEL cloning must not
             # include the rival's body or manufacture an accepted ordinal.
@@ -486,7 +496,7 @@ def test_old_unanchored_rival_does_not_monopolize_observer_freshness():
           openHby(name='observer-rival-receiver', version=Vrsn_2_0) as receiver):
         controller = issuer.makeHab(name='controller')
         rip, first = issue(controller)
-        public = controller.replay(gvrsn=Vrsn_2_0) + native(rip, first)
+        public = controller.replay(gvrsn=Vrsn_2_0) + frame_v2_events(rip, first)
         obs = Observer(receiver, urls=[url])
         try:
             assert not obs.observe(url, public)['rejected']
@@ -494,7 +504,7 @@ def test_old_unanchored_rival_does_not_monopolize_observer_freshness():
             obs.observations.observations.pin((url,), stale)
             rival = blindate(regid=rip.said, prior=rip.said,
                              blid=Diger(ser=b'unanchored rival').qb64)
-            supplied = obs.observe(url, native(rival))
+            supplied = obs.observe(url, frame_v2_events(rival))
             assert supplied['pending'] == {rip.said: 1}
             assert obs.observations.observations.get((url,)) == stale
 
@@ -511,7 +521,7 @@ def test_old_unanchored_rival_does_not_monopolize_observer_freshness():
                               blid=Diger(ser=b'future state').qb64, sn=3)
             controller.interact(data=[dict(s=future.sad['n'], d=future.said)])
             waiting = obs.ingest(controller.msgOwnEvent(sn=controller.kever.sn,
-                                                       gvrsn=Vrsn_2_0) + native(future))
+                                                       gvrsn=Vrsn_2_0) + frame_v2_events(future))
             assert waiting['pending'] == {rip.said: 1}
             assert obs.reger.ooes.get(keys=rip.said, on=3) == [(future.said,)]
             obs.observations.observations.pin((url,), stale)

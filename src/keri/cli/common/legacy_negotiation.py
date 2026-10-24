@@ -1,8 +1,8 @@
 """Legacy IPEX negotiation composed from existing v1 protocol constructors.
 
 This fills the former apply/offer/agree CLI stubs and provides explicit direct
-admission through the existing legacy credential verifier. Native disclosure plans and
-registry openings stay in the native command path; v1 uses protocoling's schema,
+admission through the existing legacy credential verifier. ACDC v2 disclosure plans and
+registry openings stay in the ACDC v2 command path; v1 uses protocoling's schema,
 attributes, metadata credential, and prior-message contracts.
 """
 import json
@@ -83,7 +83,7 @@ class Negotiation(doing.DoDoer):
 
         Owned Habery, optional legacy Regery/Noter, and delivery child work close on every
         exit. Existing unencrypted Keeper mode is preserved. Transport completion remains
-        distinct from remote acceptance; native plans/openings require explicit --v2."""
+        distinct from remote acceptance; ACDC v2 plans/openings require explicit --acdc-v2."""
         self.wind(tymth)
         self.tock = tock
         yield tock
@@ -93,9 +93,9 @@ class Negotiation(doing.DoDoer):
         unsupported = ('plan', 'observer', 'registry', 'proposal', 'proposal_output',
                        'from_grant', 'disclose')
         if self.verb != 'admit' and args.time:
-            raise ConfigurationError('explicit negotiation timestamps require --v2')
+            raise ConfigurationError('explicit negotiation timestamps require --acdc-v2')
         if any(getattr(args, key, None) for key in unsupported):
-            raise ConfigurationError('native disclosure options and explicit timestamps require --v2')
+            raise ConfigurationError('ACDC v2 disclosure options and explicit timestamps require --acdc-v2')
         keeper = Keeper(name=args.name, base=args.base, reopen=True)
         try:
             aeid = keeper.gbls.get('aeid')

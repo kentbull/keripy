@@ -1,1 +1,1 @@
-"""Run a native public-evidence registrar."""
+"""Run an ACDC v2 public-evidence registrar."""

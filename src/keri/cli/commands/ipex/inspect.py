@@ -1,4 +1,4 @@
-"""Inspect authenticated retained native IPEX evidence and exact disclosure views."""
+"""Inspect authenticated retained ACDC v2 IPEX evidence and exact disclosure views."""
 import argparse
 from ...common import Parsery, public_evidence
 

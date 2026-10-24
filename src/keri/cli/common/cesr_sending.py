@@ -1,7 +1,7 @@
-"""Bounded direct transport shared by native and legacy operator commands.
+"""Bounded direct transport shared by ACDC v2 and legacy operator commands.
 
 The send-buffer boundary follows app.agenting.TCPMessenger; HTTP request and
-child ownership were extracted from the native IPEX command adapter.
+child ownership were extracted from the ACDC v2 IPEX command adapter.
 """
 from urllib.parse import urlsplit
 from hio.core import http, tcp

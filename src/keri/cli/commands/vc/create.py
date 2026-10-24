@@ -6,7 +6,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ...common import existing
-from ...common import native
+from ...common import acdc_v2
 from ...common.parsing import Parsery
 
 from ....kering import ConfigurationError, Vrsn_1_0
@@ -50,20 +50,20 @@ parser.add_argument("--private-credential-nonce", help="nonce for vc",
 parser.add_argument("--private-subject-nonce", help="nonce for subject",
                     action="store")
 parser.add_argument("--time", help="timestamp for the credential creation", required=False, default=None)
-native.options(parser, author=True)
-parser.add_argument('--unblinded', action='store_true', help='use an explicit native upd issuance')
+acdc_v2.options(parser, author=True)
+parser.add_argument('--unblinded', action='store_true', help='use an explicit ACDC v2 upd issuance')
 
 
 def issueCredential(args):
-    """Route credential creation to explicit native authoring or legacy issuance.
+    """Route credential creation to explicit ACDC v2 authoring or legacy issuance.
 
     args carries identity/registry, credential data, schema, edges/rules and CLI
-    controls. Return lifecycle Doers. --v2 selects NativeAuthor, including its
+    controls. Return lifecycle Doers. --acdc-v2 selects AcdcV2Author, including its
     explicit public/blinded policy; otherwise retain legacy JSON/data validation
     and issuance. Invalid input or core/authentication failures propagate without
     being interpreted as accepted issuance."""
-    if getattr(args, 'native', False):
-        return [native.NativeAuthor(args, 'create')]
+    if getattr(args, 'acdc_v2', False):
+        return [acdc_v2.AcdcV2Author(args, 'create')]
     name = args.name
     data = None
     rules = None

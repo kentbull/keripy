@@ -1,4 +1,4 @@
-"""Separate KLI invocations negotiate, admit and present retained native proofs."""
+"""Separate KLI invocations negotiate, admit and present retained ACDC v2 IPEX proofs."""
 import json
 import os
 import subprocess
@@ -14,7 +14,7 @@ PASSCODE = '0123456789abcdefghijk'
 
 
 def invoke(name, *args):
-    """Run an installed native IPEX command over one independently reopened fixture store.
+    """Run an installed ACDC v2 IPEX command over one independently reopened fixture store.
 
     Args:
         name (str): Isolated identity under native-ipex-cli.
@@ -37,7 +37,7 @@ def invoke(name, *args):
     return [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
 
 
-def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
+def test_acdc_v2_cli_full_negotiation_and_holder_presentation(tmp_path):
     """Negotiate/admit with real CLI processes, present retained proof without salt, and separately refresh by supplied opening and explicit provisioned derivation.
 
     Parameters:
@@ -58,31 +58,31 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
                  bran=PASSCODE, version=Vrsn_2_0) as hby:
         Parser(kvy=Kevery(db=hby.db, lax=False, local=False), version=Vrsn_2_0).parse(
             ims=bytearray((tmp_path / 'holder.kel').read_bytes()))
-    invoke(names['issuer'], 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer', '-r', 'r',
         '--discloser', prefixes['holder'])
-    issued = invoke(names['issuer'], 'vc', 'create', '--native', '-a', 'issuer', '-r', 'r',
+    issued = invoke(names['issuer'], 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'r',
                     '--data', '{"status":"authorized"}')[0]
     said = issued['credential']
     credentialFile, evidence = tmp_path / 'credential.json', tmp_path / 'evidence.cesr'
-    invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
         '--said', said, '--output', str(credentialFile))
-    invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
         '--said', said, '--full', '--derive', '--output', str(evidence))
     credential = SerderACDC(raw=credentialFile.read_bytes())
     plan = json.dumps([[[credential.schema['$id'], '/', ['']]]])
     application = tmp_path / 'apply.cesr'
-    app = invoke(names['holder'], 'ipex', 'apply', '--native', '-a', 'holder',
+    app = invoke(names['holder'], 'ipex', 'apply', '--acdc-v2', '-a', 'holder',
         '-r', prefixes['issuer'], '--plan', plan, '--output', str(application))[0]
     offered = tmp_path / 'offer.cesr'
-    offer = invoke(names['issuer'], 'ipex', 'offer', '--native', '-a', 'issuer',
+    offer = invoke(names['issuer'], 'ipex', 'offer', '--acdc-v2', '-a', 'issuer',
         '-r', prefixes['holder'], '-s', said, '--prior', app['exchange'],
         '--input', str(application), '--output', str(offered))[0]
     agreement = tmp_path / 'agree.cesr'
-    agree = invoke(names['holder'], 'ipex', 'agree', '--native', '-a', 'holder',
+    agree = invoke(names['holder'], 'ipex', 'agree', '--acdc-v2', '-a', 'holder',
         '-s', offer['exchange'], '--input', str(offered), '--output', str(agreement))[0]
     granted = tmp_path / 'grant.cesr'
     implicit = subprocess.run([sys.executable, '-m', 'keri.cli.kli', 'ipex', 'grant',
-        '--v2', '-a', 'issuer', '-r', prefixes['holder'], '-s', said,
+        '--acdc-v2', '-a', 'issuer', '-r', prefixes['holder'], '-s', said,
         '--output', str(granted), '--name', names['issuer'], '--base', 'native-ipex-cli'],
         env=dict(os.environ, KLI_KEYSTORE_PASSCODE=PASSCODE), capture_output=True, text=True, timeout=20)
     assert implicit.returncode != 0
@@ -93,23 +93,23 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
     originalOpening = tmp_path / 'original-opening.cesr'
     invoke(names['issuer'], 'vc', 'registry', 'opening', '-r', 'r', '-s', said,
            '--ordinal', '1', '--output', str(originalOpening))
-    grant = invoke(names['issuer'], 'ipex', 'grant', '--native', '-a', 'issuer',
+    grant = invoke(names['issuer'], 'ipex', 'grant', '--acdc-v2', '-a', 'issuer',
         '-r', prefixes['holder'], '-s', said, '--opening', str(originalOpening), '--prior', agree['exchange'],
         '--input', str(agreement), '--output', str(granted))[0]
     incoming = tmp_path / 'incoming.cesr'
     incoming.write_bytes(evidence.read_bytes() + granted.read_bytes())
-    admitted = invoke(names['holder'], 'ipex', 'admit', '--native', '-a', 'holder',
+    admitted = invoke(names['holder'], 'ipex', 'admit', '--acdc-v2', '-a', 'holder',
         '-s', grant['exchange'], '--input', str(incoming))[0]
     assert admitted['admitted'] is True
     # New process reopens encrypted wallet and uses the received opening. The
     # holder has never received or imported the issuer's long-lived salt.
     presentation = tmp_path / 'presentation.cesr'
-    presented = invoke(names['holder'], 'ipex', 'grant', '--native', '-a', 'holder',
+    presented = invoke(names['holder'], 'ipex', 'grant', '--acdc-v2', '-a', 'holder',
         '-r', prefixes['verifier'], '-s', said, '--from-grant', grant['exchange'],
         '--output', str(presentation))[0]
     assert presented['exchange'] != grant['exchange']
     incoming.write_bytes(evidence.read_bytes() + presentation.read_bytes())
-    assert invoke(names['verifier'], 'ipex', 'admit', '--native', '-a', 'verifier',
+    assert invoke(names['verifier'], 'ipex', 'admit', '--acdc-v2', '-a', 'verifier',
         '-s', presented['exchange'], '--input', str(incoming))[0]['admitted'] is True
     # Author a genuine state-preserving update, then provision the designated
     # holder and let a new CLI process derive the fresh opening. The admitted
@@ -134,32 +134,32 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
             rgy.close()
     refreshed = tmp_path / 'refreshed.cesr'
     private = tmp_path / 'custody.json'
-    invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
         '--said', said, '--kels', '--tels', '--output', str(refreshed))
     # A supplied event opening is a narrower capability than a derivation salt.
     # The holder can refresh and present it before any custody is imported.
     specific = tmp_path / 'event-opening.cesr'
     specific.write_bytes(opening.qb64b)
     suppliedPresentation = tmp_path / 'supplied-presentation.cesr'
-    supplied = invoke(names['holder'], 'ipex', 'grant', '--native', '-a', 'holder',
+    supplied = invoke(names['holder'], 'ipex', 'grant', '--acdc-v2', '-a', 'holder',
         '-r', prefixes['verifier'], '-s', said, '--from-grant', grant['exchange'],
         '--refresh', '--opening', str(specific), '--input', str(refreshed),
         '--output', str(suppliedPresentation))[0]
     incoming.write_bytes(refreshed.read_bytes() + suppliedPresentation.read_bytes())
-    assert invoke(names['verifier'], 'ipex', 'admit', '--native', '-a', 'verifier',
+    assert invoke(names['verifier'], 'ipex', 'admit', '--acdc-v2', '-a', 'verifier',
         '-s', supplied['exchange'], '--input', str(incoming))[0]['admitted'] is True
-    invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
         '--custody', '--output', str(private))
-    invoke(names['holder'], 'vc', 'import', '--native', '--custody', '--registry', reg.regk,
+    invoke(names['holder'], 'vc', 'import', '--acdc-v2', '--custody', '--registry', reg.regk,
         '--controller', prefixes['issuer'], '--discloser', prefixes['holder'],
         '--file', str(private), '--passcode', PASSCODE)
     fresh = tmp_path / 'fresh-presentation.cesr'
-    current = invoke(names['holder'], 'ipex', 'grant', '--native', '-a', 'holder',
+    current = invoke(names['holder'], 'ipex', 'grant', '--acdc-v2', '-a', 'holder',
         '-r', prefixes['verifier'], '-s', said, '--from-grant', grant['exchange'],
         '--refresh', '--derive', '--input', str(refreshed), '--output', str(fresh))[0]
     assert current['exchange'] != presented['exchange']
     incoming.write_bytes(refreshed.read_bytes() + fresh.read_bytes())
-    assert invoke(names['verifier'], 'ipex', 'admit', '--native', '-a', 'verifier',
+    assert invoke(names['verifier'], 'ipex', 'admit', '--acdc-v2', '-a', 'verifier',
         '-s', current['exchange'], '--input', str(incoming))[0]['admitted'] is True
 
 
@@ -177,20 +177,20 @@ def test_public_upd_cli_grant_and_real_holder_admission(tmp_path):
         with openHby(name=name, base='native-ipex-cli', temp=False,
                      bran=PASSCODE, version=Vrsn_2_0) as hby:
             prefixes[role] = hby.makeHab(name=role, version=Vrsn_2_0).pre
-    invoke(names['issuer'], 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'r')
-    issued = invoke(names['issuer'], 'vc', 'create', '--native', '-a', 'issuer', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'registry', 'incept', '--acdc-v2', '-a', 'issuer', '-r', 'r')
+    issued = invoke(names['issuer'], 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'r',
                     '--unblinded', '--data', '{"status":"authorized"}')[0]
     public, granted, incoming = (tmp_path / name for name in ('public.cesr', 'grant.cesr', 'incoming.cesr'))
-    invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
         '--said', issued['credential'], '--kels', '--tels', '--output', str(public))
-    grant = invoke(names['issuer'], 'ipex', 'grant', '--native', '-a', 'issuer',
+    grant = invoke(names['issuer'], 'ipex', 'grant', '--acdc-v2', '-a', 'issuer',
         '-r', prefixes['holder'], '-s', issued['credential'], '--output', str(granted))[0]
     incoming.write_bytes(public.read_bytes() + granted.read_bytes())
-    assert invoke(names['holder'], 'ipex', 'admit', '--native', '-a', 'holder',
+    assert invoke(names['holder'], 'ipex', 'admit', '--acdc-v2', '-a', 'holder',
         '-s', grant['exchange'], '--input', str(incoming))[0]['admitted'] is True
 
 
-def test_native_group_cli_approves_exact_exchange_after_reopen(tmp_path):
+def test_acdc_v2_group_cli_approves_exact_exchange_after_reopen(tmp_path):
     """Reopen pending real group exchange proposals and require explicit member approval of their exact child bytes.
 
     Parameters:
@@ -225,7 +225,7 @@ def test_native_group_cli_approves_exact_exchange_after_reopen(tmp_path):
         credential = acdcmap(israid=groups[0].pre, attribute=dict(d='', role='test'))
         plan = json.dumps([[[credential.schema['$id'], '/', ['']]]])
     first, second = tmp_path / 'first.cesr', tmp_path / 'second.cesr'
-    common = ['ipex', 'apply', '--native', '-a', 'group', '-r', recipient, '--plan', plan]
+    common = ['ipex', 'apply', '--acdc-v2', '-a', 'group', '-r', recipient, '--plan', plan]
     pending = subprocess.run([sys.executable, '-m', 'keri.cli.kli', *common,
         '--name', names[0], '--base', 'native-ipex-cli', '--timeout', '0.2',
         '--proposal-output', str(first)], env=dict(os.environ, KLI_KEYSTORE_PASSCODE=PASSCODE),

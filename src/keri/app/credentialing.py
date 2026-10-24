@@ -1,4 +1,4 @@
-"""Explicit native credential inventory over ordinary LMDB application records.
+"""Explicit ACDC v2 credential inventory over ordinary LMDB application records.
 
 Private derivation custody is an optional registry_custody collaborator. Ordinary
 issued/admitted inventory and retained disclosure retrieval never load its salt.
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from base64 import b64encode, b64decode
 
 from keri.acdc import regeventing
-from keri.acdc.ipexing import NativeVerification
+from keri.acdc.ipexing import AcdcV2IpexVerification
 from keri.core import Blinder, BoundState, Number, SerderACDC
 from keri.db import dbing, koming, subing
 from keri.help import helping
@@ -83,15 +83,15 @@ class Wallet:
     openings. Inventory itself never invokes it or reads encrypted salt records.
     """
     def __init__(self, hby, rgy, *, exc=None, db=None, verification=None, custody=None):
-        """Compose local inventory and native verification without loading secrets.
+        """Compose local inventory and ACDC v2 IPEX verification without loading secrets.
 
         Args:
             hby (Habery): Authenticated local identity and retained exchange owner.
-            rgy (Regery): Native registry evidence owner.
+            rgy (Regery): ACDC v2 registry evidence owner.
             exc (Exchanger | None): Router used to check retained completion.
             db (WalletBaser | None): Existing inventory/custody store, or create one.
-            verification (NativeVerification | None): Explicit context returned by
-                native/app IPEX loadHandlers. None uses ordinary default policy;
+            verification (AcdcV2IpexVerification | None): Explicit context returned by
+                app.ipexing.loadHandlers for ACDC v2. None uses ordinary default policy;
                 configured applications must pass their actual shared context.
             custody (RegistryCustody | None): Explicit optional private capability.
                 None is normal for ordinary holders and public-only issuers.
@@ -102,7 +102,7 @@ class Wallet:
         self.hby, self.rgy, self.exc = hby, rgy, exc
         self.custody = custody
         self.verification = (verification if verification is not None
-                             else NativeVerification(hby, rgy))
+                             else AcdcV2IpexVerification(hby, rgy))
         self.db = db if db is not None else WalletBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
 
@@ -155,7 +155,7 @@ class Wallet:
             raise ValidationError('issuance update is still pending')
         old = self.db.issued.get((acdc.said,))
         if blinder is not None and (event.ilk != 'bup' or not isinstance(blinder, Blinder)):
-            raise ValidationError('explicit issuance opening requires a native blinded update')
+            raise ValidationError('explicit issuance opening requires an ACDC v2 blinded update')
         if old is not None and blinder is None:
             # Exact retained history can be inspected after custody loss/rotation.
             # This is not a fresh proof or current-standing assertion.
@@ -204,11 +204,11 @@ class Wallet:
         return acdc
 
     def _accepted(self, said, route):
-        """Require authenticated completed native exchange evidence at an exact route.
+        """Require authenticated completed ACDC v2 IPEX exchange evidence at an exact route.
 
             Args:
                 said (str): Retained EXN SAID.
-                route (str): Expected native IPEX route for this consent operation.
+                route (str): Expected ACDC v2 IPEX route for this consent operation.
 
             Returns:
                 SerderKERI: Authenticated retained exchange body.
@@ -218,29 +218,29 @@ class Wallet:
                 ValidationError: Version, identity, route, completion, or signatures fail.
 
             This check is insufficient for new admission by itself: _verification must
-            additionally re-run concrete native credential semantics under current policy."""
+            additionally re-run concrete ACDC v2 credential semantics under current policy."""
         if self.exc is None or self.exc.hby is not self.hby or route not in self.exc.routes:
             raise ConfigurationError('the wallet requires its actual IPEX Exchanger')
         exn = self.hby.db.exns.get((said,))
         if (exn is None or exn.said != said or exn.route != route
                 or exn.pvrsn.major != 2 or not self.exc.complete(said)):
-            raise ValidationError('accepted native IPEX evidence is required')
+            raise ValidationError('accepted ACDC v2 IPEX evidence is required')
         exchanging.verify(self.hby, exn)
         return exn
 
     def _verification(self):
-        """Return the concrete native context for fresh semantic acceptance.
+        """Return the concrete ACDC v2 IPEX context for fresh semantic acceptance.
 
         Returns:
-            NativeVerification: Configured proof-and-policy validation context.
+            AcdcV2IpexVerification: Configured proof-and-policy validation context.
 
         Raises:
             ConfigurationError: Context is arbitrary or belongs to another owner.
         """
         context = self.verification
-        if (type(context) is not NativeVerification or context.hby is not self.hby
+        if (type(context) is not AcdcV2IpexVerification or context.hby is not self.hby
                 or context.rgy is not self.rgy):
-            raise ConfigurationError('configured concrete native IPEX verification is required')
+            raise ConfigurationError('configured concrete ACDC v2 IPEX verification is required')
         return context
 
     def recordAdmission(self, grant, admit, *, consent=False):
@@ -260,7 +260,7 @@ class Wallet:
             AdmittedCredential: Existing identical consent or newly persisted row.
 
         Raises:
-            ValidationError: Consent, evidence, response linkage, or current native
+            ValidationError: Consent, evidence, response linkage, or current ACDC v2 IPEX
                 semantic acceptance is invalid.
             ConfigurationError: Exchange or concrete verification owner is absent.
         """
@@ -286,7 +286,7 @@ class Wallet:
         verification = self._verification()
         for route, message in (('/ipex/grant', gexn), ('/ipex/admit', aexn)):
             if not verification.verifyAccepted(message.said, route):
-                raise ValidationError('native IPEX semantic acceptance is required before wallet admission')
+                raise ValidationError('ACDC v2 IPEX semantic acceptance is required before wallet admission')
         record = AdmittedCredential(origins[0], grant, admit, holder, helping.nowIso8601())
         # Only this application environment participates in the transaction.
         with self.db.env.begin(write=True) as txn:

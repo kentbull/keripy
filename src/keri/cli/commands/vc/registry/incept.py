@@ -4,7 +4,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ....common import Parsery, setupHby
-from ....common import native
+from ....common import acdc_v2
 
 from .....app import (GroupHab, Notifier, MailboxDirector,
                       HaberyDoer, Multiplexor, Counselor,
@@ -37,21 +37,21 @@ parser.add_argument('--alias', '-a', help='human readable alias for the new iden
 parser.add_argument('--usage', '-u', help='For multisig issuers, a message to other participants about how this'
                                           ' registry is to be used',
                     default=None)
-native.options(parser, author=True)
-parser.add_argument('--discloser', help='native registry designated disclosure identifier', default=None)
+acdc_v2.options(parser, author=True)
+parser.add_argument('--discloser', help='ACDC v2 registry designated disclosure identifier', default=None)
 parser.add_argument('--with-custody', action='store_true',
-                    help='explicitly provision encrypted per-registry derivation custody (native only)')
+                    help='explicitly provision encrypted per-registry derivation custody (ACDC v2 only)')
 
 
 def registryIncept(args):
-    """Select native registry authoring or the established legacy inception worker.
+    """Select ACDC v2 registry authoring or the established legacy inception worker.
 
     args supplies controller alias, registry name, witnesses/backers and CLI policy.
-    Return lifecycle Doers; native custody is provisioned only with --with-custody.
+    Return lifecycle Doers; ACDC v2 custody is provisioned only with --with-custody.
     The legacy conflicting no-backers/backers check retains its printed error and
     -1 return. Core authoring/authentication failures propagate from scheduled work."""
-    if getattr(args, 'native', False):
-        return [native.NativeAuthor(args, 'incept')]
+    if getattr(args, 'acdc_v2', False):
+        return [acdc_v2.AcdcV2Author(args, 'incept')]
     name = args.name
     alias = args.alias
     bran = args.bran

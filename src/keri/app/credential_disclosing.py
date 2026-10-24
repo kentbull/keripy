@@ -1,4 +1,4 @@
-"""Compose event-specific native registry proofs from explicit capabilities.
+"""Compose event-specific ACDC v2 registry proofs from explicit capabilities.
 
 Extracted from ExchangeDoer.registryOrigin at a6539208. The application supplies
 retained openings and, only when selected, a derivation callable. This module

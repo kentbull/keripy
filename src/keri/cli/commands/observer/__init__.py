@@ -1,1 +1,1 @@
-"""Run an independent native registry observer."""
+"""Run an independent ACDC v2 registry observer."""

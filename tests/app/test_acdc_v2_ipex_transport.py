@@ -1,11 +1,11 @@
-"""Exercise the native CLI sender against actual sockets without wallet setup."""
+"""Exercise the ACDC v2 IPEX CLI sender against actual sockets without wallet setup."""
 from types import SimpleNamespace
 
 import pytest
 from hio.base import doing
 from hio.core import tcp
 
-from keri.cli.common.native_exchange import ExchangeDoer
+from keri.cli.common.acdc_v2_ipex import ExchangeDoer
 from keri.kering import ConfigurationError
 
 
@@ -163,10 +163,10 @@ def test_http_preserves_query_and_does_not_hide_refusal(status):
 
 
 def test_http_intake_accepts_streamposter_put_without_changing_verification():
-    """POST and StreamPoster PUT pass exact bytes to the same native peer."""
+    """POST and StreamPoster PUT pass exact bytes to the same ACDC v2 IPEX peer."""
     import falcon
     from falcon import testing
-    from keri.cli.common.native_exchange import Intake
+    from keri.cli.common.acdc_v2_ipex import Intake
 
     class Peer:
         """Record only the transport boundary; protocol tests cover the peer."""

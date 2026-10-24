@@ -1600,7 +1600,7 @@ class Tevery:
             registry/credential lookups retain the existing legacy failure behavior.
 
         This is the legacy TEL query path. Query attachment arguments are not verified
-        here; native registry service request authentication is a separate boundary."""
+        here; ACDC v2 registry service request authentication is a separate boundary."""
         ked = serder.ked
 
         ilk = ked["t"]

@@ -1,1 +1,1 @@
-"""Independent native registry observation applications."""
+"""Independent ACDC v2 registry observation applications."""

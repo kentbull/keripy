@@ -483,7 +483,7 @@ class IpexHandler:
             sections (SectionBaser | None): Independently received schema evidence
                 shared with the application's parser. Lookup never expands the
                 retained credential's disclosed fields.
-            verification (NativeVerification | None): Concrete shared context.
+            verification (AcdcV2IpexVerification | None): Concrete shared context.
                 When supplied, its policy and section store take precedence.
 
         Returns:
@@ -491,16 +491,16 @@ class IpexHandler:
 
         Raises:
             ConfigurationError: A supplied concrete context belongs to another
-                Habery/Regery or is not a NativeVerification instance.
+                Habery/Regery or is not an AcdcV2IpexVerification instance.
         """
-        if verification is not None and (type(verification) is not NativeVerification
+        if verification is not None and (type(verification) is not AcdcV2IpexVerification
                 or verification.hby is not hby or verification.rgy is not rgy):
-            raise ConfigurationError('native verifier context must belong to this Habery and Regery')
+            raise ConfigurationError('ACDC v2 IPEX verifier context must belong to this Habery and Regery')
         self.resource = resource
         self.hby = hby
         self.notifier = notifier
         self.rgy = rgy
-        self.verification = verification if verification is not None else NativeVerification(
+        self.verification = verification if verification is not None else AcdcV2IpexVerification(
             hby, rgy, graphPolicy=graphPolicy, sections=sections)
         self.graphPolicy = self.verification.graphPolicy
         self.sections = self.verification.sections
@@ -2452,7 +2452,7 @@ class IpexHandler:
         assertion about a past application's policy decision.
 
         Args:
-            said (str): SAID of the retained native exchange to revalidate.
+            said (str): SAID of the retained ACDC v2 IPEX exchange to revalidate.
 
         Returns:
             bool: Whether retained sender authentication, exact nests, and current
@@ -2518,8 +2518,8 @@ class IpexHandler:
 
 
 @dataclass(frozen=True)
-class NativeVerification:
-    """Concrete native semantic context shared by intake and fresh admission.
+class AcdcV2IpexVerification:
+    """Concrete ACDC v2 IPEX semantic context shared by intake and fresh admission.
 
     This context carries evidence and policy, never a caller assertion of
     acceptance. Retained inspection may outlive it; fresh acceptance may not.
@@ -2539,7 +2539,7 @@ class NativeVerification:
         """Return a route handler using this context's evidence and policy.
 
         Args:
-            resource (str): Native IPEX route to validate.
+            resource (str): ACDC v2 IPEX route to validate.
             notifier: Optional receiver of accepted-message notifications.
 
         Returns:
@@ -2553,7 +2553,7 @@ class NativeVerification:
 
         Args:
             said (str): Retained exchange identifier.
-            route (str): Expected native IPEX route.
+            route (str): Expected ACDC v2 IPEX route.
 
         Returns:
             bool: Whether authenticated evidence satisfies current semantics.
@@ -3100,22 +3100,22 @@ def spurn(hab, message, spurned, recp=None, dt=None, kind=None, gvrsn=None):
 
 
 def loadHandlers(hby, exc, notifier, rgy=None, *, graphPolicy=None, sections=None):
-    """Register native IPEX routes with one explicit semantic context.
+    """Register ACDC v2 IPEX routes with one explicit semantic context.
 
     Schema lookup uses the same section store as the application's parser.
 
     Args:
         hby (Habery): Owner of KEL and EXN evidence.
-        exc (Exchanger): Router receiving the six native IPEX handlers.
+        exc (Exchanger): Router receiving the six ACDC v2 IPEX handlers.
         notifier: Receiver of accepted-message notifications.
         rgy (Regery | None): Issuer registry evidence owner.
         graphPolicy: Explicit local graph policy, or None for default semantics.
         sections (SectionBaser | None): Independent schema store used by parsing.
 
     Returns:
-        NativeVerification: Shared semantic context for explicit wallet injection.
+        AcdcV2IpexVerification: Shared semantic context for explicit wallet injection.
     """
-    verification = NativeVerification(hby, rgy, graphPolicy=graphPolicy, sections=sections)
+    verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=graphPolicy, sections=sections)
     for verb in Ipex:
         exc.addHandler(verification.handler(f"/ipex/{verb}", notifier))
     return verification

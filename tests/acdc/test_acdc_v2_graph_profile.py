@@ -91,7 +91,7 @@ def graph():
 
 
 def credential(issuer, *, issuee=None, edge=None, **properties):
-    """Build a native credential carrying only the requested graph properties.
+    """Build an ACDC v2 credential carrying only the requested graph properties.
 
     Args:
         issuer (str): Issuer AID.
@@ -455,7 +455,7 @@ def signed(serder, hab):
         hab (Hab): Issuer whose current keys sign those bytes.
 
     Returns:
-        bytearray: Native node stream carrying current-establishment signatures."""
+        bytearray: ACDC v2 credential node stream carrying current-establishment signatures."""
     return messagize(serder, tsgs=[(hab.kever.prefixer,
         Number(sn=hab.kever.lastEst.s), Diger(qb64=hab.kever.lastEst.d),
         hab.sign(ser=serder.raw))], gvrsn=Vrsn_2_0, framed=False)

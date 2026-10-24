@@ -50,7 +50,7 @@ def test_public_kel_and_explicit_blind_commands(tmp_path):
         files owned by pytest; existing files must not be silently overwritten.
 
     Returns:
-        None. Assertions cover signed endpoint/KEL import, accepted native issuance,
+        None. Assertions cover signed endpoint/KEL import, accepted ACDC v2 issuance,
         distinct later openings, real holder admission/inspection, absent derivation
         capability, wrong-recipient import, and wrong-credential/state refusals.
         Successful per-event opening output contains no registry salt."""
@@ -80,9 +80,9 @@ def test_public_kel_and_explicit_blind_commands(tmp_path):
     bob_kel = tmp_path / 'bob.cesr'
     bob_aid = invoke(bob, 'kel', 'export', '-a', 'self', '--output', str(bob_kel))[0]['aid']
     invoke(alice, 'kel', 'import', '--file', str(bob_kel))
-    registry = invoke(alice, 'vc', 'registry', 'incept', '--v2', '-a', 'self', '-r', 'r',
+    registry = invoke(alice, 'vc', 'registry', 'incept', '--acdc-v2', '-a', 'self', '-r', 'r',
         '--with-custody', '--discloser', bob_aid)[0]['registry']
-    issued = invoke(alice, 'vc', 'create', '--v2', '-a', 'self', '-r', 'r', '--data', '{"status":"authorized"}')[0]
+    issued = invoke(alice, 'vc', 'create', '--acdc-v2', '-a', 'self', '-r', 'r', '--data', '{"status":"authorized"}')[0]
     first = tmp_path / 'first.opening'
     initial = invoke(alice, 'vc', 'registry', 'opening', '-r', 'r', '-s', issued['credential'],
         '--ordinal', '1', '--output', str(first))[0]
@@ -102,13 +102,13 @@ def test_public_kel_and_explicit_blind_commands(tmp_path):
         '--ordinal', '2', '--state', 'revoked', '--output', str(bad), okay=False)
     assert not bad.exists()
     full, grant = tmp_path / 'full.cesr', tmp_path / 'grant.cesr'
-    invoke(alice, 'vc', 'export', '--v2', '-a', 'self', '-r', 'r',
+    invoke(alice, 'vc', 'export', '--acdc-v2', '-a', 'self', '-r', 'r',
         '-s', issued['credential'], '--full', '--derive', '--output', str(full))
-    granted = invoke(alice, 'ipex', 'grant', '--v2', '--derive', '-a', 'self', '-r', bob_aid,
+    granted = invoke(alice, 'ipex', 'grant', '--acdc-v2', '--derive', '-a', 'self', '-r', bob_aid,
         '-s', issued['credential'], '--output', str(grant))[0]
     incoming = tmp_path / 'incoming.cesr'
     incoming.write_bytes(full.read_bytes() + grant.read_bytes())
-    invoke(bob, 'ipex', 'admit', '--v2', '-a', 'self', '-s', granted['exchange'], '--input', str(incoming))
+    invoke(bob, 'ipex', 'admit', '--acdc-v2', '-a', 'self', '-s', granted['exchange'], '--input', str(incoming))
     retained = invoke(bob, 'ipex', 'inspect', '-s', granted['exchange'])[0]
     assert retained['accepted'] and retained['sender'] == aid and retained['recipient'] == bob_aid
     assert retained['nodes'][0]['credential'] == issued['credential']
@@ -119,11 +119,11 @@ def test_public_kel_and_explicit_blind_commands(tmp_path):
     invoke(bob, *opening_args, okay=False)
     assert not held_opening.exists()
     private = tmp_path / 'custody.json'
-    invoke(alice, 'vc', 'export', '--v2', '-a', 'self', '-r', 'r', '--custody', '--output', str(private))
-    invoke(bob, 'vc', 'import', '--v2', '--custody', '--registry', registry,
+    invoke(alice, 'vc', 'export', '--acdc-v2', '-a', 'self', '-r', 'r', '--custody', '--output', str(private))
+    invoke(bob, 'vc', 'import', '--acdc-v2', '--custody', '--registry', registry,
         '--controller', aid, '--discloser', aid, '--file', str(private),
         '--passcode', '0123456789abcdefghijk', okay=False)
-    invoke(bob, 'vc', 'import', '--v2', '--custody', '--registry', registry,
+    invoke(bob, 'vc', 'import', '--acdc-v2', '--custody', '--registry', registry,
         '--controller', aid, '--discloser', bob_aid, '--file', str(private))
     derived = invoke(bob, *opening_args)[0]
     assert derived['opening'] == latest['opening'] and held_opening.read_bytes() == current.read_bytes()
@@ -184,12 +184,12 @@ def test_signed_publication_and_independent_observer_query(tmp_path):
         bootstrap.extend(path.read_bytes())
     boot = tmp_path / 'bootstrap.cesr'
     boot.write_bytes(bootstrap)
-    registry = invoke(names['issuer'], 'vc', 'registry', 'incept', '--v2', '-a', 'self',
+    registry = invoke(names['issuer'], 'vc', 'registry', 'incept', '--acdc-v2', '-a', 'self',
                       '-r', 'r', '--with-custody')[0]['registry']
-    issued = invoke(names['issuer'], 'vc', 'create', '--v2', '-a', 'self', '-r', 'r',
+    issued = invoke(names['issuer'], 'vc', 'create', '--acdc-v2', '-a', 'self', '-r', 'r',
                     '--data', '{"status":"authorized"}')[0]
     public = tmp_path / 'public.cesr'
-    invoke(names['issuer'], 'vc', 'export', '--v2', '-a', 'self', '-r', 'r',
+    invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'self', '-r', 'r',
         '-s', issued['credential'], '--kels', '--tels', '--output', str(public))
     ports = []
     for _ in range(2):

@@ -1,4 +1,4 @@
-"""Native authoring through real KLI subprocesses and reopened encrypted stores."""
+"""ACDC v2 authoring through real KLI subprocesses and reopened encrypted stores."""
 import json
 import os
 import subprocess
@@ -24,7 +24,7 @@ def command(name, *args):
 
     Args:
         name (str): Isolated test identity under native-cli-test.
-        *args: Public KLI command tokens, including explicit native version selection.
+        *args: Public KLI command tokens, including explicit ACDC v2 selection.
 
     Returns:
         CompletedProcess: Captured status/stdout/stderr for success or refusal checks.
@@ -58,8 +58,8 @@ def invoke(name, *args):
     return [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
 
 
-def test_native_cli_authoring_reopen_and_private_export(tmp_path):
-    """Reopen installed native authoring, verify actual public/private exports, and retain exact old issuance after revocation or custody-row loss.
+def test_acdc_v2_cli_authoring_reopen_and_private_export(tmp_path):
+    """Reopen installed ACDC v2 authoring, verify actual public/private exports, and retain exact old issuance after revocation or custody-row loss.
 
     Parameters:
         tmp_path: Pytest-owned exclusive credential, public proof, private custody, and bound-evidence files.
@@ -72,28 +72,28 @@ def test_native_cli_authoring_reopen_and_private_export(tmp_path):
         issuer = hby.makeHab(name='issuer', version=Vrsn_2_0)
         prefix = issuer.pre
 
-    created = invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'authority')[0]
+    created = invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer', '-r', 'authority')[0]
     assert created['accepted'] is True
     assert created['controller'] == prefix
     regid = created['registry']
-    status = invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'authority')[0]
+    status = invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]
     assert status['sn'] == 0
     assert status['head'] == regid
-    assert invoke(name, 'vc', 'registry', 'list', '--native')[0]['registry'] == regid
+    assert invoke(name, 'vc', 'registry', 'list', '--acdc-v2')[0]['registry'] == regid
 
-    issued = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'authority',
+    issued = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
                     '--data', '{"name":"Alice"}')[0]
     assert issued['accepted'] is True
     assert issued['state'] == 'issued'
     credential = issued['credential']
-    assert invoke(name, 'vc', 'list', '--native', '--issued', '-a', 'issuer')[0]['credential'] == credential
+    assert invoke(name, 'vc', 'list', '--acdc-v2', '--issued', '-a', 'issuer')[0]['credential'] == credential
 
     public = tmp_path / 'credential.json'
-    invoke(name, 'vc', 'export', '--native', '-a', 'issuer', '-r', 'authority',
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
            '--said', credential, '--output', str(public))
     assert SerderACDC(raw=public.read_bytes()).said == credential
     full = tmp_path / 'full.cesr'
-    invoke(name, 'vc', 'export', '--native', '-a', 'issuer', '-r', 'authority',
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
            '--said', credential, '--full', '--derive', '--output', str(full))
     parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(full.read_bytes()), processive=False)
     tels = [item for item in parsed if isinstance(item.serder, SerderACDC)
@@ -104,26 +104,26 @@ def test_native_cli_authoring_reopen_and_private_export(tmp_path):
     assert parsed[-1].serder.said == credential
     assert parsed[-1].bsqs[0][2].qb64 == credential
     private = tmp_path / 'custody.json'
-    output = invoke(name, 'vc', 'export', '--native', '-a', 'issuer', '-r', 'authority',
+    output = invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
                     '--custody', '--output', str(private))[0]
     assert 'salt' not in output
     assert private.stat().st_mode & 0o777 == 0o600
     custody = private.read_bytes()
-    invoke(name, 'vc', 'import', '--native', '--custody', '--registry', regid,
+    invoke(name, 'vc', 'import', '--acdc-v2', '--custody', '--registry', regid,
            '--controller', prefix, '--discloser', prefix, '--file', str(private), '--passcode', PASSCODE)
 
-    revoked = invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'authority', '--said', credential)[0]
+    revoked = invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'authority', '--said', credential)[0]
     assert revoked['accepted'] is True
     assert revoked['state'] == 'revoked'
-    assert invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'authority')[0]['sn'] == 2
+    assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
     # Retrying each command does not reissue, rotate a secret, or append a new event.
-    repeated = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'authority',
+    repeated = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
                       '--credential', '@' + str(public))[0]
     assert repeated['credential'] == credential
     assert repeated['state'] == 'unknown'  # retained issuance is not current blinded standing
-    assert invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'authority',
+    assert invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
                   '--said', credential)[0]['update'] == revoked['update']
-    assert invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'authority')[0]['sn'] == 2
+    assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
     assert private.read_bytes() == custody
     # Simulate loss of this test registry's custody row. Historical issuance
     # retry must neither regenerate a salt nor try to derive current standing.
@@ -136,28 +136,42 @@ def test_native_cli_authoring_reopen_and_private_export(tmp_path):
         finally:
             wallet.close()
             rgy.close()
-    retained = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'authority',
+    retained = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
                       '--credential', '@' + str(public))[0]
     assert retained['update'] == issued['update']
     assert retained['state'] == 'unknown'
-    assert invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'authority')[0]['sn'] == 2
+    assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
 
 
-def test_native_option_is_explicit_and_legacy_remains_default():
-    """Keep v1 command defaults while recognizing --v2 and --native as the same explicit native selection.
+def test_acdc_v2_option_is_explicit_and_v1_remains_default():
+    """Select ACDC v2 explicitly and reject the removed experimental aliases.
 
     Returns:
         None. Assertions check the stated evidence boundary."""
     parser = multicommand.create_parser(commands)
     for command in (['vc', 'registry', 'incept', '-a', 'issuer'],
+                    ['vc', 'registry', 'list'],
+                    ['vc', 'registry', 'status', '-r', 'registry'],
                     ['vc', 'create', '-a', 'issuer', '--data', '{}'],
-                    ['vc', 'revoke', '-a', 'issuer', '--said', 'example']):
-        assert parser.parse_args(command + ['--name', 'example']).native is False
-        assert parser.parse_args(command + ['--name', 'example', '--native']).native is True
-        assert parser.parse_args(command + ['--name', 'example', '--v2']).native is True
+                    ['vc', 'revoke', '-a', 'issuer', '--said', 'example'],
+                    ['vc', 'export', '-a', 'issuer'],
+                    ['vc', 'import', '--file', 'example.cesr'],
+                    ['vc', 'list'],
+                    ['ipex', 'apply', '-a', 'issuer', '-r', 'recipient'],
+                    ['ipex', 'offer', '-a', 'issuer', '-r', 'recipient', '-s', 'example'],
+                    ['ipex', 'agree', '-a', 'issuer', '-s', 'example'],
+                    ['ipex', 'grant', '-a', 'issuer', '-r', 'recipient', '-s', 'example'],
+                    ['ipex', 'admit', '-a', 'issuer', '-s', 'example'],
+                    ['ipex', 'spurn', '-a', 'issuer', '-s', 'example'],
+                    ['ipex', 'receive', '-a', 'issuer']):
+        assert parser.parse_args(command + ['--name', 'example']).acdc_v2 is False
+        assert parser.parse_args(command + ['--name', 'example', '--acdc-v2']).acdc_v2 is True
+        for old_option in ('--native', '--v2'):
+            with pytest.raises(SystemExit):
+                parser.parse_args(command + ['--name', 'example', old_option])
 
 
-def test_native_cli_refuses_unencrypted_custody_before_registry_creation():
+def test_acdc_v2_cli_refuses_unencrypted_custody_before_registry_creation():
     """Refuse requested private custody on an unencrypted Keeper before creating any named registry.
 
     Returns:
@@ -165,7 +179,7 @@ def test_native_cli_refuses_unencrypted_custody_before_registry_creation():
     name = 'unencrypted-' + uuid.uuid4().hex
     with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
         hby.makeHab(name='issuer', version=Vrsn_2_0)
-    result = command(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'blocked')
+    result = command(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer', '-r', 'blocked')
     assert 'authenticated encrypted Keeper' in result.stdout
     assert '"accepted": true' not in result.stdout
     with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
@@ -185,15 +199,15 @@ def test_public_cli_lifecycle_never_provisions_or_encrypts_custody():
     with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
         hby.makeHab(name='issuer', version=Vrsn_2_0)
         assert not hby.mgr.aeid
-    reg = invoke(name, 'vc', 'registry', 'incept', '--native', '-a', 'issuer', '-r', 'public')[0]
+    reg = invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '-a', 'issuer', '-r', 'public')[0]
     assert reg['custody'] == 'not requested'
-    issued = invoke(name, 'vc', 'create', '--native', '--unblinded', '-a', 'issuer',
+    issued = invoke(name, 'vc', 'create', '--acdc-v2', '--unblinded', '-a', 'issuer',
                     '-r', 'public', '--data', '{"name":"Public"}')[0]
     assert issued['state'] == 'issued'
-    revoked = invoke(name, 'vc', 'revoke', '--native', '--unblinded', '-a', 'issuer',
+    revoked = invoke(name, 'vc', 'revoke', '--acdc-v2', '--unblinded', '-a', 'issuer',
                      '-r', 'public', '--said', issued['credential'])[0]
     assert revoked['state'] == 'revoked'
-    assert invoke(name, 'vc', 'list', '--native', '--issued', '-a', 'issuer')[0]['state'] == 'revoked'
+    assert invoke(name, 'vc', 'list', '--acdc-v2', '--issued', '-a', 'issuer')[0]['state'] == 'revoked'
     with openHby(name=name, base='native-cli-test', temp=False, version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
@@ -207,7 +221,7 @@ def test_public_cli_lifecycle_never_provisions_or_encrypts_custody():
             rgy.close()
 
 
-def test_native_cli_pending_witness_anchor_resumes_without_resealing():
+def test_acdc_v2_cli_pending_witness_anchor_resumes_without_resealing():
     """Keep missing real witness receipts pending, then resume the same staged registry/anchor without creating another sealing event.
 
     Returns:
@@ -220,11 +234,11 @@ def test_native_cli_pending_witness_anchor_resumes_without_resealing():
             hby.makeHab(name='issuer', wits=[witness.pre], toad=1, version=Vrsn_2_0)
         # No witness endpoint has been configured; the normal receipt owner
         # cannot complete. The CLI must leave honest pending state, not success.
-        result = command(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer',
+        result = command(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer',
                          '-r', 'pending', '--timeout', '0.2')
         assert 'ERR:' in result.stdout
         assert '"accepted": true' not in result.stdout
-        status = invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'pending')[0]
+        status = invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'pending')[0]
         assert status['accepted'] is False
         assert status['pending']
 
@@ -240,7 +254,7 @@ def test_native_cli_pending_witness_anchor_resumes_without_resealing():
                 event, _, _ = hab.getOwnEvent(sn=sn)
                 receipt = witness.witness(event, version=Vrsn_2_0, gvrsn=Vrsn_2_0)
                 hby.psr.parse(ims=bytearray(receipt))
-        accepted = invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'pending')[0]
+        accepted = invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer', '-r', 'pending')[0]
         assert accepted['registry'] == status['registry']
         assert accepted['accepted'] is True
         with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
@@ -248,8 +262,8 @@ def test_native_cli_pending_witness_anchor_resumes_without_resealing():
             assert hby.habByName('issuer').kever.sn == sealing_sn
 
 
-def test_native_cli_unblinded_issuance_then_blind_revocation(tmp_path):
-    """Preserve one mixed public/blinded history and bind explicit native revocation without fabricating an issuance opening.
+def test_acdc_v2_cli_unblinded_issuance_then_blind_revocation(tmp_path):
+    """Preserve one mixed public/blinded history and bind explicit ACDC v2 revocation without fabricating an issuance opening.
 
     Parameters:
         tmp_path: Pytest-owned exclusive credential, public proof, private custody, and bound-evidence files.
@@ -260,25 +274,25 @@ def test_native_cli_unblinded_issuance_then_blind_revocation(tmp_path):
     with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         hby.makeHab(name='issuer', version=Vrsn_2_0)
-    invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'mixed')
-    issued = invoke(name, 'vc', 'create', '--native', '--unblinded', '-a', 'issuer', '-r', 'mixed',
+    invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer', '-r', 'mixed')
+    issued = invoke(name, 'vc', 'create', '--acdc-v2', '--unblinded', '-a', 'issuer', '-r', 'mixed',
                     '--data', '{"name":"Bob"}')[0]
     assert issued['state'] == 'issued'
     artifact = tmp_path / 'unblinded.cesr'
-    invoke(name, 'vc', 'export', '--native', '-a', 'issuer', '-r', 'mixed', '--said', issued['credential'],
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'mixed', '--said', issued['credential'],
            '--full', '--output', str(artifact))
     parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(artifact.read_bytes()), processive=False)
     update = [item.serder for item in parsed if item.serder.ilk == 'upd'][0]
     assert update.sad['td'] == issued['credential']
     assert update.sad['ts'] == 'issued'
     assert parsed[-1].bsqs == []
-    revoked = invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'mixed',
+    revoked = invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'mixed',
                      '--said', issued['credential'])[0]
     assert revoked['state'] == 'revoked'
-    assert invoke(name, 'vc', 'list', '--native', '--issued', '-a', 'issuer')[0]['state'] == 'unknown'
+    assert invoke(name, 'vc', 'list', '--acdc-v2', '--issued', '-a', 'issuer')[0]['state'] == 'unknown'
 
 
-def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
+def test_acdc_v2_cli_bound_issue_revoke_and_historical_retry(tmp_path):
     """Use real Issuee KEL coordinates for bound issuance/revocation and preserve the exact historical issuance on retry.
 
     Parameters:
@@ -292,12 +306,12 @@ def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
         hby.makeHab(name='issuer', version=Vrsn_2_0)
         holder = hby.makeHab(name='holder', version=Vrsn_2_0)
         issuee, first = holder.pre, holder.kever.serder.said
-    invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'bound')
-    issued = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'bound',
+    invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer', '-r', 'bound')
+    issued = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'bound',
                     '--recipient', issuee, '--bound-event', first, '--data', '{"role":"bound"}')[0]
     assert issued['state'] == 'issued'
     artifact = tmp_path / 'bound.cesr'
-    invoke(name, 'vc', 'export', '--native', '-a', 'issuer', '-r', 'bound',
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'bound',
            '--said', issued['credential'], '--full', '--derive', '--output', str(artifact))
     parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(artifact.read_bytes()), processive=False)
     assert parsed[-1].bsss
@@ -309,23 +323,23 @@ def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
         holder = hby.habByName('holder')
         holder.interact(version=Vrsn_2_0, gvrsn=Vrsn_2_0)
         current = holder.kever.serder.said
-    granted = invoke(name, 'ipex', 'grant', '--native', '-a', 'issuer',
+    granted = invoke(name, 'ipex', 'grant', '--acdc-v2', '-a', 'issuer',
                      '--recipient', issuee, '--said', acdc.said, '--derive')[0]
     assert granted['accepted'] is True
-    refused = command(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'bound',
+    refused = command(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'bound',
                       '--said', acdc.said, '--bound-event', first)
     assert 'known current issuee event' in refused.stdout
-    revoked = invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'bound',
+    revoked = invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'bound',
                      '--said', acdc.said, '--bound-event', current)[0]
     assert revoked['state'] == 'revoked'
-    repeated = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'bound',
+    repeated = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'bound',
                       '--credential', '@' + str(credential))[0]
     assert repeated['update'] == issued['update']
-    assert invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'bound',
+    assert invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'bound',
                   '--said', acdc.said, '--bound-event', current)[0]['update'] == revoked['update']
-    assert invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'bound')[0]['sn'] == 2
+    assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'bound')[0]['sn'] == 2
     historical = tmp_path / 'historical.cesr'
-    invoke(name, 'vc', 'export', '--v2', '-a', 'issuer', '-r', 'bound',
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'bound',
            '--said', acdc.said, '--full', '--derive', '--output', str(historical))
     old = Parser(version=Vrsn_2_0).parse(ims=bytearray(historical.read_bytes()), processive=False)[-1]
     # Compare wire primitives, not identities of independently parsed objects.
@@ -346,11 +360,11 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
     with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         prefix = hby.makeHab(name='issuer', version=Vrsn_2_0).pre
-    regid = invoke(name, 'vc', 'registry', 'incept', '--v2', '--with-custody',
+    regid = invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody',
                    '-a', 'issuer', '-r', 'r')[0]['registry']
-    said = invoke(name, 'vc', 'create', '--v2', '-a', 'issuer', '-r', 'r',
+    said = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'r',
                   '--data', '{"status":"valid"}')[0]['credential']
-    full = ['vc', 'export', '--v2', '-a', 'issuer', '-r', 'r', '-s', said, '--full']
+    full = ['vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r', '-s', said, '--full']
     missing = tmp_path / 'missing.cesr'
     refusal = command(name, *full, '--output', str(missing))
     assert refusal.returncode != 0 and 'issuance opening unavailable' in refusal.stdout + refusal.stderr
@@ -369,7 +383,7 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
     # Import a well-formed wrong salt after explicitly losing only this test's
     # row. Possession, encryption and bindings cannot replace event verification.
     private = tmp_path / 'salt.json'
-    invoke(name, 'vc', 'export', '--v2', '-a', 'issuer', '-r', 'r',
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
            '--custody', '--output', str(private))
     payload = json.loads(private.read_text())
     payload['salt'] = Salter().qb64
@@ -383,7 +397,7 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
         finally:
             wallet.close()
             rgy.close()
-    invoke(name, 'vc', 'import', '--v2', '--custody', '--file', str(private),
+    invoke(name, 'vc', 'import', '--acdc-v2', '--custody', '--file', str(private),
            '--registry', regid, '--controller', prefix, '--discloser', prefix)
     wrongSalt = tmp_path / 'wrong-salt.cesr'
     refusal = command(name, *full, '--derive', '--output', str(wrongSalt))
@@ -406,7 +420,7 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
     parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(supplied.read_bytes()), processive=False)
     assert parsed[-1].serder.said == said and parsed[-1].bsqs
     public = tmp_path / 'public.cesr'
-    invoke(name, 'vc', 'export', '--v2', '-a', 'issuer', '-r', 'r', '-s', said,
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r', '-s', said,
            '--kels', '--tels', '--output', str(public))
     assert public.stat().st_size > 0
     # Exclusive creation still protects an existing artifact, even on retries.
@@ -416,19 +430,19 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
 
 
 @pytest.mark.parametrize('tokens, message', [
-    (['vc', 'export', '-a', 'issuer', '--custody'], 'require --v2'),
-    (['vc', 'export', '-a', 'issuer', '--derive'], 'require --v2'),
-    (['vc', 'export', '-a', 'issuer', '--opening', 'absent'], 'require --v2'),
-    *[(['vc', 'export', '--v2', '-a', 'issuer', '--custody', *flag], 'cannot be combined')
+    (['vc', 'export', '-a', 'issuer', '--custody'], 'require --acdc-v2'),
+    (['vc', 'export', '-a', 'issuer', '--derive'], 'require --acdc-v2'),
+    (['vc', 'export', '-a', 'issuer', '--opening', 'absent'], 'require --acdc-v2'),
+    *[(['vc', 'export', '--acdc-v2', '-a', 'issuer', '--custody', *flag], 'cannot be combined')
       for flag in (['--full'], ['--kels'], ['--tels'], ['--chains'], ['--files'],
                    ['--said', 'credential'], ['--derive'], ['--opening', 'absent'])],
-    (['vc', 'export', '--v2', '-a', 'issuer', '--derive'], 'require --v2 --full'),
-    (['vc', 'export', '--v2', '-a', 'issuer', '--opening', 'absent'], 'require --v2 --full'),
-    (['vc', 'export', '--v2', '-a', 'issuer', '--files'], 'uses --output'),
-    *[(['vc', 'import', '--file', 'absent', *flag], 'require --v2 --custody')
+    (['vc', 'export', '--acdc-v2', '-a', 'issuer', '--derive'], 'require --acdc-v2 --full'),
+    (['vc', 'export', '--acdc-v2', '-a', 'issuer', '--opening', 'absent'], 'require --acdc-v2 --full'),
+    (['vc', 'export', '--acdc-v2', '-a', 'issuer', '--files'], 'uses --output'),
+    *[(['vc', 'import', '--file', 'absent', *flag], 'require --acdc-v2 --custody')
       for flag in (['--custody'], ['--rewrap'], ['--registry', 'r'],
                    ['--controller', 'i'], ['--discloser', 'h'])],
-    (['vc', 'import', '--v2', '--file', 'absent', '--said', 'credential'], 'not credentials'),
+    (['vc', 'import', '--acdc-v2', '--file', 'absent', '--said', 'credential'], 'not credentials'),
 ])
 def test_provisioning_options_fail_before_store_or_file_access(tokens, message):
     """Reject incompatible modes before touching nonexistent identity/file inputs.

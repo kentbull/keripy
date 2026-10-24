@@ -1,4 +1,4 @@
-"""Shared native evidence verification and cooperative maintenance composition.
+"""Shared KEL and ACDC v2 registry TEL verification and cooperative maintenance composition.
 
 Extracted from the qualified registrar adapter at KERIpy 64e14e08. This module
 owns no HTTP routes, publisher/reader policy, or polling schedule. Services,
@@ -56,7 +56,7 @@ class ServiceConfig:
 
 
 def signedQuery(hab, route, query=None):
-    """Create a fresh, signed native service query with existing habitat keys.
+    """Create a fresh, signed KERI v2 service query with existing habitat keys.
 
         Args:
             hab: Authenticated signing habitat for the requester AID.
@@ -75,7 +75,7 @@ def signedQuery(hab, route, query=None):
 
 
 class EvidenceContext(doing.DoDoer):
-    """Own concrete remote KEL/native registry processors and their stores."""
+    """Own concrete remote KEL/ACDC v2 registry processors and their stores."""
 
     def __init__(self, hby, *, reger=None, config=None):
         """Compose public evidence intake with one owned KRAM maintenance runtime.
@@ -92,7 +92,7 @@ class EvidenceContext(doing.DoDoer):
             Raises:
                 ConfigurationError: Requested service policy disables required KRAM.
 
-            KEL/native TEL acceptance remains in the shared processors. Reopening resumes
+            KEL/ACDC v2 registry TEL acceptance remains in the shared processors. Reopening resumes
             persisted cache maintenance without deleting accepted evidence."""
         self.hby = hby
         self.cf = ServiceConfig(config)
@@ -138,7 +138,7 @@ class EvidenceContext(doing.DoDoer):
             yield tock
 
     def close(self):
-        """Close the native registry store after child doers have stopped.
+        """Close the ACDC v2 registry store after child doers have stopped.
 
             Returns:
                 None. Habery remains caller-owned; scheduling cancellation must precede
@@ -155,7 +155,7 @@ class EvidenceProcessor:
     """
 
     def __init__(self, hby, *, kvy, rever):
-        """Bind the caller's strict KEL verifier and native TEL verifier.
+        """Bind the caller's strict KEL verifier and ACDC v2 registry TEL verifier.
 
         Args:
             hby: Caller-owned Habery whose database receives verified evidence.
@@ -178,7 +178,7 @@ class EvidenceProcessor:
         """Process public evidence and summarize final shared-processor outcomes.
 
             Args:
-                raw (bytes): Complete or concatenated CESR KEL/native TEL evidence stream.
+                raw (bytes): Complete or concatenated CESR KEL/ACDC v2 registry TEL evidence stream.
 
             Returns:
                 dict: Accepted/pending/rejected counts and accepted per-registry heads.
@@ -206,7 +206,7 @@ class EvidenceProcessor:
                     events.append(serder)
                 else:
                     if serder.ilk not in ('icp', 'dip', 'rot', 'drt', 'ixn', 'rct'):
-                        raise ValidationError('hosting intake accepts only public KEL/native TEL evidence')
+                        raise ValidationError('hosting intake accepts only public KEL/ACDC v2 registry TEL evidence')
                     self.parser.msgProcess(exts=asdict(dom), kvy=self.kvy, rgy=self.rever,
                                            tvy=None, exc=None, rvy=None, vry=None)
             except KEL_DEPENDENCIES as ex:
@@ -269,14 +269,14 @@ class EvidenceProcessor:
         return any(receipt[0].qb64 == event.said for receipt in receipts)
 
     def registries(self):
-        """Enumerate only registries with an accepted native head.
+        """Enumerate only registries with an accepted ACDC v2 registry head.
 
             Returns:
                 list[str]: Sorted registry SAIDs; staged inception bodies are excluded."""
         return sorted(keys[0] for keys, _ in self.reger.heads.getTopItemIter())
 
     def clone(self, regks=None, sn=0):
-        """Clone accepted controller KEL evidence and selected accepted native TELs.
+        """Clone accepted controller KEL evidence and selected accepted ACDC v2 registry TELs.
 
             Args:
                 regks (Iterable[str] | None): Registry scope; None selects all accepted heads.

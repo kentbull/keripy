@@ -1,4 +1,4 @@
-"""Durable native section evidence and explicit commitment-based resolution.
+"""Durable ACDC v2 section evidence and explicit commitment-based resolution.
 
 Resolution supplies requested evidence to a verifier. It does not authenticate
 an issuer, accept a registry, admit a credential, or widen an IPEX disclosure.
@@ -74,7 +74,7 @@ def _commitment(value, label):
 
 
 class Sectioner:
-    """Concrete native evidence owner; required fields are explicit local requests."""
+    """Concrete ACDC v2 credential and section evidence owner; required fields are explicit local requests."""
     def __init__(self, *, db, sections):
         """Bind parser-side evidence processing to caller-owned stores.
 
@@ -87,7 +87,7 @@ class Sectioner:
         self.db, self.sections = db, sections
 
     def processEvent(self, serder, *, nests=(), **kwa):
-        """Retain a valid native credential or independent section and retry requests.
+        """Retain a valid ACDC v2 credential or independent section and retry requests.
 
             Args:
                 serder (SerderACDC): Exact received v2 credential/section message.
@@ -98,18 +98,18 @@ class Sectioner:
                 str: Credential-view digest or standalone message SAID retained locally.
 
             Raises:
-                ValidationError: Invalid native body, unsupported type, or non-section nest.
+                ValidationError: Invalid ACDC v2 body, unsupported type, or non-section nest.
 
             Persistence indexes only expanded evidence. Nested section reception is not
             issuer authentication, wallet admission, or permission to expand a grant."""
         if not isinstance(serder, SerderACDC) or serder.pvrsn.major != 2 or not serder.verify():
-            raise ValidationError('valid native ACDC evidence is required')
+            raise ValidationError('valid ACDC v2 credential or section evidence is required')
         if serder.ilk in CREDENTIAL_ILKS:
             result = self.processCredential(serder)
         else:
             label = SECTION_FIELDS.get(serder.ilk)
             if label is None:
-                raise ValidationError('not a supported native section message')
+                raise ValidationError('not a supported ACDC v2 section message')
             value = serder.sad[label]
             commitment = _commitment(value, label)
             index = (label, commitment, serder.said)
@@ -128,7 +128,7 @@ class Sectioner:
             nested = item if isinstance(item, dict) else vars(item)
             child = nested.get('serder')
             if not isinstance(child, SerderACDC) or child.ilk not in SECTION_FIELDS:
-                raise ValidationError('native evidence nests must contain section messages')
+                raise ValidationError('ACDC v2 evidence nests must contain section messages')
             self.processEvent(child, nests=nested.get('nests', ()))
         self.processEscrows()
         return result
@@ -137,7 +137,7 @@ class Sectioner:
         """Retain exact credential bytes and request explicitly selected dependencies.
 
             Args:
-                serder (SerderACDC): Valid native received credential, including partials.
+                serder (SerderACDC): Valid ACDC v2 received credential, including partials.
                 required (Iterable[str]): Existing normative fields the local caller needs.
                 sources (Mapping | None): Optional field-to-section-message SAID choices.
 
@@ -145,14 +145,14 @@ class Sectioner:
                 str: Digest of these exact received bytes, distinguishing equal-SAID views.
 
             Raises:
-                ValidationError: Credential is not a valid supported native body.
+                ValidationError: Credential is not a valid supported ACDC v2 body.
                 ConfigurationError: Requested fields or explicit source choices are invalid.
 
             Existing requests merge transactionally, but received bytes never change.
             Missing dependencies remain pending; failed schema resolution is recorded."""
         if (not isinstance(serder, SerderACDC) or serder.pvrsn.major != 2
                 or serder.ilk not in CREDENTIAL_ILKS or not serder.verify()):
-            raise ValidationError('valid native credential evidence is required')
+            raise ValidationError('valid ACDC v2 credential evidence is required')
         fields = list(dict.fromkeys(required))
         if any(label not in ('s', 'a', 'A', 'e', 'r') or label not in serder.sad for label in fields):
             raise ConfigurationError('required sections must name existing normative credential fields')

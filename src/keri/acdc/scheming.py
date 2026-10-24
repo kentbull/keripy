@@ -366,7 +366,7 @@ def _cachedSchema(db, said, sections=None):
     Args:
         db (Baser): Conventional local schema cache, checked first.
         said (str): Exact normative schema commitment to authenticate.
-        sections (SectionBaser | None): Independent native sch evidence store.
+        sections (SectionBaser | None): Independent ACDC v2 sch evidence store.
 
     Returns:
         Schemer | _VerifiedSchema | None: Authenticated schema in its received
@@ -503,7 +503,7 @@ def validateSchema(acdc, db, schema=None, *, sections=None, schemaKind=None):
         db (Baser): Local database containing cached schemas.
         schema (Mapping | str | None): Optional schema content or schema SAID
             to use instead of the ACDC's own schema.
-        sections (SectionBaser | None): Optional concrete native section store
+        sections (SectionBaser | None): Optional concrete ACDC v2 section store
             containing independently received schema dependencies.
         schemaKind (str | None): Actual encoding of an explicitly supplied
             schema mapping, such as a schema carried by a different near node.

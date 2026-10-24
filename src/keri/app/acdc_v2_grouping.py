@@ -1,4 +1,4 @@
-"""Native credential group composition using the existing KERI group owners."""
+"""ACDC v2 credential group composition using the existing KERI group owners."""
 from hio.base import doing
 
 from .. import Vrsn_2_0
@@ -15,11 +15,11 @@ from .forwarding import StreamPoster
 from .registrar.serving import ServiceConfig
 
 
-class NativeGroup(doing.DoDoer):
+class AcdcV2GroupCoordinator(doing.DoDoer):
     """Coordinate explicit approval, signatures, and fanout without new state.
 
     GroupHab owns signing, Multiplexor retains member approvals, Counselor owns
-    KEL threshold/delegation/receipts, and Rever owns native TEL acceptance.
+    KEL threshold/delegation/receipts, and Rever owns ACDC v2 registry TEL acceptance.
     Incoming proposals are retained until this member approves the exact body.
     No custody secret is generated, shared, or embedded by this coordinator.
     """
@@ -28,16 +28,16 @@ class NativeGroup(doing.DoDoer):
 
         Args:
             hby (Habery): Local member's KEL/EXN evidence owner.
-            rgy (Regery): Native registry evidence owner.
+            rgy (Regery): ACDC v2 registry evidence owner.
             ghab (GroupHab): Accepted local group identity requiring approvals.
-            exc (Exchanger): Shared router with configured native IPEX semantics.
+            exc (Exchanger): Shared router with configured ACDC v2 IPEX semantics.
             notifier: Receiver of group proposal notices.
             kramer (Kramer | None): Shared replay/liveness owner, or create one.
                 A supplied Kramer must have caller-owned scheduled pruning. When
                 omitted, this coordinator schedules one Pruner for its own Kramer;
                 removing the coordinator cancels that child maintenance work.
             scy (Sectioner | None): Caller-owned independent section processor.
-                Its store must also be supplied to native IPEX handlers. Both
+                Its store must also be supplied to ACDC v2 IPEX handlers. Both
                 direct proposals and mailbox intake use this same processor;
                 caching sections never changes a retained grant disclosure.
 
@@ -49,7 +49,7 @@ class NativeGroup(doing.DoDoer):
             ValidationError: The Exchanger already has conflicting group handlers.
         """
         if not isinstance(ghab, GroupHab) or not ghab.accepted:
-            raise ConfigurationError('native group requires an accepted local GroupHab')
+            raise ConfigurationError('ACDC v2 group requires an accepted local GroupHab')
         self.hby, self.rgy, self.ghab, self.exc = hby, rgy, ghab, exc
         self.scy = scy
         self.rever = Rever(db=hby.db, reger=rgy.baser)
@@ -74,7 +74,7 @@ class NativeGroup(doing.DoDoer):
         super().__init__(doers=doers)
 
     def process(self):
-        """Advance group KEL, quorum, native TEL, and exchange dependency work.
+        """Advance group KEL, quorum, ACDC v2 registry TEL, and exchange dependency work.
 
             Returns:
                 None. Only ordinary processors can accept evidence; delivery alone never
@@ -148,7 +148,7 @@ class NativeGroup(doing.DoDoer):
         proposals = [dom for dom in parsed if dom.serder.ilk == Ilks.exn
                      and dom.serder.route == '/multisig/registry']
         if len(proposals) != 1:
-            raise ValidationError('expected one native registry proposal')
+            raise ValidationError('expected one ACDC v2 registry proposal')
         self.receive(stream)
         proposal = proposals[0]
         if not self.exc.complete(proposal.serder.said):
@@ -174,7 +174,7 @@ class NativeGroup(doing.DoDoer):
         proposals = [dom for dom in parsed if dom.serder.ilk == Ilks.exn
                      and dom.serder.route == '/multisig/exn']
         if len(proposals) != 1:
-            raise ValidationError('expected one native IPEX group proposal')
+            raise ValidationError('expected one ACDC v2 IPEX group proposal')
         self.receive(stream)
         proposal = proposals[0]
         if not self.exc.complete(proposal.serder.said):
@@ -186,7 +186,7 @@ class NativeGroup(doing.DoDoer):
         """Sign the exact proposed TEL anchor and start ordinary threshold completion.
 
             Args:
-                event (SerderACDC): Native registry event this member explicitly approves.
+                event (SerderACDC): ACDC v2 registry event this member explicitly approves.
                 anchor (SerderKERI | None): Exact proposed group KEL event; None reuses
                     pending local work or authors a new suitable interaction/rotation.
 
@@ -239,10 +239,10 @@ class NativeGroup(doing.DoDoer):
                 ValidationError: Input has multiple messages, is not EXN, or uses another AID.
 
             Parsing merges signatures through normal processors. This explicit consent
-            does not bypass native semantics, missing sections, or group thresholds."""
+            does not bypass ACDC v2 IPEX semantics, missing sections, or group thresholds."""
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False) or []
         if len(parsed) != 1:
-            raise ValidationError('native group approval requires exactly one exchange')
+            raise ValidationError('ACDC v2 group approval requires exactly one exchange')
         child = parsed[0]
         if child.serder.ilk != Ilks.exn or child.serder.pre != self.ghab.pre:
             raise ValidationError('exchange is not issued by this group')

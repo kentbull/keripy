@@ -1,4 +1,4 @@
-"""Native grants distinguish unavailable registry openings from known contradictions.
+"""ACDC v2 IPEX grants distinguish unavailable registry openings from known contradictions.
 
 Fixture construction follows test_ipexing's real anchored registry examples;
 independent Haberies and normal processors replace any accepted-table injection.
@@ -46,7 +46,7 @@ def anchor(hab, registry, event):
 
 
 def public(*events):
-    """Frame native public registry bodies for ordinary parser intake.
+    """Frame public ACDC v2 registry TEL bodies for ordinary parser intake.
 
     Args:
         *events: Ordered TEL events whose exact raw bytes to concatenate.

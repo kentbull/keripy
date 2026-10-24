@@ -1,4 +1,4 @@
-"""Real independent group members, native TELs and IPEX approval thresholds."""
+"""Real independent group members, ACDC v2 registry TELs and IPEX approval thresholds."""
 from contextlib import ExitStack, contextmanager
 
 import pytest
@@ -7,7 +7,7 @@ from keri import Vrsn_2_0
 from keri.acdc import Regery, acdcmap, grant, loadHandlers
 from keri.acdc.messaging import regcept, update
 from keri.app import openHby
-from keri.app.native_grouping import NativeGroup
+from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from keri.core import Diger, Number, Parser, messagize
 from keri.kering import ValidationError
 from keri.peer import Exchanger
@@ -30,7 +30,7 @@ def members():
     """Yield three independent members of an accepted real 2-of-3 group.
 
     Yields:
-        tuple: Haberies, GroupHabs, Regery owners, and NativeGroup coordinators.
+        tuple: Haberies, GroupHabs, Regery owners, and AcdcV2GroupCoordinator coordinators.
         groupMembers owns cleanup; membership/quorum are real signed KEL state."""
     with groupMembers('members') as result:
         yield result
@@ -43,7 +43,7 @@ def groupMembers(label, *, sectioned=False):
     Args:
         label (str): Isolated test identity namespace.
         sectioned (bool): Share one caller-owned Sectioner per peer between
-            native verification, direct proposal intake, and mailbox parsing.
+            ACDC v2 IPEX verification, direct proposal intake, and mailbox parsing.
 
     Yields:
         tuple: Haberies, group identities, registry owners, and coordinators.
@@ -81,12 +81,12 @@ def groupMembers(label, *, sectioned=False):
             scy = Sectioner(db=hby.db, sections=sections) if sectioned else None
             loadHandlers(hby, exc, Notices(), rgy=rgy, sections=sections)
             rgys.append(rgy)
-            coordinators.append(NativeGroup(hby, rgy, group, exc, Notices(), scy=scy))
+            coordinators.append(AcdcV2GroupCoordinator(hby, rgy, group, exc, Notices(), scy=scy))
         yield hbys, groups, rgys, coordinators
 
 
 def test_registry_quorum_and_explicit_member_approval(members):
-    """Require real group quorum and each member local approval before accepting native TEL state; old proposal replay cannot lower the head.
+    """Require real group quorum and each member local approval before accepting ACDC v2 registry TEL state; old proposal replay cannot lower the head.
 
     Parameters:
         members: Three independent accepted 2-of-3 group environments and coordinators.
@@ -122,7 +122,7 @@ def test_registry_quorum_and_explicit_member_approval(members):
     owners[0].receive(second.raw + batc)
     assert rgys[0].store.headEvent(rip.said).said == issued.said
     assert rgys[1].store.headEvent(rip.said).said == issued.said
-    # Exact old proposal replay cannot lower the accepted native TEL head.
+    # Exact old proposal replay cannot lower the accepted ACDC v2 registry TEL head.
     owners[0].receive(proposal)
     assert rgys[0].store.headEvent(rip.said).said == issued.said
 
@@ -161,7 +161,7 @@ def test_group_ipex_uses_real_threshold_and_shared_semantic_handler(members):
     assert owners[2].completeExchange(exn.said)
 
 
-def test_native_registry_approval_refuses_different_tel(members):
+def test_acdc_v2_registry_approval_refuses_different_tel(members):
     """Refuse a substituted TEL body under an anchor approved for a different exact inception.
 
     Parameters:
@@ -187,7 +187,7 @@ def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fano
     Returns:
         None. Assertions check the stated evidence boundary."""
     import uuid
-    from tests.app.test_native_cli import PASSCODE, command, invoke
+    from tests.app.test_acdc_v2_cli import PASSCODE, command, invoke
 
     names = ['group-cli-' + uuid.uuid4().hex for _ in range(2)]
     with ExitStack() as stack:
@@ -208,24 +208,24 @@ def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fano
         prefix = groups[0].pre
 
     first, second = tmp_path / 'first.cesr', tmp_path / 'second.cesr'
-    result = command(names[0], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+    result = command(names[0], 'vc', 'registry', 'incept', '--acdc-v2', '-a', 'group',
         '-r', 'registry', '--proposal-output', str(first), '--timeout', '0.2')
     assert first.exists()
     assert 'pending member approval' in result.stdout
-    pending = invoke(names[0], 'vc', 'registry', 'status', '--native', '-r', 'registry')[0]
+    pending = invoke(names[0], 'vc', 'registry', 'status', '--acdc-v2', '-r', 'registry')[0]
     assert pending['accepted'] is False and pending['pending']
-    accepted = invoke(names[1], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+    accepted = invoke(names[1], 'vc', 'registry', 'incept', '--acdc-v2', '-a', 'group',
         '-r', 'registry', '--proposal', str(first), '--proposal-output', str(second), '--timeout', '2')[0]
     assert accepted['accepted'] and accepted['controller'] == prefix
     assert accepted['custody'] == 'not requested'
-    accepted = invoke(names[0], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+    accepted = invoke(names[0], 'vc', 'registry', 'incept', '--acdc-v2', '-a', 'group',
         '-r', 'registry', '--proposal', str(second), '--timeout', '2')[0]
     assert accepted['accepted']
 
     # A public update needs no independently regenerated custody secret. The
     # exact pending TEL and KEL bodies are reused after each CLI process exits.
     issue1, issue2 = tmp_path / 'issue1.cesr', tmp_path / 'issue2.cesr'
-    args = ('vc', 'create', '--native', '-a', 'group', '-r', 'registry',
+    args = ('vc', 'create', '--acdc-v2', '-a', 'group', '-r', 'registry',
             '--unblinded', '--data', '{"role":"member-approved"}')
     result = command(names[0], *args, '--proposal-output', str(issue1), '--timeout', '0.2')
     assert 'pending member approval' in result.stdout
@@ -233,7 +233,7 @@ def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fano
     assert issued['state'] == 'issued'
     issuedAgain = invoke(names[0], *args, '--proposal', str(issue2), '--timeout', '2')[0]
     assert issuedAgain['credential'] == issued['credential']
-    assert invoke(names[0], 'vc', 'registry', 'status', '--native', '-r', 'registry')[0]['sn'] == 1
+    assert invoke(names[0], 'vc', 'registry', 'status', '--acdc-v2', '-r', 'registry')[0]['sn'] == 1
     # Public group authoring must not provision a secret in either member store.
     from keri.app.credentialing import WalletBaser
     from keri.db import openLMDB
@@ -272,7 +272,7 @@ def groupNetwork(members, unused_tcp_port_factory):
             """Bind one loopback HTTP intake endpoint to its real group coordinator.
 
             Args:
-                owner (NativeGroup): Destination coordinator receiving each request stream.
+                owner (AcdcV2GroupCoordinator): Destination coordinator receiving each request stream.
 
             Returns:
                 None. Initializes a fresh byte buffer and request counter."""
@@ -413,7 +413,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
 
                 Args:
                     team (tuple): Real group environments, registries, and coordinators.
-                    event (SerderACDC): Exact native TEL event requiring group approval.
+                    event (SerderACDC): Exact ACDC v2 registry TEL event requiring group approval.
 
                 Returns:
                     None. Assertions require each member's accepted registry frontier to converge."""
@@ -446,11 +446,11 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
                         owner.receive(stream)
 
             def approveExchange(team, stream):
-                """Collect explicit group approvals for one exact native child exchange stream.
+                """Collect explicit group approvals for one exact ACDC v2 IPEX child exchange stream.
 
                 Args:
                     team (tuple): Real group environments and coordinators.
-                    stream (bytes): Exact signed native exchange bytes to approve and deliver.
+                    stream (bytes): Exact signed ACDC v2 IPEX exchange bytes to approve and deliver.
 
                 Returns:
                     bytearray: Serialized accepted child exchange/proof after every group peer
@@ -488,7 +488,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
                 """Anchor a holder-group presentation binding and attach its actual historical source.
 
                 Args:
-                    stream (bytes): Native Grant stream whose first node receives the source.
+                    stream (bytes): ACDC v2 IPEX Grant stream whose first node receives the source.
                     exn (Serder): Grant whose immutable SAID the public presentation update binds.
                     prior (str): Accepted holder TEL predecessor.
                     sn (int): Next holder registry ordinal.
@@ -585,7 +585,7 @@ def test_group_ipex_independent_schema_preserves_approved_disclosure(arrival, in
             """Feed an independent schema through the selected real direct/mailbox parser.
 
             Args:
-                owner (NativeGroup): Peer sharing one concrete Sectioner with both parsers.
+                owner (AcdcV2GroupCoordinator): Peer sharing one concrete Sectioner with both parsers.
                 message (SerderACDC): Independently received schema section message.
 
             Returns:

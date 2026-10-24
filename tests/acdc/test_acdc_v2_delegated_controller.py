@@ -1,4 +1,4 @@
-"""Native registry acceptance waits for genuine remote KEL delegation."""
+"""ACDC v2 registry acceptance waits for genuine remote KEL delegation."""
 from keri import Vrsn_2_0
 from keri.acdc import Regery, acdcmap, grant, loadHandlers
 from keri.acdc.messaging import regcept, update
@@ -22,7 +22,7 @@ class Notices:
         pass
 
 
-def test_native_delegated_issuer_recovers_after_real_authorization_and_reopen(tmp_path):
+def test_acdc_v2_delegated_issuer_recovers_after_real_authorization_and_reopen(tmp_path):
     """Retain foreign TEL dependencies across reopen and accept only after real delegator authorization recovers the issuer KEL.
 
     Parameters:
@@ -67,7 +67,7 @@ def test_native_delegated_issuer_recovers_after_real_authorization_and_reopen(tm
             rever.processEscrows()
             assert rever.store.head(rip.said) is None
             # Only real delegator approval plus its exact source reference makes
-            # the remote dip acceptable. Native TEL acceptance then recovers.
+            # the remote dip acceptable. ACDC v2 registry TEL acceptance then recovers.
             approval = delegator.interact(data=[dict(i=issuer.pre, s='0', d=dip.said)],
                                           version=Vrsn_2_0, gvrsn=Vrsn_2_0)
             parser.parse(ims=bytearray(approval))

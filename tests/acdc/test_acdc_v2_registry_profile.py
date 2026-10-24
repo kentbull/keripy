@@ -1,4 +1,4 @@
-"""Approved native registry profile: mixed updates and canonical fields."""
+"""Approved ACDC v2 registry profile: mixed updates and canonical fields."""
 import pytest
 
 from keri import Vrsn_2_0

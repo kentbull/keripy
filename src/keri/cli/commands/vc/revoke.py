@@ -8,7 +8,7 @@ import argparse
 from hio.base import doing
 
 from ...common import Parsery, setupHby
-from ...common import native
+from ...common import acdc_v2
 
 from ....kering import ValidationError, Ilks, Vrsn_1_0
 from ....app import (MailboxDirector, HaberyDoer, Counselor,
@@ -31,19 +31,19 @@ parser.add_argument('--said', help='is SAID vc content qb64')
 parser.add_argument('--send', help='alias of contact to send the revocation events to (can be repeated)',
                     required=False, action="append")
 parser.add_argument("--time", help="timestamp for the revocation", required=False, default=None)
-native.options(parser, author=True)
-parser.add_argument('--unblinded', action='store_true', help='use an explicit native upd revocation')
+acdc_v2.options(parser, author=True)
+parser.add_argument('--unblinded', action='store_true', help='use an explicit ACDC v2 upd revocation')
 
 
 def revokeCredential(args):
-    """Select explicit native revocation or the established legacy revoke worker.
+    """Select explicit ACDC v2 revocation or the established legacy revoke worker.
 
     args identifies controller/registry and credential plus timestamp/publication
-    controls. Return lifecycle Doers. NativeAuthor requires issued inventory and
+    controls. Return lifecycle Doers. AcdcV2Author requires issued inventory and
     normal accepted anchoring; public versus derived blinded updates follow the
     explicit CLI options. Core/authentication failures propagate during work."""
-    if getattr(args, 'native', False):
-        return [native.NativeAuthor(args, 'revoke')]
+    if getattr(args, 'acdc_v2', False):
+        return [acdc_v2.AcdcV2Author(args, 'revoke')]
     name = args.name
 
     revokeDoer = RevokeDoer(name=name, alias=args.alias, said=args.said, base=args.base, bran=args.bran,

@@ -11,7 +11,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ...common import Parsery, setupHby
-from ...common import native
+from ...common import acdc_v2
 from ....kering import ConfigurationError
 
 from ....app import serialize
@@ -34,37 +34,37 @@ parser.add_argument("--chains", help="export any chained credentials", action="s
 parser.add_argument("--full", help="export credential, signatures, tels, kels and full chains", action="store_true")
 parser.add_argument("--files", help="export artifacts to individual files keyed off of AIDs or SAIDS, default is "
                                     "stdout", action="store_true")
-native.options(parser)
+acdc_v2.options(parser)
 parser.add_argument('--custody', action='store_true', help='export a plaintext per-registry salt file with owner-only permissions; arrange authenticated private transfer separately')
-parser.add_argument('--derive', action='store_true', help='with --v2 --full, explicitly derive a missing historical issuance opening from provisioned custody')
-parser.add_argument('--opening', help='with --v2 --full, use one event-specific CESR opening file without loading registry salts')
+parser.add_argument('--derive', action='store_true', help='with --acdc-v2 --full, explicitly derive a missing historical issuance opening from provisioned custody')
+parser.add_argument('--opening', help='with --acdc-v2 --full, use one event-specific CESR opening file without loading registry salts')
 parser.add_argument('--registry-name', '-r', default=None)
-parser.add_argument('--output', default=None, help='native export destination (created exclusively)')
+parser.add_argument('--output', default=None, help='ACDC v2 export destination (created exclusively)')
 
 
 def export_credentials(args):
-    """Return native evidence/handoff work or the existing legacy export worker.
+    """Return ACDC v2 evidence/handoff work or the existing legacy export worker.
 
     args chooses identity, credential, registry, destination, and evidence flags.
-    Native export requires registry-name and an explicit output path or raises
-    ConfigurationError. Native read owns store cleanup and exclusive file creation;
+    ACDC v2 export requires registry-name and an explicit output path or raises
+    ConfigurationError. ACDC v2 read owns store cleanup and exclusive file creation;
     plaintext custody export is an explicit capability, never implied by listing.
     Legacy export behavior remains the default."""
-    if getattr(args, 'native', False):
+    if getattr(args, 'acdc_v2', False):
         # Reject mixed public/private requests before opening any identity or
         # secret store. Custody must never silently take precedence over evidence.
         if args.custody and any((args.said, args.tels, args.kels, args.chains,
                                 args.full, args.files, args.derive, args.opening)):
             raise ConfigurationError('--custody cannot be combined with credential/evidence export options')
         if args.files:
-            raise ConfigurationError('native export uses --output, not --files')
+            raise ConfigurationError('ACDC v2 export uses --output, not --files')
         if (args.derive or args.opening) and not args.full:
-            raise ConfigurationError('--derive and --opening require --v2 --full')
+            raise ConfigurationError('--derive and --opening require --acdc-v2 --full')
         if not args.output or not args.registry_name:
-            raise ConfigurationError('native export requires --output and --registry-name')
-        return native.read(args, 'export')
+            raise ConfigurationError('ACDC v2 export requires --output and --registry-name')
+        return acdc_v2.read(args, 'export')
     if args.custody or args.derive or args.opening:
-        raise ConfigurationError('--custody, --derive and --opening require --v2')
+        raise ConfigurationError('--custody, --derive and --opening require --acdc-v2')
     tels = args.tels
     kels = args.kels
     chains = args.chains if args.chains is not None else {}

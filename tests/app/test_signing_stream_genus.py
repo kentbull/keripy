@@ -12,7 +12,7 @@ from keri.vc import credential
 def test_credential_serialization_preserves_body_and_exact_source_triple(version):
     """Serialize a real credential body and recover its exact typed source triple.
 
-    version selects legacy v1 or native v2. The source's nonzero ordinal and
+    version selects legacy v1 or ACDC v2. The source's nonzero ordinal and
     independent digest expose coordinate conversion errors, while exact body
     equality protects the credential commitment. Return None; pytest asserts
     footer decoding and coordinate equality. This tests framing, not issuer or

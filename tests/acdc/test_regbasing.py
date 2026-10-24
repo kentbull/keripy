@@ -15,7 +15,7 @@ from keri.db import openLMDB, subing
 
 
 def test_regbaser_store_contract():
-    """Test the native six-store registry database contract."""
+    """Test the ACDC v2 registry TEL six-store database contract."""
     with openLMDB(cls=regbasing.RegBaser,
                   name="test-regbaser", temp=True) as baser:
         assert isinstance(baser, regbasing.RegBaser)

@@ -38,7 +38,7 @@ def test_cli_registry_issue_revoke_keeps_selected_version(tmp_path, version):
         icount=1, isith='1', ncount=1, nsith='1')))
     invoke('init', '--version', version)
     invoke('incept', '-a', 'issuer', '--version', version, '--file', str(options))
-    native = ['--v2'] if version == '2.0' else []
+    native = ['--acdc-v2'] if version == '2.0' else []
     create = []
     if version == '1.0':
         schema = Schemer(sed={'$id': '', '$schema': 'http://json-schema.org/draft-07/schema#',

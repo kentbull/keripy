@@ -1,4 +1,4 @@
-"""HTTP adapters for shared native evidence authentication and availability.
+"""HTTP adapters for shared signed-query authentication and availability.
 
 Extracted without protocol changes from the qualified registrar adapter at
 KERIpy 64e14e08. Applications choose routes and allowlists; these helpers bind
@@ -12,7 +12,7 @@ from keri.core import Parser
 
 
 def authenticate(req, ctx, allowed, routes):
-    """Authenticate one complete native query and enforce the service allowlist.
+    """Authenticate one complete KERI v2 signed query and enforce the service allowlist.
 
         Args:
             req: Falcon request carrying one signed CESR query in its bounded body.
@@ -40,7 +40,7 @@ def authenticate(req, ctx, allowed, routes):
             raise ValueError('expected exactly one complete signed query')
         serder = dom.serder
         if serder.ilk != 'qry' or serder.pvrsn != Vrsn_2_0:
-            raise ValueError('expected a native signed query')
+            raise ValueError('expected a KERI v2 signed query')
     except Exception as ex:
         raise falcon.HTTPBadRequest(description=str(ex)) from ex
     if serder.route not in routes or serder.pre not in allowed:

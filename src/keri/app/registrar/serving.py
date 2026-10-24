@@ -16,7 +16,7 @@ from keri.db.basing import BaserDoer
 
 
 class Context(EvidenceContext):
-    """Compose shared native verification with registrar HTTP publication policy."""
+    """Compose shared KEL and ACDC v2 registry verification with registrar HTTP publication policy."""
 
     def __init__(self, hby, *, publishers=(), observers=(), reger=None, config=None):
         """Bind publisher/observer allowlists and routes to the shared evidence owner.

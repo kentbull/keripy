@@ -124,15 +124,15 @@ def _normalizeEventRecord(evt):
                               f"event {serder.said}.")
     sn = serder.sad['n']
     if not isinstance(sn, str) or not re.fullmatch(r"0|[1-9a-f][0-9a-f]*", sn):
-        raise MissequenceError("native registry ordinal must be canonical hexadecimal")
+        raise MissequenceError("ACDC v2 registry ordinal must be canonical hexadecimal")
     stamp = serder.sad['dt']
     if not isinstance(stamp, str) or not re.fullmatch(
             r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}[+-][0-9]{2}:[0-9]{2}", stamp):
-        raise ValidationError("native registry timestamp requires microseconds and numeric offset")
+        raise ValidationError("ACDC v2 registry timestamp requires microseconds and numeric offset")
     try:
         datetime.fromisoformat(stamp)
     except ValueError as ex:
-        raise ValidationError("invalid native registry timestamp") from ex
+        raise ValidationError("invalid ACDC v2 registry timestamp") from ex
     return _RegEventRecord(serder=serder,
                            said=serder.said,
                            ilk=ilk,
@@ -375,7 +375,7 @@ def _verifyAnchorCouple(serder, *, db, issuer, number, diger):
 def _validateSourceLocators(serder, *, db, issuer, sscs=(), ssts=()):
     """Reject resolvable false source locators on this intake only.
 
-    Native TEL events identify their registry and authorized controller without
+    ACDC v2 registry TEL events identify their registry and authorized controller without
     unsigned attachments. Source couples/triples locate evidence; they cannot
     impose a persistent sender-controlled condition on later authentic replay.
     Unavailable KEL evidence therefore follows ordinary anchor discovery/escrow.
@@ -1665,7 +1665,7 @@ class _RegEventer:
 
 
 class Rever:
-    """Accept foreign native registries through the local registry event engine.
+    """Accept foreign ACDC v2 registries through the local registry event engine.
 
     Only accepted, fully witnessed controller KEL evidence can release an
     event from escrow. No local habitat, alias, or controller private key is
@@ -1690,7 +1690,7 @@ class Rever:
         """Return acceptance, or False after durably escrowing dependencies.
 
         Args:
-            serder (SerderACDC): Candidate native rip/upd/bup event.
+            serder (SerderACDC): Candidate ACDC v2 registry rip/upd/bup event.
             sscs (Iterable): Issuer-implied KEL source couples on this intake.
             ssts (Iterable): Explicit KEL source triples on this intake.
             **kwa: Additional parser dispatch metadata, unused here.

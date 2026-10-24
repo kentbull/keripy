@@ -1,9 +1,9 @@
-"""Concrete native semantic contexts must retain their actual evidence owners."""
+"""Concrete ACDC v2 IPEX semantic contexts must retain their actual evidence owners."""
 import pytest
 
 from keri import Vrsn_2_0
 from keri.acdc import Regery
-from keri.acdc.ipexing import IpexHandler, NativeVerification
+from keri.acdc.ipexing import IpexHandler, AcdcV2IpexVerification
 from keri.app import ipexing as dispatching, openHby
 from keri.kering import ConfigurationError
 
@@ -14,7 +14,7 @@ def test_ipex_handler_rejects_context_with_wrong_type_or_evidence_owner(handlerT
     """Reject miscomposition through ConfigurationError before processing evidence.
 
     Args:
-        handlerType: Native processor or version dispatcher constructor.
+        handlerType: ACDC v2 IPEX processor or version dispatcher constructor.
         invalidContext: Wrong Habery/Regery binding or a boolean acceptance claim.
 
     Returns:
@@ -26,14 +26,14 @@ def test_ipex_handler_rejects_context_with_wrong_type_or_evidence_owner(handlerT
         rgy = Regery(hby=owner, name=owner.name, temp=True)
         other = Regery(hby=foreign, name=foreign.name, temp=True)
         try:
-            shared = NativeVerification(owner, rgy)
+            shared = AcdcV2IpexVerification(owner, rgy)
             handler = handlerType('/ipex/grant', owner, None, rgy=rgy, verification=shared)
-            native = handler.native if handlerType is dispatching.IpexHandler else handler
-            assert native.verification is shared
+            acdcV2 = handler.acdcV2 if handlerType is dispatching.IpexHandler else handler
+            assert acdcV2.verification is shared
             if invalidContext == 'habery':
-                context = NativeVerification(foreign, rgy)
+                context = AcdcV2IpexVerification(foreign, rgy)
             elif invalidContext == 'regery':
-                context = NativeVerification(owner, other)
+                context = AcdcV2IpexVerification(owner, other)
             else:
                 context = invalidContext
             with pytest.raises(ConfigurationError, match='context must belong to this Habery and Regery'):

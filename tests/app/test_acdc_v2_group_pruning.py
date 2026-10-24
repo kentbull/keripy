@@ -1,12 +1,12 @@
-"""Native group cache maintenance follows the concrete Kramer runtime owner."""
+"""ACDC v2 group cache maintenance follows the concrete Kramer runtime owner."""
 import pytest
 from hio.base import doing
 
 from keri.acdc import grant, loadHandlers
-from keri.app.native_grouping import NativeGroup
+from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from keri.core import Pruner
 from keri.peer.exchanging import Exchanger, serializeMessage
-from tests.app.test_native_groups import Notices, groupMembers
+from tests.app.test_acdc_v2_groups import Notices, groupMembers
 
 
 @pytest.mark.parametrize('shared', [False, True])
@@ -33,7 +33,7 @@ def test_group_pruner_has_one_owner_and_cancels_with_its_runtime(fakeHelpingCloc
         if shared:
             exc = Exchanger(hbys[0], handlers=[])
             loadHandlers(hbys[0], exc, Notices(), rgy=rgys[0])
-            receiver = NativeGroup(hbys[0], rgys[0], groups[0], exc, Notices(),
+            receiver = AcdcV2GroupCoordinator(hbys[0], rgys[0], groups[0], exc, Notices(),
                                    kramer=owner.mux.kvy.kramer)
             assert receiver.pruner is None
             assert not any(isinstance(child, Pruner) for child in receiver.doers)
@@ -41,7 +41,7 @@ def test_group_pruner_has_one_owner_and_cancels_with_its_runtime(fakeHelpingCloc
         sender = groups[0].mhab
 
         def receiveGrant(message):
-            """Authenticate one real empty native Grant to populate the group KRAM cache.
+            """Authenticate one real empty ACDC v2 IPEX Grant to populate the group KRAM cache.
 
             Args:
                 message (str): Human payload distinguishing independent signed Grants.

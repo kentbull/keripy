@@ -108,7 +108,7 @@ class ObservedEvidence(EvidenceContext):
         return result
 
     def close(self):
-        """Close observation and native registry stores after runtime cancellation.
+        """Close observation and ACDC v2 registry stores after runtime cancellation.
 
             Returns:
                 None. The shared Habery remains caller-owned."""

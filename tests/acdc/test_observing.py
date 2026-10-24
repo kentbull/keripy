@@ -1,5 +1,5 @@
 # -*- encoding: utf-8 -*-
-"""Foreign native registry intake using independent KEL and registry stores."""
+"""Foreign ACDC v2 registry TEL intake using independent KEL and registry stores."""
 
 import pytest
 
@@ -16,7 +16,7 @@ from keri.kering import ValidationError
 
 
 def _seal(hab, event, **kwa):
-    """Create a real controller interaction sealing the supplied native TEL event.
+    """Create a real controller interaction sealing the supplied ACDC v2 registry TEL event.
 
     Args:
         hab (Hab): Registry controller whose next key event carries the seal.
@@ -50,7 +50,7 @@ def _copy_kel(hab, receiver, *, local=False):
 
 
 def _events(issuer):
-    """Build a linked three-event native TEL without anchoring it.
+    """Build a linked three-event ACDC v2 registry TEL without anchoring it.
 
     Args:
         issuer (Hab): Controller named by the inception.
@@ -66,10 +66,10 @@ def _events(issuer):
 
 
 def _telstream(*events):
-    """Frame each supplied native TEL body with its required empty foot.
+    """Frame each supplied ACDC v2 registry TEL body with its required empty foot.
 
     Args:
-        *events: Ordered native registry event bodies.
+        *events: Ordered ACDC v2 registry event bodies.
 
     Returns:
         bytearray: Concatenated bodies and explicit v2 zero-count attachment groups."""

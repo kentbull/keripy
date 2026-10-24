@@ -1,4 +1,4 @@
-"""Native anchor authentication does not excuse incomplete CESR framing."""
+"""ACDC v2 registry anchor authentication does not excuse incomplete CESR framing."""
 
 from contextlib import contextmanager
 
@@ -35,7 +35,7 @@ def _anchored_registry():
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize("supplied", [0, 1])
 def test_truncated_native_attachment_group_cannot_accept(code, binary, supplied):
-    """Require every byte declared by a nonempty attachment counter before native semantic dispatch.
+    """Require every byte declared by a nonempty attachment counter before ACDC v2 semantic dispatch.
 
     Parameters:
         code: Small or big attachment-group counter code.
@@ -122,7 +122,7 @@ def test_parse_one_malformed_frame_returns_no_message(processive):
     (False, 'digest'), (False, 'event'), (True, 'digest'),
     (True, 'event'), (True, 'controller'),
 ])
-def test_false_native_source_locator_rejects_frame_without_poisoning(triple, wrong):
+def test_false_acdc_v2_source_locator_rejects_frame_without_poisoning(triple, wrong):
     """Reject a resolvably false source locator for this frame while allowing later clean authentic replay.
 
     Parameters:
@@ -158,7 +158,7 @@ def test_false_native_source_locator_rejects_frame_without_poisoning(triple, wro
         assert rever.store.headEvent(rip.said).said == rip.said
 
 
-def test_unknown_native_source_locator_does_not_override_authentic_discovery():
+def test_unknown_acdc_v2_source_locator_does_not_override_authentic_discovery():
     """Treat an unavailable unsigned source locator as a hint, allowing independently authenticated anchor discovery.
 
     Returns:

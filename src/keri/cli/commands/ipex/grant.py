@@ -7,7 +7,7 @@ import argparse
 import json
 import math
 from pathlib import Path
-from ...common import native_exchange, cesr_sending
+from ...common import acdc_v2_ipex, cesr_sending
 
 from hio.base import doing
 
@@ -45,7 +45,7 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
 parser.add_argument("--time", help="timestamp for the revocation", required=False, default=None)
 
 
-native_exchange.options(parser, send=True)
+acdc_v2_ipex.options(parser, send=True)
 parser.add_argument('--from-grant', help='present this admitted grant disclosure')
 parser.add_argument('--disclose', action='append', default=[], help='attribute disclosure path rooted at a')
 parser.add_argument('--prior', help='accepted apply or agree SAID')
@@ -55,22 +55,22 @@ parser.add_argument('--opening', action='append', default=[], help='file contain
 parser.add_argument('--bound-event', help='explicit accepted issuee KEL event SAID for bound-state derivation')
 
 def handler(args):
-    """Select the explicit native presentation owner or existing legacy Grant runtime.
+    """Select the explicit ACDC v2 presentation owner or existing legacy Grant runtime.
 
     Args:
         args (Namespace): Parsed identity, credential/recipient, version selection,
-        optional native capability controls, and legacy prior/output/delivery options.
+        optional ACDC v2 capability controls, and legacy prior/output/delivery options.
 
     Returns:
-        list[Doer]: One native ExchangeDoer when --v2 is selected, otherwise GrantDoer.
+        list[Doer]: One ACDC v2 ExchangeDoer when --acdc-v2 is selected, otherwise GrantDoer.
 
     Raises:
-        ConfigurationError: Native-only controls are supplied to v1, timeout is not
+        ConfigurationError: Controls reserved for ACDC v2 are supplied to v1, timeout is not
         finite/positive, or opening the selected existing legacy identity fails."""
-    if args.native:
-        return [native_exchange.ExchangeDoer(args, 'grant')]
+    if args.acdc_v2:
+        return [acdc_v2_ipex.ExchangeDoer(args, 'grant')]
     if any(getattr(args, key, None) for key in ('from_grant', 'disclose', 'refresh', 'derive', 'opening', 'bound_event', 'observer', 'registry', 'proposal', 'proposal_output')):
-        raise ConfigurationError('native presentation options require --v2')
+        raise ConfigurationError('ACDC v2 presentation options require --acdc-v2')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         raise ConfigurationError('--timeout must be positive and finite')
     ed = GrantDoer(name=args.name,
@@ -130,7 +130,7 @@ class GrantDoer(doing.DoDoer):
         self.hab = self.hby.habByName(alias)
         if self.hab is None or self.hab.kever.serder.pvrsn != Vrsn_1_0:
             self.hby.close()
-            raise ConfigurationError('legacy grant requires a v1 alias; use --v2 for native workflows')
+            raise ConfigurationError('legacy grant requires a v1 alias; use --acdc-v2 for ACDC v2 workflows')
         self.rgy = credentialing.Regery(hby=self.hby, name=name, base=base)
         self.org = Organizer(hby=self.hby)
         self.noter = Noter(name=self.hby.name, base=self.hby.base, temp=self.hby.temp)
