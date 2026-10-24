@@ -10,9 +10,27 @@ from ..kering import Version
 
 
 def serialize(creder, prefixer, seqner, saider):
+    """Return the exact credential body with its source triple in message genus.
+
+    Args:
+        creder (SerderACDC): Credential whose explicit genus, or protocol version
+            when absent, selects the attachment counter and primitive encoding.
+        prefixer (Prefixer): Source KEL/TEL identifier.
+        seqner (Number | Seqner): Source event ordinal.
+        saider (Diger): Source event digest.
+
+    Returns:
+        bytes: Unchanged credential body followed by one framed source triple.
+        This encodes supplied coordinates; it does not authenticate their source.
+
+    Raises:
+        KeriError, ValueError: Core messagize rejects malformed source material.
+    """
+    # A library default can differ from a retained legacy credential's genus;
+    # its verifier must recover the source triple rather than a generic group.
     return bytes(messagize(creder,
                            bonds=[SealEvent(i=prefixer, s=seqner, d=saider)],
-                           framed=True, gvrsn=Version))
+                           framed=True, gvrsn=creder.gvrsn or creder.pvrsn))
 
 
 #def ratify(hab, serder, paths=None, pipelined=False):
