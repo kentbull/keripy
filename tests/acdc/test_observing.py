@@ -77,10 +77,109 @@ def _telstream(*events):
     return bytearray(b"".join(event.raw + empty for event in events))
 
 
+def test_foreign_registry_ordering_and_parser_replay():
+    """Escrow out-of-order foreign events, converge through parser replay, and keep an unanchored rival pending without replacing the head.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openHby(name="foreign-order-issuer", version=Vrsn_2_0) as ihby, \
+            openHby(name="foreign-order-receiver", version=Vrsn_2_0) as rhby, \
+            openLMDB(cls=RegBaser, name="foreign-order", temp=True) as reger:
+        issuer = ihby.makeHab(name="issuer")
+        rip, issued, revoked = _events(issuer)
+        for event in (rip, issued, revoked):
+            _seal(issuer, event)
+        _copy_kel(issuer, rhby)
+        rever = Rever(db=rhby.db, reger=reger)
+
+        assert rever.processEvent(issued) is False
+        assert rever.store.head(rip.said) is None
+        assert reger.ooes.get(keys=rip.said, on=1) == [(issued.said,)]
+        assert rever.processEvent(rip) is True
+        assert rever.store.headEvent(rip.said).said == issued.said
+
+        # Exercise semantic dispatch of ordinary TEL wire bytes, then replay
+        # the old prefix through that same parser without rolling back the head.
+        parser = Parser(rgy=rever, version=Vrsn_2_0)
+        parser.parse(ims=_telstream(revoked))
+        assert rever.store.headEvent(rip.said).said == revoked.said
+        parser.parse(ims=_telstream(rip, issued))
+        assert rever.store.headEvent(rip.said).said == revoked.said
+        assert reger.ooes.get(keys=rip.said, on=1) == []
+
+        fork = messaging.blindate(rip.said, rip.said, Diger(ser=b"fork").qb64)
+        # Occupancy alone is not proof: this unanchored rival remains pending.
+        assert rever.processEvent(fork) is False
+        assert reger.maes.get(keys=rip.said, on=1) == [(fork.said,)]
+        assert reger.conflicts.get((rip.said, '1')) is None
+        assert rever.store.seqEvent(rip.said, 1).said == issued.said
+        assert rever.store.headEvent(rip.said).said == revoked.said
 
 
+def test_foreign_registry_missing_kel_recovers_after_reopen(tmp_path):
+    """Persist missing issuer KEL dependencies and recover the accepted TEL frontier after actual store reopen.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry directory for restart evidence.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openHby(name="foreign-restart-issuer", version=Vrsn_2_0) as ihby, \
+            openHby(name="foreign-restart-receiver", version=Vrsn_2_0) as rhby:
+        issuer = ihby.makeHab(name="issuer")
+        rip, issued, _ = _events(issuer)
+        for event in (rip, issued):
+            _seal(issuer, event)
+
+        reger = RegBaser(name="foreign-restart", temp=False, headDirPath=str(tmp_path))
+        try:
+            rever = Rever(db=rhby.db, reger=reger)
+            assert rever.processEvent(issued) is False
+            assert rever.processEvent(rip) is False
+            assert rever.store.head(rip.said) is None
+            assert reger.maes.get(keys=rip.said, on=0) == [(rip.said,)]
+            assert issuer.pre not in rhby.kevers
+        finally:
+            reger.close()
+
+        reger = RegBaser(name="foreign-restart", temp=False, headDirPath=str(tmp_path))
+        try:
+            rever = Rever(db=rhby.db, reger=reger)
+            rever.processEscrows()
+            assert rever.store.head(rip.said) is None
+            _copy_kel(issuer, rhby)
+            rever.processEscrows()
+            assert rever.store.headEvent(rip.said).said == issued.said
+            assert rever.store.seqEvent(rip.said, 0).said == rip.said
+            assert reger.maes.get(keys=rip.said, on=0) == []
+            assert reger.ooes.get(keys=rip.said, on=1) == []
+        finally:
+            reger.close()
 
 
+def test_foreign_queued_siblings_use_verified_anchor_order():
+    """Choose jointly queued eligible siblings by authenticated KEL anchor order rather than lexical event SAID.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openHby(name="foreign-sibling-issuer", version=Vrsn_2_0) as ihby, \
+            openHby(name="foreign-sibling-receiver", version=Vrsn_2_0) as rhby, \
+            openLMDB(cls=RegBaser, name="foreign-sibling", temp=True) as reger:
+        issuer = ihby.makeHab(name="issuer")
+        rip = messaging.regcept(israid=issuer.pre)
+        candidates = [messaging.blindate(rip.said, rip.said, Diger(ser=label).qb64)
+                      for label in (b"one", b"two")]
+        later, earlier = sorted(candidates, key=lambda event: event.said)
+        for event in (rip, earlier, later):
+            _seal(issuer, event)
+        _copy_kel(issuer, rhby)
+        rever = Rever(db=rhby.db, reger=reger)
+        assert rever.processEvent(later) is False
+        assert rever.processEvent(earlier) is False
+        assert rever.processEvent(rip) is True
+        assert rever.store.seqEvent(rip.said, 1).said == earlier.said
+        assert rever.store.headEvent(rip.said).said == earlier.said
+        assert reger.ooes.get(keys=rip.said, on=1) == []
 
 
 def test_foreign_registry_unaccepted_kel_body_cannot_anchor():
@@ -172,8 +271,78 @@ def test_foreign_registry_wrong_controller_and_anchor_do_not_accept():
         assert rever.store.headEvent(rip.said).said == rip.said
 
 
+def test_foreign_update_with_kel_before_inception_recovers_after_reopen(tmp_path):
+    """Retain a verified-anchor update that precedes its inception and recover after reopen without losing its body.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry directory for restart evidence.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openHby(name="foreign-prior-issuer", version=Vrsn_2_0) as ihby, \
+            openHby(name="foreign-prior-receiver", version=Vrsn_2_0) as rhby:
+        issuer = ihby.makeHab(name="issuer")
+        rip, issued, _ = _events(issuer)
+        for event in (rip, issued):
+            _seal(issuer, event)
+        _copy_kel(issuer, rhby)
+        reger = RegBaser(name="foreign-prior", temp=False, headDirPath=str(tmp_path))
+        try:
+            rever = Rever(db=rhby.db, reger=reger)
+            assert rever.processEvent(issued) is False
+            assert rever.store.event(rip.said) is None
+            assert reger.ooes.get(keys=rip.said, on=1) == [(issued.said,)]
+        finally:
+            reger.close()
+
+        reger = RegBaser(name="foreign-prior", temp=False, headDirPath=str(tmp_path))
+        try:
+            rever = Rever(db=rhby.db, reger=reger)
+            assert rever.processEvent(rip) is True
+            assert rever.store.headEvent(rip.said).said == issued.said
+            assert rever.store.anchor(issued.said) is not None
+            assert reger.ooes.get(keys=rip.said, on=1) == []
+        finally:
+            reger.close()
 
 
+def test_foreign_restart_clears_already_resolved_escrows(tmp_path):
+    """Remove stale missing-anchor/out-of-order entries for already accepted events after restart.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent registry directory for restart evidence.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openHby(name="foreign-cleanup-issuer", version=Vrsn_2_0) as ihby, \
+            openHby(name="foreign-cleanup-receiver", version=Vrsn_2_0) as rhby:
+        issuer = ihby.makeHab(name="issuer")
+        rip, issued, revoked = _events(issuer)
+        for event in (rip, issued, revoked):
+            _seal(issuer, event)
+        _copy_kel(issuer, rhby)
+        reger = RegBaser(name="foreign-cleanup", temp=False, headDirPath=str(tmp_path))
+        try:
+            rever = Rever(db=rhby.db, reger=reger)
+            for event in (rip, issued, revoked):
+                assert rever.processEvent(event) is True
+            # Reproduce only the pending rows that survive a process exit after
+            # the acceptance transaction but before separate escrow cleanup.
+            # Accepted state above came entirely through authenticated intake.
+            rever.store.escrowMissingAnchor(rip.said, 0, rip.said)
+            rever.store.escrowOutOfOrder(rip.said, 1, issued.said)
+        finally:
+            reger.close()
+
+        reger = RegBaser(name="foreign-cleanup", temp=False, headDirPath=str(tmp_path))
+        try:
+            rever = Rever(db=rhby.db, reger=reger)
+            rever.processEscrows()
+            assert reger.maes.get(keys=rip.said, on=0) == []
+            assert reger.ooes.get(keys=rip.said, on=1) == []
+            assert rever.store.headEvent(rip.said).said == revoked.said
+        finally:
+            reger.close()
 
 
 def test_foreign_registry_requires_actual_witness_receipts():

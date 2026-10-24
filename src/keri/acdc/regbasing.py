@@ -119,9 +119,35 @@ class RegBaser(LMDBer):
         self.heads = CesrSuber(db=self, subkey='heds.', klas=Saider)
         self.maes = B64OnIoSetSuber(db=self, subkey='maes.')
         self.ooes = B64OnIoSetSuber(db=self, subkey='ooes.')
+        self.conflicts = SerderSuber(db=self, subkey='conflicts.', klas=SerderACDC)
 
         return self.opened
 
+    def recordConflict(self, regk, sn, serder):
+        """Retain the first authenticated competing body for an occupied slot.
+
+        Parameters:
+            regk (str): registry whose accepted ordinal must remain unchanged.
+            sn (int): competing event's sequence number.
+            serder (SerderACDC): validated competing event. The caller must
+                authenticate its issuer anchor before calling; this method
+                requires its verified anchor reference already in .ancs.
+
+        Returns:
+            bool: True when the slot's first proof is recorded; False when a
+                proof already exists. Additional competitors are not archived.
+
+        Raises:
+            ValidationError: no different accepted event, wrong event slot,
+                or missing persisted anchor reference.
+        """
+        accepted = self.tels.get(keys=regk, on=sn)
+        if (accepted is None or accepted.qb64 == serder.said
+                or Number(numh=serder.sad['n']).num != sn
+                or serder.sad.get('rd') != regk
+                or self.ancs.get(keys=serder.said) is None):
+            raise ValidationError('conflict proof requires a different anchored event at an accepted slot')
+        return self.conflicts.put(keys=(regk, f'{sn:x}'), val=serder)
 
     def accept(self, regk, sn, serder):
         """Commit one already authenticated TEL event in this environment.
