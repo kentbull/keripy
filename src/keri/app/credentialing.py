@@ -203,11 +203,159 @@ class Wallet:
             raise ValidationError('issued credential bytes do not match their retained identifier')
         return acdc
 
+    def _accepted(self, said, route):
+        """Require authenticated completed native exchange evidence at an exact route.
 
+            Args:
+                said (str): Retained EXN SAID.
+                route (str): Expected native IPEX route for this consent operation.
 
+            Returns:
+                SerderKERI: Authenticated retained exchange body.
 
+            Raises:
+                ConfigurationError: Wallet lacks its actual matching Exchanger/route.
+                ValidationError: Version, identity, route, completion, or signatures fail.
 
+            This check is insufficient for new admission by itself: _verification must
+            additionally re-run concrete native credential semantics under current policy."""
+        if self.exc is None or self.exc.hby is not self.hby or route not in self.exc.routes:
+            raise ConfigurationError('the wallet requires its actual IPEX Exchanger')
+        exn = self.hby.db.exns.get((said,))
+        if (exn is None or exn.said != said or exn.route != route
+                or exn.pvrsn.major != 2 or not self.exc.complete(said)):
+            raise ValidationError('accepted native IPEX evidence is required')
+        exchanging.verify(self.hby, exn)
+        return exn
 
+    def _verification(self):
+        """Return the concrete native context for fresh semantic acceptance.
+
+        Returns:
+            NativeVerification: Configured proof-and-policy validation context.
+
+        Raises:
+            ConfigurationError: Context is arbitrary or belongs to another owner.
+        """
+        context = self.verification
+        if (type(context) is not NativeVerification or context.hby is not self.hby
+                or context.rgy is not self.rgy):
+            raise ConfigurationError('configured concrete native IPEX verification is required')
+        return context
+
+    def recordAdmission(self, grant, admit, *, consent=False):
+        """Record explicit local consent to an actual accepted grant/admit pair.
+
+        Generic EXN storage is insufficient. New wallet admissions use the core's
+        idempotent retained-IPEX validation as well as authenticated messages and
+        actual response linkage. An existing consent record remains history;
+        reading it does not promise current credential standing.
+
+        Args:
+            grant (str): Retained grant SAID with exactly one disclosed origin.
+            admit (str): Retained response SAID signed by its local holder.
+            consent (bool): Explicit True is required for local retention.
+
+        Returns:
+            AdmittedCredential: Existing identical consent or newly persisted row.
+
+        Raises:
+            ValidationError: Consent, evidence, response linkage, or current native
+                semantic acceptance is invalid.
+            ConfigurationError: Exchange or concrete verification owner is absent.
+        """
+        if consent is not True:
+            raise ValidationError('explicit consent is required before wallet admission')
+        gexn, aexn = self._accepted(grant, '/ipex/grant'), self._accepted(admit, '/ipex/admit')
+        holder = gexn.sad.get('ri')
+        response = self.hby.db.erpy.get((grant,))
+        if (self.hby.habByPre(holder) is None or aexn.pre != holder or aexn.sad.get('p') != grant
+                or aexn.sad.get('ri') != gexn.pre or response is None or response.qb64 != admit):
+            raise ValidationError('admit must be the local intended holder response to this grant')
+        origins = gexn.sad['a'].get('o')
+        if not isinstance(origins, list) or len(origins) != 1:
+            raise ValidationError('wallet admission requires one disclosed origin credential')
+        nested = exchanging.loadParsedNestedSubstreams(self.hby, grant)
+        if not any(isinstance(item.serder, SerderACDC) and item.serder.said == origins[0] for item in nested):
+            raise ValidationError('accepted grant origin evidence is missing')
+        old = self.db.admitted.get((grant,))
+        if old is not None:
+            if old.admit != admit or old.credential != origins[0] or old.holder != holder:
+                raise ValidationError('conflicting wallet admission for this grant')
+            return old
+        verification = self._verification()
+        for route, message in (('/ipex/grant', gexn), ('/ipex/admit', aexn)):
+            if not verification.verifyAccepted(message.said, route):
+                raise ValidationError('native IPEX semantic acceptance is required before wallet admission')
+        record = AdmittedCredential(origins[0], grant, admit, holder, helping.nowIso8601())
+        # Only this application environment participates in the transaction.
+        with self.db.env.begin(write=True) as txn:
+            txn.put(self.db.admitted._tokey((grant,)), self.db.admitted._ser(record),
+                    db=self.db.admitted.sdb, overwrite=False)
+            txn.put(self.db.credentials._tokey((record.credential, grant)), self.db.credentials._ser(grant),
+                    db=self.db.credentials.sdb, overwrite=False)
+        return self.db.admitted.get((grant,))
+
+    def heldCredential(self, grant):
+        """Read one admitted grant's exact retained proof without merging later views.
+
+            Args:
+                grant (str): Grant SAID with existing explicit local consent.
+
+            Returns:
+                dict: Exact credential, serialized origin proof, other original artifacts,
+                    retained grant, and admit SAID. No cached fuller section is substituted.
+
+            Raises:
+                ValidationError: Consent, authenticated exchange evidence, or origin is absent.
+                ConfigurationError: Matching retained exchange processor is unavailable.
+
+            Current graph policy and private custody are unnecessary for historical proof
+            retrieval; onward acceptance still invokes the receiving semantic verifier."""
+        record = self.db.admitted.get((grant,))
+        if record is None:
+            raise ValidationError('this grant has not been admitted to the wallet')
+        exn = self._accepted(grant, '/ipex/grant')
+        self._accepted(record.admit, '/ipex/admit')
+        nests = exchanging.loadParsedNestedSubstreams(self.hby, grant)
+        for nest in nests:
+            if nest.serder.said == record.credential:
+                return {'credential': nest.serder,
+                        'proof': exchanging.serializeParsedSubstream(nest),
+                        'artifacts': [exchanging.serializeParsedSubstream(other) for other in nests
+                                      if other.serder.said != record.credential],
+                        'grant': exn, 'admit': record.admit}
+        raise ValidationError('admitted grant origin evidence is missing')
+
+    def inventory(self):
+        """List durable issued/admitted references without private capability access.
+
+            Returns:
+                dict: issued and held record lists. Notifications do not create consent;
+                    returned history makes no current-standing or freshness claim."""
+        return {'issued': [record for _, record in self.db.issued.getTopItemIter()],
+                'held': [record for _, record in self.db.admitted.getTopItemIter()]}
+
+    def admissions(self, credential):
+        """List distinct grant-specific consents for one credential commitment.
+
+            Args:
+                credential (str): Credential SAID, which may have several disclosure views.
+
+            Returns:
+                list[AdmittedCredential]: Existing consent rows referenced by its index.
+
+            Raises:
+                ValidationError: A credential index points to a missing consent record.
+
+            The index does not combine fuller views or promote notification-only receipt."""
+        result = []
+        for _, grant in self.db.credentials.getTopItemIter((credential, '')):
+            record = self.db.admitted.get((grant,))
+            if record is None:
+                raise ValidationError('wallet credential index references a missing admission')
+            result.append(record)
+        return result
 
     def close(self):
         """Close this wallet's application environment after dependent work stops.
