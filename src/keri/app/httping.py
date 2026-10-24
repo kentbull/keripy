@@ -86,7 +86,9 @@ def parseCesrHttpRequest(req):
         req (falcon.Request) http request object in CESR format:
 
     """
-    if req.content_type != CESR_CONTENT_TYPE:
+    # Released KERIpy 1.2.14/1.3.6 use this media type for the same
+    # JSON-body plus CESR-ATTACHMENT contract. Authentication is downstream.
+    if req.content_type not in (CESR_CONTENT_TYPE, "application/cesr+json"):
         raise falcon.HTTPError(falcon.HTTP_NOT_ACCEPTABLE,
                                title="Content type error",
                                description="Unacceptable content type.")

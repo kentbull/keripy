@@ -17,19 +17,21 @@ from keri.vdr import Regery, Tevery, Verifier
 
 
 
-def test_parse_cesr_request():
+@pytest.mark.parametrize("content_type", [CESR_CONTENT_TYPE, "application/cesr+json"])
+def test_parse_cesr_request(content_type):
+    """Require the same JSON body and attachment contract for both supported CESR media types."""
     req = helpers.create_req()
     with pytest.raises(falcon.HTTPError):
         parseCesrHttpRequest(req=req)
 
     req = helpers.create_req(headers=dict(
-        Content_Type=CESR_CONTENT_TYPE,
+        Content_Type=content_type,
     ))
     with pytest.raises(falcon.HTTPError):
         parseCesrHttpRequest(req=req)
 
     req = helpers.create_req(headers=dict(
-        Content_Type=CESR_CONTENT_TYPE,
+        Content_Type=content_type,
         CESR_DATE_HEADER="2021-06-27T21:26:21.233257+00:00",
     ))
     with pytest.raises(falcon.HTTPError):
@@ -37,7 +39,7 @@ def test_parse_cesr_request():
 
     req = helpers.create_req(
         headers=dict(
-            Content_Type=CESR_CONTENT_TYPE,
+            Content_Type=content_type,
             CESR_DATE="2021-06-27T21:26:21.233257+00:00",
         ),
         body='{}',
@@ -48,7 +50,7 @@ def test_parse_cesr_request():
     req = helpers.create_req(
         path="/credential/issue",
         headers=dict(
-            Content_Type=CESR_CONTENT_TYPE,
+            Content_Type=content_type,
             CESR_DATE="2021-06-27T21:26:21.233257+00:00",
             CESR_ATTACHMENT="-H000000000"
         ),
