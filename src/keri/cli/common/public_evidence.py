@@ -258,6 +258,149 @@ class Request(doing.DoDoer):
                 client.close()
 
 
+def opening(args):
+    """Build an operation exporting one explicitly derived, authenticated opening.
+
+    Args:
+        args (Namespace): Registry/credential/ordinal/state/output plus optional exact
+        admitted Grant and historical bound coordinates.
+
+    Returns:
+        list[Doer]: One scheduled operation. Execution explicitly composes custody;
+        ordinary inventory and supplied-opening paths do not call this adapter.
+
+    The opening is checked by vetBlind/vetBound before exclusive output creation.
+    It discloses one event proof, never the registry salt."""
+    def run(tymth, tock=0.0, **kwa):
+        """Derive and verify the selected event proof, then write its exact CESR bytes.
+
+        Args:
+            tymth (Callable): HIO injected clock, unused by this local operation.
+            tock (float): Initial cooperative scheduling delay.
+            **kwa: Additional scheduler metadata, unused here.
+
+        Yields:
+            float: Initial delay before local proof/evidence processing.
+
+        Returns:
+            None. Prints the exact event/opening identifiers and output byte digest.
+
+        Raises:
+            ConfigurationError: Unknown registry/issued credential, missing custody,
+            wrong admitted credential, or selected event is not an accepted bup.
+            KeriError: Custody authentication or common BLID/bound verification fails.
+            OSError: Exclusive output creation or evidence access fails.
+
+        The exact admitted view is revalidated through Peer before holder derivation;
+        no cached fuller credential is substituted. Store context managers own cleanup."""
+        yield tock
+        from keri.acdc.sectioning import SectionBaser
+        from keri.cli.common.native_exchange import Peer
+        from keri.db import openLMDB
+        with (native.opened(args, custody=True) as (hby, rgy, wallet),
+              openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections):
+            regid = args.registry or native.registry(rgy, args.registry_name).regk
+            if args.from_grant:
+                # Reuse the same retained semantic context as ordinary holder
+                # presentation; possession of a grant reference is not consent.
+                peer = Peer(hby, rgy, wallet, sections)
+                acdc = wallet.heldCredential(args.from_grant)['credential']
+                if acdc.said != args.said:
+                    raise ConfigurationError('admitted grant does not bind the requested credential')
+            else:
+                acdc = wallet.issuedCredential(args.said)
+            event = rgy.store.seqEvent(regid, args.ordinal)
+            if event is None or event.ilk != 'bup':
+                raise ConfigurationError('opening requires an accepted blinded event')
+            parameters = wallet.boundEvent(acdc, args.bound_event) if args.bound_event else {}
+            proof = wallet.custody.derive(regid, args.ordinal, acdc.said, args.state, **parameters)
+            vetBlind(proof, blid=event.sad['b'])
+            vetBound(proof, acdc=acdc, db=hby.db)
+            digest = write(args.output, proof.qb64b)
+            print(json.dumps(dict(registry=regid, event=event.said, ordinal=args.ordinal,
+                                  credential=acdc.said, opening=proof.said, sha256=digest)))
+    return [doing.doify(run)]
+
+
+class Advance(native.NativeAuthor):
+    """Author an explicit new state-preserving blind with witnessed acceptance."""
+
+    def __init__(self, args):
+        """Bind an explicit state-preserving blinded-update authoring operation.
+
+        Args:
+            args (Namespace): Issuer alias, registry, credential, expected current state,
+            optional bound event, and finite anchor-acceptance timeout.
+
+        Returns:
+            None. Uses the existing NativeAuthor runtime; no update is authored yet."""
+        super().__init__(args, 'advance')
+
+    def run(self, tymth, tock=0.03125, **kwa):
+        """Verify current state, author its next blind, and await real anchor receipts.
+
+        Args:
+            tymth (Callable): HIO injected clock used by authoring/receipt deadlines.
+            tock (float): Cooperative scheduling interval.
+            **kwa: Additional scheduler lifecycle metadata, unused here.
+
+        Yields:
+            float | None: Initial delay and delegated anchor/receipt progress.
+
+        Returns:
+            None. Prints accepted update JSON only after ordinary registry acceptance.
+
+        Raises:
+            ConfigurationError: Invalid timeout, absent/nonindividual controller, no
+            accepted bup head, missing custody, or conflicting staged authoring work.
+            KeriError: Supplied state/bound coordinates fail common proof verification.
+            TimeoutError: Required anchor/witness evidence does not complete in time.
+
+        Retries reuse one matching staged TEL/anchor instead of resealing. Owned Habery
+        and receipt child doers are removed before native store contexts close."""
+        self.wind(tymth)
+        self.tock = tock
+        yield tock
+        args = self.args
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            raise ConfigurationError('--timeout must be positive and finite')
+        self.auths = native.readWitnessAuth(getattr(args, 'witness_auth_file', None))
+        with native.opened(args, custody=True) as (hby, rgy, wallet):
+            from keri.app import GroupHab
+            hab = hby.habByName(args.alias)
+            reg = native.registry(rgy, args.registry_name, hab)
+            if hab is None or isinstance(hab, GroupHab):
+                raise ConfigurationError('advance currently requires an individual registry controller')
+            if set(self.auths) - set(hab.kever.wits):
+                raise ConfigurationError('witness authentication names a noncurrent witness')
+            acdc = wallet.issuedCredential(args.said)
+            head = reg.store.headEvent(reg.regk)
+            if head is None or head.ilk != 'bup':
+                raise ConfigurationError('advance requires an accepted blinded state')
+            bound = wallet.boundEvent(acdc, args.bound_event) if args.bound_event else {}
+            old = wallet.custody.derive(reg.regk, head.sn, acdc.said, args.state, **bound)
+            vetBlind(old, blid=head.sad['b'])
+            vetBound(old, acdc=acdc, db=hby.db)
+            nextproof = wallet.custody.derive(reg.regk, head.sn + 1, acdc.said, args.state, **bound)
+            staged = [event for _, event in rgy.baser.evts.getTopItemIter()
+                      if event.sad.get('rd') == reg.regk and event.sad.get('n') == f'{head.sn + 1:x}']
+            if staged:
+                if len(staged) != 1 or staged[0].sad.get('b') != nextproof.said or staged[0].sad.get('p') != head.said:
+                    raise ConfigurationError('registry has different pending authoring work')
+                event = staged[0]
+            else:
+                event = messaging.blindate(reg.regk, head.said, nextproof.said, sn=head.sn + 1)
+                reg.processEvent(event)
+            workers = [HaberyDoer(habery=hby), Receiptor(hby=hby)]
+            self.extend(workers)
+            try:
+                yield from self.anchor(hby, reg, event, workers[1])
+                print(json.dumps(dict(accepted=True, registry=reg.regk, update=event.said,
+                                      sn=event.sn, credential=acdc.said, state=args.state)))
+            finally:
+                self.remove(workers)
+
+
 def inspect(args):
     """Build an inspection operation reporting exact retained native EXN views.
 
