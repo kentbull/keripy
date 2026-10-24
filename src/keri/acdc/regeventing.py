@@ -513,12 +513,41 @@ def vetUpdate(bup, rip):
     return _validateUpdate(bup, regid=vetRip(rip).said).serder
 
 
+def _blindCandidates(blinder):
+    """Decode exactly one blind or bound opening without ignoring trailing bytes.
+
+    Args:
+        blinder (Blinder | str | bytes): One complete blind or bound opening.
+
+    Returns:
+        list[Blinder]: Supported exact decodings; a Blinder is preserved directly.
+
+    Raises:
+        UnverifiedBlindError: No supported exact encoding consumes all supplied bytes.
+        Opening target/BLID authentication is performed separately by vetBlind."""
+    if isinstance(blinder, Blinder):
+        return [blinder]
+    qb64 = blinder.decode() if hasattr(blinder, "decode") else blinder
+    candidates = []
+    for clan in (BlindState, BoundState):
+        try:
+            candidate = Blinder(clan=clan, qb64=qb64)
+        except Exception:
+            continue
+        if candidate.qb64 == qb64:
+            candidates.append(candidate)
+    if not candidates:
+        raise UnverifiedBlindError("undecodable disclosed blind or bound opening")
+    return candidates
 
 
 def vetBlind(blinder, *, blid):
     """Verify a disclosed blinded-state attribute block against the BLID
     anchored by a blindable update (bup) event, by recomputing the BLID over
-    the disclosed fields.
+    the exact disclosed CESR field serializations. The anchored digest must be
+    one canonical 44-character digestive CESR primitive. Its declared code
+    determines the verification algorithm, and the opening's own d must equal
+    that BLID. Other primitive encodings are preserved exactly.
 
     Returns:
         (acdc, state) (tuple[str, str]): the disclosed transaction ACDC said
@@ -528,32 +557,34 @@ def vetBlind(blinder, *, blid):
         blinder (Blinder|str|bytes): the disclosed block, either a Blinder
             instance or the qb64 concatenation of its CESR field values as a
             discloser attaches it on the wire
-        blid (str): qb64 BLID, the b field of the bup event
+        blid (str): qb64 BLID, the b field of the bup event; supported codes
+            are Blake3-256, Blake2b-256, Blake2s-256, SHA3-256 and SHA2-256
 
     Raises:
-        UnverifiedBlindError: the disclosure does not reproduce blid, so it
-            proves nothing about the registry's state
+        UnverifiedBlindError: the anchored digest is invalid or unsupported,
+            the disclosure's d differs from it, or the disclosed fields do
+            not reproduce it; no registry state is proved
     """
-    candidates = []
-    if isinstance(blinder, Blinder):
-        candidates.append(blinder)
-    else:
-        qb64 = blinder.decode() if hasattr(blinder, "decode") else blinder
-        for clan in (BlindState, BoundState):
-            try:
-                candidates.append(Blinder(clan=clan, qb64=qb64))
-            except Exception:
-                continue
-        if not candidates:
-            raise UnverifiedBlindError(f"Undecodable disclosed blinded-state "
-                                       f"block for blid={blid}.")
+    # ACDC f0bd097d, BLID d field: only digestive codes with 44-character
+    # qb64 encodings are supported. The anchored code selects the algorithm.
+    try:
+        diger = Diger(qb64=blid)
+    except (KeriError, ValueError, TypeError) as ex:
+        raise UnverifiedBlindError(f"Invalid anchored blid={blid}.") from ex
+    if diger.qb64 != blid or len(diger.qb64) != 44:
+        raise UnverifiedBlindError(f"Unsupported anchored blid={blid}.")
+
+    candidates = _blindCandidates(blinder)
 
     for candidate in candidates:
-        crew = dict(candidate.crew._asdict())
-        crew['d'] = ''
-        redone = Blinder(crew=candidate.clan(**crew), makify=True)
-        if redone.said == blid:
-            return (redone.acdc, redone.state)
+        if candidate.said != blid:
+            continue
+        # d is first in both supported clans. Preserve every other primitive:
+        # rebuilding from crew normalizes valid alternative number/text codes
+        # and can accept an object whose exact bytes never matched the BLID.
+        dummied = b'#' * 44 + b''.join(value.qb64b for value in candidate.data[1:])
+        if diger.verify(dummied):
+            return (candidate.acdc, candidate.state)
 
     raise UnverifiedBlindError(f"Disclosed blinded-state block does not "
                                f"reproduce the anchored blid={blid}: the "
