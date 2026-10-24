@@ -10,6 +10,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ....common import Parsery, existingHby
+from ....common import acdc_v2
 
 from .....kering import ConfigurationError
 from .....vdr import Regery
@@ -21,12 +22,18 @@ parser = argparse.ArgumentParser(description='List credential registry names and
                                  parents=[Parsery.keystore()])
 parser.set_defaults(handler=lambda args: list_registries(args))
 parser.add_argument("--verbose", "-V", help="print JSON of all current events", action="store_true")
+acdc_v2.options(parser)
 
 
 def list_registries(args):
-    """ Command line list credential registries handler
+    """Return registry-listing work for the explicitly selected protocol profile.
 
-    """
+    args identifies the existing identity and ACDC v2 flag. ACDC v2 reads print
+    accepted-head metadata without custody; legacy reads keep their ordinary
+    name/registry/controller output. Return hio Doers whose read contexts own
+    store cleanup; scheduling is not a freshness claim."""
+    if getattr(args, 'acdc_v2', False):
+        return acdc_v2.read(args, 'registries')
     kwa = dict(args=args)
     return [doing.doify(registries, **kwa)]
 

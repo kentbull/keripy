@@ -105,8 +105,13 @@ def launch(args):
 def runWitness(name="witness", base="", alias="witness", bran="", tcp=5631, http=5632, expire=0.0,
                configDir="", configFile=None, keypath=None, certpath=None, cafilepath=None,
                noPrompt=None):
-    """
-    Setup and run one witness
+    """Run existing witness identity/listeners using its established protocol version.
+
+    name/base/alias select the Keeper and witness; bran/noPrompt authenticate it.
+    tcp/http and TLS/config options configure ordinary listeners; expire bounds
+    an optional runController lifetime. Return None after shutdown. Authentication,
+    configuration and socket errors propagate after Habery cleanup. An existing
+    v1 witness must parse/receipt v1 attachments even when library defaults are v2.
     """
     noPrompt = noPrompt if noPrompt is not None else not sys.stdin.isatty()  # When not TTY then do not prompt
 
@@ -136,8 +141,13 @@ def runWitness(name="witness", base="", alias="witness", bran="", tcp=5631, http
         hbyDoer = HaberyDoer(habery=hby)  # setup doer
         doers = [hbyDoer]
 
+        existing = hby.habByName(alias)
+        # Endpoint framing follows the persisted witness, not the current
+        # library default selected while opening a generic Habery.
+        version = existing.kever.serder.pvrsn if existing is not None else hby.version
         doers.extend(setupWitness(alias=alias,
                                   hby=hby,
+                                  version=version,
                                   tcpPort=tcp,
                                   httpPort=http,
                                   keypath=keypath,

@@ -8,6 +8,7 @@ import argparse
 from hio.base import doing
 
 from ...common import Parsery, setupHby
+from ...common import acdc_v2
 
 from ....kering import ValidationError, Ilks, Vrsn_1_0
 from ....app import (MailboxDirector, HaberyDoer, Counselor,
@@ -30,9 +31,20 @@ parser.add_argument('--said', help='is SAID vc content qb64')
 parser.add_argument('--send', help='alias of contact to send the revocation events to (can be repeated)',
                     required=False, action="append")
 parser.add_argument("--time", help="timestamp for the revocation", required=False, default=None)
+acdc_v2.options(parser, author=True)
+parser.add_argument('--public', action='store_true',
+                    help='publish the explicit opening for an ACDC v2 bup revocation')
 
 
 def revokeCredential(args):
+    """Select explicit ACDC v2 revocation or the established legacy revoke worker.
+
+    args identifies controller/registry and credential plus timestamp/publication
+    controls. Return lifecycle Doers. AcdcV2Author requires issued inventory and
+    normal accepted anchoring; public versus derived blinded updates follow the
+    explicit CLI options. Core/authentication failures propagate during work."""
+    if getattr(args, 'acdc_v2', False):
+        return [acdc_v2.AcdcV2Author(args, 'revoke')]
     name = args.name
 
     revokeDoer = RevokeDoer(name=name, alias=args.alias, said=args.said, base=args.base, bran=args.bran,
@@ -45,12 +57,25 @@ def revokeCredential(args):
 class RevokeDoer(doing.DoDoer):
 
     def __init__(self, name, alias, said, base, bran, registryName, send, timestamp, **kwa):
+        """Open and schedule ordinary legacy revocation for an existing issuer.
+
+        name/base/alias and bran select/authenticate the environment; registryName
+        and said select the retained credential. send lists optional notification
+        recipients; timestamp selects event time and kwa holds scheduler options.
+        Return None, owning registry, identity and scheduled protocol workers.
+        Identity/configuration/core errors propagate. Receipt/mailbox parsing
+        follows the established alias protocol; no global default is changed.
+        """
         self.said = said
         self.send = send
         self.timestamp = timestamp
         self.registryName = registryName
         self.hby = setupHby(name=name, base=base, bran=bran)
         self.hab = self.hby.habByName(alias)
+        # Receipt and mailbox parsing follow the established habitat version.
+        if self.hab is not None:
+            self.hby.version = self.hab.kever.serder.pvrsn
+            self.hby.psr.version = self.hby.version
         self.org = Organizer(hby=self.hby)
         self.rgy = Regery(hby=self.hby, name=name, base=base)
         self.hbyDoer = HaberyDoer(habery=self.hby)  # setup doer
@@ -72,14 +97,15 @@ class RevokeDoer(doing.DoDoer):
         super(RevokeDoer, self).__init__(doers=doers, **kwa)
 
     def revokeDo(self, tymth, tock=0.0, **kwa):
-        """  Revoke Credential doer method
+        """Revoke and witness a credential using its registry protocol version.
 
-
-        Parameters:
-            tymth (function): injected function wrapper closure returned by .tymen() of
-                 Tymist instance. Calling tymth() returns associated Tymist .tyme.
-             tock (float): injected initial tock value
-
+        tymth/tock are HIO clock/delay inputs; additional scheduler arguments
+        are unused. Yield cooperative scheduling delays while the ordinary
+        registrar and witness receipt processors complete accepted work.
+        Return None after completion. Core validation, authentication and
+        transport errors propagate. Anchors and receipt parsing explicitly
+        follow the selected registry/habitat version and serialization kind;
+        no library-wide version default changes.
         """
         self.wind(tymth)
         self.tock = tock
@@ -115,9 +141,11 @@ class RevokeDoer(doing.DoDoer):
             rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
 
             if registry.estOnly:
-                anc = hab.rotate(data=[rseal], framed=True)
+                anc = hab.rotate(data=[rseal], framed=True,
+                             version=registry.versionSerder.pvrsn, kind=registry.versionSerder.kind)
             else:
-                anc = hab.interact(data=[rseal], framed=True)
+                anc = hab.interact(data=[rseal], framed=True,
+                               version=registry.versionSerder.pvrsn, kind=registry.versionSerder.kind)
 
             aserder = SerderKERI(raw=bytes(anc))
             self.registrar.revoke(creder, rserder, aserder)
