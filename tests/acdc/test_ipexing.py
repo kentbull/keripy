@@ -7817,7 +7817,10 @@ def test_ipex_v2_finds_attribute_and_aggregate_presentation_registries():
 
 
 def test_ipex_v2_presentation_registry_binds_proxy_grant():
-    """An issuee TEL can satisfy grant ax while sharing a nest with issuer proof."""
+    """Allow the Issuee TEL to bind a proxy Grant and satisfy its negotiated anchor requirement alongside issuer proof.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-presentation-registry",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -8029,8 +8032,8 @@ def test_ipex_v2_presentation_registry_binds_proxy_grant():
                 proofs=[presentationProof, vacuousProof],
                 target=grantExn.said,
                 controller=issuee.pre,
-                cutoff=hby.db.kramTMSC.get(
-                    keys=(grantExn.pre, grantExn.ked["x"], grantExn.said)).rdt,
+                sourceSeals=[(sourcePrefix, sourceNumber, sourceDiger)],
+                requireSource=True,
             )
             assert earlierRecord.acdc == grantExn.said
 
@@ -8039,7 +8042,6 @@ def test_ipex_v2_presentation_registry_binds_proxy_grant():
                 proofs=[laterProof],
                 target=laterGrant,
                 controller=issuee.pre,
-                cutoff=helping.nowIso8601(),
             )
             assert laterRecord.acdc == laterGrant
         finally:

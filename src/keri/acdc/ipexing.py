@@ -1383,6 +1383,126 @@ class IpexHandler:
                 return False, None
             block = aggregate[1]
         return (True, block.get("i")) if isinstance(block, Mapping) else (False, None)
+    def _graphRegistry(self, serder, nest):
+        """Resolve a disclosed registry declaration or explicit one-way source.
+
+        Args:
+            serder (SerderACDC): Exact disclosed node, never a fuller cached view.
+            nest: Parsed node-local source triples used for one-way bindings.
+
+        Returns:
+            str | None: Declared registry, otherwise a unique non-KEL source identifier.
+            Ambiguous or absent source references do not select a registry.
+
+        Raises:
+            MisregistryError: Disclosed protected sections disagree on the issuer registry."""
+        from .regeventing import issuerRegistry
+        regk = issuerRegistry(serder)
+        if regk:
+            return regk
+        parsed = nest if isinstance(nest, dict) else nest.__dict__
+        references = {prefixer.qb64 for prefixer, _, _ in parsed.get('ssts', [])
+                      if prefixer.qb64 != serder.israid and prefixer.qb64 not in self.hby.kevers}
+        return next(iter(references)) if len(references) == 1 else None
+    def _boundEdgeValidity(self, near, far, *, nodes):
+        """Evaluate supplied bound authority using authenticated local histories.
+
+        ACDC's current-event assertion supplies the temporal premise; this does
+        not establish an independent observation/publication time. Every far
+        update needs an opening, so omitted revocations cannot become absence.
+        The earliest near issuance anchor within the verified selected TEL or
+        known accepted issuer KEL supplies its ordinal. This does not establish
+        globally first publication or rule out other undisclosed evidence.
+
+        Args:
+            near (SerderACDC): Authenticated credential making the authority assertion.
+            far (SerderACDC): Authenticated authority credential with optional bounds.
+            nodes (dict): Exact disclosed node views and node-local openings.
+
+        Returns:
+            bool | None: True for ordinary unbounded relations, otherwise the known
+            bound-history predicate; None for incomplete, incomparable, or invalid proof.
+
+        Raises:
+            MissingChainError: A required accepted KEL/TEL dependency is unavailable."""
+        from . import regeventing
+        farNest = nodes[far.said]
+        proofs = self._blindProofs(farNest)
+        if not any(proof.clan == BoundState for proof in proofs):
+            return True  # ordinary relationships make no bound-time assertion
+        regk = self._graphRegistry(far, farNest)
+        if not regk or (evidence := self._registryEvidence(regk)) is None:
+            return None
+        try:
+            record = regeventing.vet(*evidence, db=self.hby.db)
+            if record.issuer != far.israid:
+                return None
+            transitions = []
+            for event in sorted(evidence[1], key=lambda e: Number(numh=e.sad['n']).num):
+                if event.ilk != Ilks.bup:
+                    return None  # public updates have no bound temporal coordinate
+                matches = [proof for proof in proofs if proof.said == event.sad['b']]
+                if len(matches) != 1:
+                    return None  # every update could conceal a revocation
+                proof = matches[0]
+                target, state = regeventing.vetBlind(proof, blid=event.sad['b'])
+                bound = regeventing.vetBound(proof, acdc=far, db=self.hby.db)
+                if not target and not state:
+                    continue
+                if target != far.said or bound is None:
+                    return None
+                transitions.append((state, bound.sn))
+
+            # DI2I may establish a valid relationship across different KELs,
+            # but it does not make their event ordinals comparable.
+            if near.israid != far.iseaid:
+                return None
+            nearNest = nodes[near.said]
+            nearRegk = self._graphRegistry(near, nearNest)
+            anchors = []
+            if nearRegk:
+                if (nearEvidence := self._registryEvidence(nearRegk)) is None:
+                    return None
+                nearRecord = regeventing.vet(*nearEvidence, db=self.hby.db)
+                if nearRecord.issuer != near.israid:
+                    return None
+                nearProofs = self._blindProofs(nearNest)
+                for event in sorted(nearEvidence[1], key=lambda e: Number(numh=e.sad['n']).num):
+                    if event.ilk == Ilks.upd:
+                        target, state = event.sad['td'], event.sad['ts']
+                    else:
+                        matches = [proof for proof in nearProofs if proof.said == event.sad['b']]
+                        if len(matches) != 1:
+                            return None  # cannot locate first issuance through a hidden prefix
+                        target, state = regeventing.vetBlind(matches[0], blid=event.sad['b'])
+                        regeventing.vetBound(matches[0], acdc=near, db=self.hby.db)
+                    if target == near.said and state == 'issued':
+                        anchors.append(nearRecord.anchors[Number(numh=event.sad['n']).num][0])
+            else:
+                parsed = nearNest if isinstance(nearNest, dict) else nearNest.__dict__
+                supplied = bool(parsed.get('sscs')) or any(prefixer.qb64 == near.israid
+                    for prefixer, _, _ in parsed.get('ssts', []))
+                if supplied:
+                    # A presenter cannot hide an earlier seal already in this
+                    # verified KEL merely by attaching a later source couple.
+                    kever = self.hby.kevers[near.israid] if near.israid in self.hby.kevers else None
+                    if kever is None:
+                        return None
+                    for sn in range(kever.sn + 1):
+                        dig = self.hby.db.kels.getLast(keys=near.israid, on=sn)
+                        if dig is not None and self._verifySourceAnchor(near, near.israid,
+                                Number(num=sn), Diger(qb64=dig)):
+                            anchors.append(sn)
+            if not anchors:
+                return None  # a current signature supplies no historical ordinal
+            return regeventing.boundStateAt(transitions, issuee=far.iseaid,
+                issuer=near.israid, sn=min(anchors)).valid
+        except (MissingAnchorError, MissingSenderKeyStateError) as ex:
+            raise MissingChainError('bound authority requires referenced KEL evidence') from ex
+        except MissingChainError:
+            raise
+        except (ValidationError, ValueError, TypeError):
+            return None
     def _evaluateLeafEdge(self, group, *, nodes, nserder, inheritedSchema=None,
                           memo=None, active=None, averages=None):
         """Apply relation, all schema constraints, and optionally NOT of far truth.
@@ -1473,6 +1593,11 @@ class IpexHandler:
                                         active=active, averages=averages)
         if truth is None:
             return None
+        if relation != 'NI2I' and matched:
+            temporal = self._boundEdgeValidity(nserder, far, nodes=nodes)
+            if temporal is None:
+                return None
+            truth = truth and temporal
         if "NOT" in ops:
             truth = not truth
         return matched and truth
@@ -2071,26 +2196,20 @@ class IpexHandler:
     def _presentationRegistries(serder):
         """Extract disclosed issuee/presentation-registry declarations.
 
-        Return ``None`` for an unsupported hidden issuer registry or when a
-        registry-backed ACDC hides an attribute or aggregate element that could
+        Return ``None`` when a registry-backed ACDC hides a section that could
         contain a presentation requirement. A verifier cannot distinguish an
         omitted requirement from an undisclosed one using only its digest.
-        """
+
+        Args:
+            serder (SerderACDC): Exact disclosed node whose a/A blocks to inspect.
+
+        Returns:
+            list[tuple[str, str]] | None: Unique (Issuee, registry) declarations in wire
+            order, an empty list for no disclosed requirement, or None for ambiguity,
+            malformed identifiers, or a hidden potentially relevant section."""
         if not serder.sad.get("rd"):
-            # A disclosed inner rd without top-level rd is an unsupported
-            # hidden issuer registry, not a presentation registry.
-            attribute = serder.sad.get("a")
-            if isinstance(attribute, Mapping) and attribute.get("rd"):
-                return None
-
-            # Apply the same rule to disclosed aggregate entries.
-            aggregate = serder.sad.get("A")
-            sections = aggregate[1:] if isinstance(aggregate, list) else [aggregate]
-            if any(isinstance(section, Mapping) and section.get("rd")
-                   for section in sections):
-                return None
-
-            # A genuinely registry-less ACDC has no presentation declaration.
+            # Inner rd is the protected issuer registry in this form. It does
+            # not also impose an Issuee presentation registry requirement.
             return []
 
         # Collect disclosed sections that may declare Issuee registry pairs.
@@ -2153,7 +2272,19 @@ class IpexHandler:
         return declarations
 
     def _verifyPresentationAuthGraph(self, serder, nodes, order):
-        """Verify every presentation registry in the DAG."""
+        """Verify every presentation registry in the DAG.
+
+        Args:
+            serder (Serder): Grant whose SAID every presentation binding must commit to.
+            nodes (dict): Exact authenticated disclosed nodes and their openings.
+            order (list[str]): Deterministic reachable graph traversal order.
+
+        Returns:
+            list[str] | None: Unique tethering Issuee AIDs when every requirement verifies;
+            None for an invalid or undisclosed requirement.
+
+        Raises:
+            MissingChainError: A declared registry or historical KEL source is unavailable."""
 
         required = []
 
@@ -2179,7 +2310,7 @@ class IpexHandler:
                 # authenticate the grant through this node-local registry.
                 required.append((said, issuee, regk, nest))
 
-        # Load the receiver timestamp that freezes registry history.
+        # KRAM receipt time is not an ordering proof for KEL-anchored state.
         cache = self.hby.db.kramTMSC.get(
             keys=(serder.pre, serder.ked.get("x", ""), serder.said))
 
@@ -2192,17 +2323,16 @@ class IpexHandler:
 
         # Vet every declared registry independently.
         for said, issuee, regk, nest in required:
-            # Resolve the latest disclosed binding as of KRAM acceptance.
+            # Resolve the binding through its verified KEL source reference.
             sourceSeals = nest.get("ssts", []) if isinstance(nest, dict) else nest.ssts
             record = self._vetRegistry(regk=regk,
                                        proofs=self._blindProofs(nest),
                                        target=serder.said,
                                        controller=issuee,
-                                       cutoff=cache.rdt,
                                        sourceSeals=sourceSeals,
                                        requireSource=True)
 
-            # Require a valid binding anchored before the KRAM-accepted send.
+            # This proves anchored authorization, not publication before receipt.
             if record is None:
                 return None
 
