@@ -1117,7 +1117,8 @@ class Kramer:
                     return None
 
                 # All remaining paths need sender's key state
-                kever = self.db.kevers.get(senderId)
+                # Consult persisted verified state when the process cache is cold.
+                kever = self.db.kevers[senderId] if senderId in self.db.kevers else None
                 if kever is None:
                     # Append the cue for the keystate retrieval notification including the senderID
                     self.cues.append({
@@ -1226,7 +1227,8 @@ class Kramer:
             else:  # New cache logic when no existing cache is found for (AID.MID)
                 cacheTypeRecord = self._fetchCacheType(msgType, route)
 
-                kever = self.db.kevers.get(senderId)
+                # Consult persisted verified state when the process cache is cold.
+                kever = self.db.kevers[senderId] if senderId in self.db.kevers else None
                 if kever is None:
                     # Append the cue for the keystate retrieval notification including the senderID
                     self.cues.append({
@@ -1364,7 +1366,8 @@ class Kramer:
                     return None
 
                 # All remaining paths need sender's key state
-                kever = self.db.kevers.get(senderId)
+                # Consult persisted verified state when the process cache is cold.
+                kever = self.db.kevers[senderId] if senderId in self.db.kevers else None
                 if kever is None:
                     # Append the cue for the keystate retrieval notification including the senderID
                     self.cues.append({
@@ -1476,7 +1479,8 @@ class Kramer:
             else:  # New cache logic when no existing cache is found for (AID.XID.MID)
                 cacheTypeRecord = self._fetchCacheType(msgType, route)
 
-                kever = self.db.kevers.get(senderId)
+                # Consult persisted verified state when the process cache is cold.
+                kever = self.db.kevers[senderId] if senderId in self.db.kevers else None
                 if kever is None:
                     # Append the cue for the keystate retrieval notification including the senderID
                     self.cues.append({
