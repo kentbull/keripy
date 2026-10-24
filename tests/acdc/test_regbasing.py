@@ -6,6 +6,9 @@ tests.acdc.test_regbasing module
 
 import os
 
+import lmdb
+import pytest
+
 from keri.acdc import messaging, regbasing
 from keri.core import coring, serdering
 from keri.db import openLMDB, subing
@@ -62,3 +65,81 @@ def test_regbaser_store_contract():
         assert baser.ooes.get(keys=serder.said, on=1) == [(serder.said,)]
 
     assert baser.opened is False
+
+
+@pytest.mark.parametrize("sn", [0, 1])
+@pytest.mark.parametrize("staged", [False, True])
+def test_regbaser_accept_transaction_aborts_on_final_write(monkeypatch, sn, staged):
+    """Inject a real LMDB head-write failure and prove body/ordinal/head rollback together while staged evidence survives.
+
+    Parameters:
+        monkeypatch: Pytest scoped substitution injecting the final durable head-write failure.
+        sn: Inception/update ordinal whose acceptance transaction is exercised.
+        staged: Whether the candidate body was already persisted before the failing transaction.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    with openLMDB(cls=regbasing.RegBaser, name="registry-atomic", temp=True) as baser:
+        rip = messaging.regcept(israid=coring.Diger(ser=b"issuer").qb64)
+        update = messaging.blindate(rip.said, rip.said, coring.Diger(ser=b"issued").qb64)
+        if sn:
+            baser.accept(rip.said, 0, rip)
+        event = update if sn else rip
+        if staged:
+            baser.evts.put(keys=event.said, val=event)
+        anchor = (coring.Number(num=3), coring.Diger(ser=b"anchor"))
+        baser.ancs.put(keys=event.said, val=anchor)
+        baser.env.set_mapsize(1 << 20)
+
+        # Force the last txn.put to exceed this real environment's map. The
+        # ordinary body and ordinal writes have already run in that transaction.
+        with monkeypatch.context() as patch:
+            patch.setattr(baser.heads, "_ser", lambda val: b"x" * (2 << 20))
+            with pytest.raises(lmdb.MapFullError):
+                baser.accept(rip.said, sn, event)
+
+        body = baser.evts.get(keys=event.said)
+        assert (body.raw if body else None) == (event.raw if staged else None)
+        assert baser.tels.get(keys=rip.said, on=sn) is None
+        head = baser.heads.get(keys=rip.said)
+        assert (head.qb64 if head else None) == (rip.said if sn else None)
+        assert baser.ancs.get(keys=event.said)[1].qb64 == anchor[1].qb64
+
+        assert baser.accept(rip.said, sn, event) is True
+        assert baser.evts.get(keys=event.said).raw == event.raw
+        assert baser.tels.get(keys=rip.said, on=sn).qb64 == event.said
+        assert baser.heads.get(keys=rip.said).qb64 == event.said
+
+
+def test_regbaser_accepted_history_survives_reopen(tmp_path):
+    """Reopen real accepted history and verify head, exact replay protection, and unchanged Suber wire encodings.
+
+    Parameters:
+        tmp_path: Pytest-owned persistent RegBaser directory.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    baser = regbasing.RegBaser(name="registry-reopen", temp=False,
+                              headDirPath=str(tmp_path))
+    rip = messaging.regcept(israid=coring.Diger(ser=b"issuer").qb64)
+    update = messaging.blindate(rip.said, rip.said, coring.Diger(ser=b"issued").qb64)
+    anchor = (coring.Number(num=3), coring.Diger(ser=b"anchor"))
+    try:
+        baser.ancs.put(keys=update.said, val=anchor)
+        baser.accept(rip.said, 0, rip)
+        baser.accept(rip.said, 1, update)
+    finally:
+        baser.close()
+
+    baser = regbasing.RegBaser(name="registry-reopen", temp=False,
+                              headDirPath=str(tmp_path))
+    try:
+        assert baser.accept(rip.said, 0, rip) is False
+        assert baser.heads.get(keys=rip.said).qb64 == update.said
+        assert baser.evts.get(keys=rip.said).raw == rip.raw
+        assert baser.evts.get(keys=update.said).raw == update.raw
+        assert baser.tels.get(keys=rip.said, on=0).qb64 == rip.said
+        assert baser.tels.get(keys=rip.said, on=1).qb64 == update.said
+        assert baser.ancs.get(keys=update.said)[1].qb64 == anchor[1].qb64
+    finally:
+        baser.close()

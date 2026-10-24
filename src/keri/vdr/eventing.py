@@ -1575,7 +1575,7 @@ class Tevery:
                 raise LikelyDuplicitousError(msg)
 
     def processQuery(self, serder, source=None, sigers=None, cigars=None, **kwa):
-        """ Process TEL query event message (qry)
+        """Process TEL query event message (qry)
 
         Process query mode replay message for collective or single element query.
         Will cue response message with kin of "replay".  Assume promiscuous mode for now.
@@ -1586,7 +1586,21 @@ class Tevery:
             sigers (list): Siger instances of attached controller indexed sigs
             cigars (list): Siger instances of non-transferable signatures
 
-        ToDo: Need to verify sigers or cigars on query"""
+        ToDo: Need to verify sigers or cigars on query
+
+        Additional parameter:
+            **kwa: Dispatch metadata accepted for compatibility, unused here.
+
+        Returns:
+            None. Enqueues legacy TEL replay or transaction-state reply cues using the
+            existing Tever.vcState(vcpre) public contract.
+
+        Raises:
+            ValidationError: Unsupported resource or malformed query data; unknown local
+            registry/credential lookups retain the existing legacy failure behavior.
+
+        This is the legacy TEL query path. Query attachment arguments are not verified
+        here; native registry service request authentication is a separate boundary."""
         ked = serder.ked
 
         ilk = ked["t"]
@@ -1624,7 +1638,7 @@ class Tevery:
                 self.cues.push(dict(kin="reply", route="/tsn/registry", data=asdict(tsn), dest=source))
 
                 if vcpre := qry["i"]:
-                    tsn = tever.vcState(vcpre=vcpre)
+                    tsn = tever.vcState(vcpre)
                     self.cues.push(dict(kin="reply", route="/tsn/credential", data=asdict(tsn), dest=source))
 
         else:

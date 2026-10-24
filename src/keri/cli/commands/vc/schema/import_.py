@@ -6,12 +6,14 @@ keri.kli.commands.vc.schema module
 """
 import argparse
 import json
+from os import getenv
 
 from hio.base import doing
 from hio.help import ogler
 
 from .....kering import ConfigurationError, ValidationError
 from ....common import setupHby
+from .....app import Keeper
 from .....core import Schemer
 
 logger = ogler.getLogger()
@@ -22,7 +24,7 @@ parser.add_argument('--name', '-n', help='keystore name and file location of KER
 parser.add_argument('--base', '-b', help='additional optional prefix to file location of KERI keystore',
                     required=False, default="")
 parser.add_argument('--passcode', '-p', help='21 character encryption passcode for keystore (is not saved)',
-                    dest="bran", default=None)  # passcode => bran
+                    dest="bran", default=getenv("KLI_KEYSTORE_PASSCODE"))  # passcode => bran
 parser.add_argument('--schema', '-s', help='path to ACDC JSON schema file to import', required=True)
 
 
@@ -40,8 +42,22 @@ def import_schema(args):
 class ImportDoer(doing.DoDoer):
 
     def __init__(self, name, base, bran, schema):
+        """Open existing schema inventory without changing Keeper encryption.
+
+        name/base select the existing environment, bran authenticates an already
+        encrypted Keeper, and schema names a JSON file. Return None. Missing
+        Keeper or authentication errors propagate; a supplied environment passcode
+        never migrates an unencrypted identity as a side effect of schema import.
+        """
         self.schemaPath = schema
-        self.hby = setupHby(name=name, base=base, bran=bran)
+        keeper = Keeper(name=name, base=base, reopen=True)
+        try:
+            aeid = keeper.gbls.get('aeid')
+            if aeid is None:
+                raise ConfigurationError('schema import requires an existing Keeper')
+        finally:
+            keeper.close()
+        self.hby = setupHby(name=name, base=base, bran=bran if aeid else None)
 
         doers = [doing.doify(self.importDo)]
 

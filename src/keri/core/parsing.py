@@ -181,9 +181,8 @@ class Parser:
 
     def __init__(self, ims=None, framed=True, piped=False, kvy=None,
                  tvy=None, exc=None, rvy=None, vry=None, local=False,
-                 version=Vrsn_2_0):
-        """
-        Initialize instance:
+                 version=Vrsn_2_0, rgy=None, scy=None):
+        """Initialize instance:
 
         Parameters:
             ims (bytearray): incoming message stream
@@ -196,15 +195,23 @@ class Parser:
             exc (Exchanger): route EXN message types to this instance
             rvy (Revery): reply (RPY) message handler
             vry (``Verfifier``): credential verifier with wallet storage
+            rgy (Rever): native registry event processor
+            scy (Sectioner): native credential and section evidence processor
             local (bool): True means event source is local (protected) for validation
                 False means event source is remote (unprotected) for validation
             version (Versionage): instance of version portion of genus version code
-                for default code table"""
+                for default code table
+
+        Returns:
+            None. Retains caller-owned processors and mutable input stream; construction
+            starts no processing loop and opens/closes no processor stores."""
         self.ims = ims if ims is not None else bytearray()
         self.framed = True if framed else False  # extract until end-of-stream
         self.piped = True if piped else False  # use pipeline processor
         self.kvy = kvy
         self.tvy = tvy
+        self.rgy = rgy
+        self.scy = scy
         self.exc = exc
         self.rvy = rvy
         self.vry = vry
@@ -351,7 +358,7 @@ class Parser:
 
     def parse(self, ims=None, framed=None, piped=None, kvy=None, tvy=None,
               exc=None, rvy=None, vry=None, local=None, version=None,
-              processive=True):
+              processive=True, rgy=None, scy=None):
         """Processes all messages from incoming message stream, ims,
         when provided. Otherwise process messages from .ims
         Returns when ims is empty.
@@ -381,7 +388,19 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Returns:
+            object: Final allParsator result: last dispatch result when processive,
+            otherwise the last parsed group's MsgParseDom list; None for empty input.
+            A parser return value is not a semantic acceptance receipt. Extraction and
+            handler Exceptions are logged by the underlying generator; interrupts propagate."""
         local = local if local is not None else self.local
         local = True if local else False
 
@@ -392,7 +411,7 @@ class Parser:
                                     tvy=tvy,
                                     exc=exc,
                                     rvy=rvy,
-                                    vry=vry,
+                                    vry=vry, rgy=rgy, scy=scy,
                                     local=local,
                                     version=version,
                                     processive=processive)
@@ -409,7 +428,7 @@ class Parser:
 
     def parseOne(self, ims=None, framed=True, piped=False, kvy=None, tvy=None,
                  exc=None, rvy=None, vry=None, local=None, version=None,
-                 processive=True):
+                 processive=True, rgy=None, scy=None):
         """Processes one messages from incoming message stream, ims,
         when provided. Otherwise process message from .ims
         Returns once one message is processed.
@@ -439,7 +458,19 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Returns:
+            MsgParseDom | bool | None: Parsed message when processive=False; True once
+            dispatch was attempted, including logged handler failure; None on extraction
+            failure. Call the protocol owner's accepted-state API to determine acceptance.
+            BaseException interruption propagates and must never be reported as success."""
         local = local if local is not None else self.local
         local = True if local else False
 
@@ -450,7 +481,7 @@ class Parser:
                                      tvy=tvy,
                                      exc=exc,
                                      rvy=rvy,
-                                     vry=vry,
+                                     vry=vry, rgy=rgy, scy=scy,
                                      local=local,
                                      version=version,
                                      processive=processive)
@@ -466,7 +497,7 @@ class Parser:
 
     def allParsator(self, ims=None, framed=None, piped=None, kvy=None,
                     tvy=None, exc=None, rvy=None, vry=None, local=None,
-                    version=None, processive=True):
+                    version=None, processive=True, rgy=None, scy=None):
         """Returns generator to parse all messages from incoming message stream,
         ims until ims is exhausted (empty) then returns.
         Generator completes as soon as ims is empty.
@@ -497,7 +528,22 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Yields:
+            None: Cooperative progress while input/dependencies are parsed.
+
+        Returns:
+            object: Last processed group's dispatch result, or its parsed MsgParseDom
+            list when processive=False; None for an empty stream. Ordinary extraction
+            failures are logged/flushed at their frame boundary; handler Exceptions are
+            logged without treating the remaining stream as malformed."""
         if ims is not None:  # needs bytearray not bytes since deletes as processes
             if not isinstance(ims, bytearray):
                 ims = bytearray(ims)  # so make bytearray copy
@@ -508,6 +554,8 @@ class Parser:
         piped = piped if piped is not None else self.piped
         kvy = kvy if kvy is not None else self.kvy
         tvy = tvy if tvy is not None else self.tvy
+        rgy = rgy if rgy is not None else self.rgy
+        scy = scy if scy is not None else self.scy
         exc = exc if exc is not None else self.exc
         rvy = rvy if rvy is not None else self.rvy
         vry = vry if vry is not None else self.vry
@@ -524,7 +572,7 @@ class Parser:
                                                         tvy=tvy,
                                                         exc=exc,
                                                         rvy=rvy,
-                                                        vry=vry,
+                                                        vry=vry, rgy=rgy, scy=scy,
                                                         local=local,
                                                         version=version,
                                                         processive=processive)
@@ -557,7 +605,7 @@ class Parser:
 
     def onceParsator(self, ims=None, framed=None, piped=None, kvy=None,
                      tvy=None, exc=None, rvy=None, vry=None, local=None,
-                     version=None, processive=True):
+                     version=None, processive=True, rgy=None, scy=None):
         """Returns generator to parse one message from incoming message stream, ims.
         If ims not provided parse messages from .ims
 
@@ -586,7 +634,22 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Yields:
+            None: Cooperative waits while the selected message is incomplete.
+
+        Returns:
+            MsgParseDom | bool | None: Parsed message in parse-only mode, otherwise True
+            after a dispatch attempt (even a logged handler Exception), or None after
+            extraction failure. This is parser progress rather than protocol acceptance.
+            BaseException cancellation/termination propagates."""
         if ims is not None:  # needs bytearray not bytes since deletes as processes
             if not isinstance(ims, bytearray):
                 ims = bytearray(ims)  # so make bytearray copy
@@ -597,6 +660,8 @@ class Parser:
         piped = piped if piped is not None else self.piped
         kvy = kvy if kvy is not None else self.kvy
         tvy = tvy if tvy is not None else self.tvy
+        rgy = rgy if rgy is not None else self.rgy
+        scy = scy if scy is not None else self.scy
         exc = exc if exc is not None else self.exc
         rvy = rvy if rvy is not None else self.rvy
         vry = vry if vry is not None else self.vry
@@ -618,6 +683,7 @@ class Parser:
                     logger.exception("Kevery sized group error: %s", ex)
                 else:
                     logger.error("Kevery sized group error: %s", ex)
+                return None
 
             except (ColdStartError, ExtractionError, Exception) as ex:  # some extraction error
                 if logger.isEnabledFor(logging.DEBUG):
@@ -625,6 +691,7 @@ class Parser:
                 else:
                     logger.error("Kevery msg extraction error: %s", ex)
                 del ims[:]  # delete rest of stream to force cold restart
+                return None
 
             if processive:
                 try:
@@ -633,7 +700,7 @@ class Parser:
                                             tvy=tvy,
                                             exc=exc,
                                             rvy=rvy,
-                                            vry=vry)
+                                            vry=vry, rgy=rgy, scy=scy)
 
                 except (ValidationError, Exception) as ex:  # non Extraction Error
                     # Non extraction errors happen after successfully extracted from stream
@@ -662,7 +729,7 @@ class Parser:
 
     def parsator(self, ims=None, framed=None, piped=None, kvy=None, tvy=None,
                  exc=None, rvy=None, vry=None, local=None, version=None,
-                 processive=True):
+                 processive=True, rgy=None, scy=None):
         """Returns generator to continually parse messages from incoming message
         stream, ims. Empty yields when ims is emply. Does not return.
         Useful for always running servers.
@@ -695,7 +762,20 @@ class Parser:
 
             New Logic:
                 Attachments must all have counters so know if txt or bny format for
-                attachments. So even when framed==True must still have counters."""
+                attachments. So even when framed==True must still have counters.
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Yields:
+            None: Cooperative progress/waits indefinitely, including while input is empty.
+
+        The caller owns cancellation and processors. Ordinary extraction/handler failures
+        are logged and isolated using the same group boundaries as allParsator; this loop
+        has no ordinary completion or durable-acceptance return contract."""
         if ims is not None:  # needs bytearray not bytes since deletes as processes
             if not isinstance(ims, bytearray):
                 ims = bytearray(ims)  # so make bytearray copy
@@ -706,6 +786,8 @@ class Parser:
         piped = piped if piped is not None else self.piped
         kvy = kvy if kvy is not None else self.kvy
         tvy = tvy if tvy is not None else self.tvy
+        rgy = rgy if rgy is not None else self.rgy
+        scy = scy if scy is not None else self.scy
         exc = exc if exc is not None else self.exc
         rvy = rvy if rvy is not None else self.rvy
         vry = vry if vry is not None else self.vry
@@ -722,7 +804,7 @@ class Parser:
                                                    tvy=tvy,
                                                    exc=exc,
                                                    rvy=rvy,
-                                                   vry=vry,
+                                                   vry=vry, rgy=rgy, scy=scy,
                                                    local=local,
                                                    version=version,
                                                    processive=processive)
@@ -756,7 +838,7 @@ class Parser:
 
     def groupParsator(self, ims=None, framed=True, piped=False, kvy=None,
                     tvy=None, exc=None, rvy=None, vry=None, local=None,
-                    version=None, processive=True):
+                    version=None, processive=True, rgy=None, scy=None):
         """Returns generator to parse nested GenericGroups whose outermost nesting
         appears at the top-level of an incoming message stream.
 
@@ -782,9 +864,30 @@ class Parser:
                 None means do not change default
             processive (bool): True means process messages as they are parsed
                 False means do not process parse only, useful for
-                    testing and debugging"""
+                    testing and debugging
+
+        Native processor parameters:
+            rgy (Rever | None): Override native TEL intake; None retains the instance owner.
+            scy (Sectioner | None): Override exact credential/section evidence intake;
+            None retains the instance owner. Both propagate through nested dispatch and
+            remain caller-owned. Parse-only mode invokes neither processor.
+
+        Yields:
+            None: Cooperative waits while extracting complete nested counted groups.
+
+        Returns:
+            object: Last synchronous dispatch result when processive, otherwise a list of
+            exact parsed MsgParseDom instances in this group.
+
+        Raises:
+            SizedGroupError: Extraction failed within a preflushed counted group.
+            ExtractionError: Unbounded extraction failed and the caller must flush its
+            stream. Handler Exceptions are logged per message; group version state is
+            restored on every exit, including cancellation."""
         if ims is None:
             ims = self.ims
+        rgy = rgy if rgy is not None else self.rgy
+        scy = scy if scy is not None else self.scy
 
         local = local if local is not None else self.local
         local = True if local else False
@@ -876,7 +979,7 @@ class Parser:
                                                 tvy=tvy,
                                                 exc=exc,
                                                 rvy=rvy,
-                                                vry=vry)
+                                                vry=vry, rgy=rgy, scy=scy)
 
                     except (ValidationError, Exception) as ex:  # post Extraction Error
                         # Validation errors happen in msgProcess which is called
@@ -982,7 +1085,15 @@ class Parser:
                 sniff for counter
                 if group counter extract and discard but keep track of count
                 so if error while processing attachments then only need to flush
-                attachment count not full stream."""
+                attachment count not full stream.
+
+        Framing contract:
+            With framed=True, the supplied frame must contain the complete declared
+            attachment group: a short group raises ShortageError rather than waiting for
+            bytes outside the frame. An explicitly empty attachment group is a complete
+            unsigned foot, permitted for KEL-anchor-authenticated native registry events.
+            With framed=False, the generator yields for more bytes. It returns parsed
+            structure only; dispatch/authentication is performed separately."""
         if ims is None:
             ims = self.ims
 
@@ -1178,7 +1289,9 @@ class Parser:
                     del ims[:ctr.byteSize(cold=cold)]  # consume ctr itself
                     # compute enclosing attachment group size based on txt or bny
                     eags = ctr.byteCount(cold=cold)
-                    while len(ims) < eags and not framed:
+                    while len(ims) < eags:
+                        if framed:
+                            raise ShortageError("Incomplete attachment group")
                         yield
                     eims = ims[:eags]  # copy out substream enclosed attachments
                     del ims[:eags]  # strip off from ims consume contents from ims
@@ -1188,6 +1301,11 @@ class Parser:
                     if piped:
                         pass  # pass extracted ims to pipeline processor
                         return
+
+                    # An explicitly empty group is the complete foot of an
+                    # unsigned, anchor-authenticated native registry event.
+                    if eags == 0:
+                        return exts
 
                     # peek for version change
                     ctr = yield from self._extractor(ims=ims,
@@ -1316,14 +1434,11 @@ class Parser:
 
 
 
-    def msgProcess(self, exts, kvy, tvy, exc, rvy, vry):
-        """Processes message + attachemnts contained in exts with respect to
-        contexts in kvy, tvy,exc, rvy, and vry.
+    def msgProcess(self, exts, kvy, tvy, exc, rvy, vry, rgy=None, scy=None):
+        """Synchronously dispatch one already parsed message and its attachments.
 
-        Uses .ims when ims is not provided.
-
-        Iterator yields when not enough bytes in ims to finish one msg plus
-        attachments. Returns (which raises StopIteration) when finished.
+        This method performs no input extraction and never yields. Processor selection
+        depends on protocol/version/ilk; parsing alone does not establish acceptance.
 
         Parameters:
             exts (dict): parsed msg+attachments substream. Result is suitable
@@ -1369,7 +1484,25 @@ class Parser:
                 sniff for counter
                 if group counter extract and discard but keep track of count
                 so if error while processing attachments then only need to flush
-                attachment count not full stream."""
+                attachment count not full stream.
+
+        Processor parameters:
+            kvy (Kevery | None): KEL and v2 KRAM dispatcher.
+            tvy (Tevery | None): Legacy TEL processor.
+            exc (Exchanger | None): Exchange route processor.
+            rvy (Revery | None): Reply processor.
+            vry (Verifier | None): Legacy credential verifier.
+            rgy (Rever | None): Native rip/upd/bup intake; required for these messages.
+            scy (Sectioner | None): Native credential/section intake; required for these
+            v2 messages. Retaining a section neither admits it nor expands a prior view.
+
+        Returns:
+            bool | None: True after ordinary dispatch; None when delegated to v2 KRAM.
+            Handler return values are not forwarded as an application acceptance receipt.
+
+        Raises:
+            ValidationError: Unsupported message, missing selected processor, or invalid
+            mandatory attachments; protocol handler errors propagate to the parse loop."""
         serder = exts['serder']
 
         if isinstance(serder, SerderKERI):
@@ -1517,7 +1650,17 @@ class Parser:
         elif isinstance(serder, SerderACDC):
             ilk = serder.ilk  # dispatch based on ilk
 
-            if ilk is None:  # default for ACDC
+            if ilk in (Ilks.rip, Ilks.bup, Ilks.upd):
+                if rgy is None:
+                    raise ValidationError("No native registry processor for ACDC TEL")
+                rgy.processEvent(serder=serder, sscs=exts['sscs'], ssts=exts['ssts'])
+            elif serder.pvrsn.major == 2 and ilk in (
+                    None, Ilks.acm, Ilks.act, Ilks.acg,
+                    Ilks.sch, Ilks.att, Ilks.agg, Ilks.edg, Ilks.rul):
+                if scy is None:
+                    raise ValidationError("No native section evidence processor for ACDC")
+                scy.processEvent(**exts)
+            elif ilk is None:  # legacy credential form
                 try:
                     # use last one if more than one
                     prefixer, number, diger = exts['ssts'][-1] if exts['ssts'] else (None, None, None)
