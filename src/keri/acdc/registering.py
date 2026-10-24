@@ -10,8 +10,8 @@ RegBaser(lmdb) and WebRegBaser(IndexedDB)
 from dataclasses import dataclass
 
 from ..db import Komer
-from ..kering import ConfigurationError
-from ..core import Saider
+from ..core import Blinder
+from ..kering import ConfigurationError, Ilks, ValidationError
 from .regbasing import RegBaser
 from .webregbasing import WebRegBaser
 
@@ -52,6 +52,33 @@ class RegistryStore:
     def putEvent(self, serder):
         return self.baser.evts.pin(keys=serder.said, val=serder)
 
+    def opening(self, said):
+        """Return the exact retained public opening bytes for one event SAID."""
+        return self.baser.openings.get(keys=said)
+
+    def retainOpening(self, event, opening):
+        """Authenticate and retain one event-specific public ``bup`` opening.
+
+        Repeated identical publication is idempotent. A different opening for
+        the same event is refused before it can replace durable evidence.
+        """
+        from .regeventing import vetBlind
+
+        if (event is None or event.ilk != Ilks.bup
+                or not isinstance(opening, Blinder)):
+            raise ValidationError('public opening requires an ACDC v2 blinded update')
+        if not event.verify():
+            raise ValidationError('public opening event body does not verify')
+        stored = self.event(event.said)
+        if stored is None or bytes(stored.raw) != bytes(event.raw):
+            raise ValidationError('public opening requires the exact stored event body')
+        vetBlind(opening, blid=event.sad['b'])
+        old = self.opening(event.said)
+        if old is not None and old != opening.qb64:
+            raise ValidationError('different public opening is already retained for this event')
+        self.baser.openings.pin(keys=event.said, val=opening.qb64)
+        return opening
+
     def anchor(self, said):
         return self.baser.ancs.get(keys=said)
 
@@ -78,10 +105,20 @@ class RegistryStore:
         return self.event(saider.qb64) if saider is not None else None
 
     def accept(self, regk, sn, serder):
-        saider = Saider(qb64=serder.said)
-        self.putEvent(serder)
-        self.baser.tels.put(keys=regk, on=sn, val=saider)
-        self.baser.heads.pin(keys=regk, val=saider)
+        """Atomically commit an already authenticated event through RegBaser.
+
+        Args:
+            regk (str): Registry whose accepted frontier to advance.
+            sn (int): Exact candidate ordinal.
+            serder (SerderACDC): Event validated for issuer, anchor, and predecessor.
+
+        Returns:
+            bool: True for a new acceptance, False for an identical accepted replay.
+
+        Raises:
+            ValidationError: Keys/linkage are inconsistent or a different event already
+            occupies the slot. No accepted head changes on refusal."""
+        return self.baser.accept(regk, sn, serder)
 
     def cloneTelIter(self, regk, sn=0):
         """Yield accepted TEL event bodies in sequence from sn inclusive.
