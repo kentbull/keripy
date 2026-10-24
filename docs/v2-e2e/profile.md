@@ -3,7 +3,7 @@
 This branch implements the declared native Python R&D profile. Python
 qualification precedes TypeScript. The exact commit and completed run results
 are reported in the final handoff; the reproducible gates and capability map
-are in [qualification.md](qualification.md).
+are in [qualification.md](https://github.com/kentbull/keripy/blob/81964a69e0dd9897c37654e80bb2d9cc7b6e2934/docs/v2-e2e/qualification.md).
 
 ## Source pins
 
@@ -97,23 +97,13 @@ replay rules; current credential standing remains a separate application check.
 The reviewed KRAM source is v0.7.6 at
 [`6ed1ceff4b8a0bc31c1063df12cd17fa54b2784d`](https://github.com/SmithSamuelM/Papers/blob/6ed1ceff4b8a0bc31c1063df12cd17fa54b2784d/whitepapers/kram.md).
 
-## Qualification environment
+## Component test environment
 
-Python 3.14.8 container base is pinned by digest in
-`scripts/v2-e2e/Dockerfile`; Python dependencies including transitives are pinned
-in `scripts/v2-e2e/requirements.lock`. The source checkout supplies the package.
-LMDB state uses Docker named volumes, never host shared database paths.
-
-The initial native macOS run failed opening LMDB with ENOSPC despite 2.4 TiB
-free. That run establishes no protocol result. Docker qualification is the
-reference environment until the host resource issue is resolved.
-
-Run `scripts/v2-e2e/qualify.sh` from a fresh checkout to execute the complete
-selected protocol/application suite and the separately installed released-peer
-matrix. `scripts/v2-e2e/walkthrough.sh` drives the six installed-CLI Bash stories with
-standalone Dolly (set `DOLLY_SOURCE`).
-The [released-peer profile](legacy-peers.md) records the necessary old-source
-TSN adapter and its exact interoperability boundary.
+The core-only `scripts/v2-e2e/Dockerfile`, `check.sh` and `requirements.lock`
+remain KERIpy tooling. They copy source and run the installed distribution
+with Linux named state volumes. Run `scripts/v2-e2e/check.sh` from the repository
+root; optional arguments select pytest cases. Cross-repository composition is
+owned by the independent experiment repository.
 
 ## Whole-block disclosure requests
 
@@ -166,3 +156,11 @@ Observation freshness is tied to the currently configured source URL. Reopening
 with a different observer/registrar preserves authenticated history but does not
 inherit freshness authority from a removed source. No new KRAM timing rule is
 introduced by this application policy.
+
+## Experiment ownership
+
+Cross-repository recipes, external acceptance scenarios and dated evidence are
+owned by the independent `keri-v2` experiment repository. They are not required
+to run this component. [Pre-extraction record](https://github.com/kentbull/keripy/blob/81964a69e0dd9897c37654e80bb2d9cc7b6e2934/docs/v2-e2e/profile.md) preserves the
+historical source and execution scope. The extraction changes ownership only;
+runtime dependencies and verification contracts remain unchanged.

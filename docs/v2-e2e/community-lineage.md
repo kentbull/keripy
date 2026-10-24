@@ -51,24 +51,9 @@ original authorship for those inherited ideas.
 | `native.options`, `NativeAuthor.__init__`, `anchor`, `run`; `vc/registry/advance` parser | Local flag/configuration plumbing in `d5d26e04` and `a6539208`. The issuer selects auth data explicitly; native authoring remains the existing domain owner. |
 | `public_evidence.Request.run`, `Advance.run` | Existing signed service request/update adapters now pass hosted authorization to receipt collection. No new source-freshness or KRAM time condition. |
 | `native_exchange.ExchangeDoer.run`, `registryOrigin`, nested `derive` | Hosted authorization plus shared proof selection; CLI owns explicit opening files and bound coordinates. Core `registryProof` owns common selection. |
-| `witness.authenticate.AuthDoer`, `__init__`, `authDo` | Existing upstream registration. `9ca869f6` normalizes the root URL before appending `/aids`, avoiding a network-path reference. `3e978775` corrects the inherited misleading credential-export docstring; this command outputs private TOTP provisioning material. |
+| `witness.authenticate.AuthDoer`, `__init__`, `authDo` | Existing upstream registration. `d5d26e04` normalizes the root URL before appending `/aids`, avoiding a network-path reference. `3e978775` corrects the inherited misleading credential-export docstring; this command outputs private TOTP provisioning material. |
 
-## Operator scenarios and tests
-
-The original six focused KLI scripts remain independent oracles. Additive
-selectors in `common.sh` choose actual KF binaries, three hosted witnesses and
-Locksmith actors; defaults preserve KLI. `helpers.py` adds application/UI roles,
-actual action/screenshot manifests and hashes. These are local qualification
-choices, not protocol metadata.
-
-`hosted.py` and `hosted.sh` provision the provider's actual boot/registration
-interfaces and obtain its authentication material. `hosted-quorum-restart.sh`
-operates three real processes against retained stores. `Dockerfile.kf`,
-`Dockerfile.hk` and `run-linux.sh` install copied component artifacts with Linux
-named-volume state. `325f2507` selects Locksmith headless actors; `aef3013d`
-selects its actual Qt interaction harness. `b6ffa21a` adds application issuer
-and explicit packaged schema selection. These resources were designed locally,
-informed by the earlier KERIpy/Dolly scenario infrastructure.
+## Component regressions
 
 Changed tests in `test_agenting`, `test_evidence_processor`, `test_httping`,
 `test_native_ipex_transport` and `test_native_services` are local regressions.
@@ -88,3 +73,11 @@ class descriptions and witness registration correction in `3e978775`.
 This supplement does not replace upstream Git history or the preceding detailed
 ledger. It records bounded adaptation evidence, separates local design from
 protocol requirements and leaves uncertain original invention unassigned.
+
+## Experiment ownership
+
+Cross-repository recipes, external acceptance scenarios and dated evidence are
+owned by the independent `keri-v2` experiment repository. They are not required
+to run this component. [Pre-extraction record](https://github.com/kentbull/keripy/blob/81964a69e0dd9897c37654e80bb2d9cc7b6e2934/docs/v2-e2e/community-lineage.md) preserves the
+historical source and execution scope. The extraction changes ownership only;
+runtime dependencies and verification contracts remain unchanged.

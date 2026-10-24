@@ -10,36 +10,20 @@ state, and active working tree. Their explicit review states distinguish coverag
 from still-active scenario/final-artifact reconciliation; the grouped notes below
 explain decisions without duplicating every qualified symbol.
 
-## INFRA-01: copied Linux test source
+## Core-only installed-package test tooling
 
-Targets: `scripts/v2-e2e/Dockerfile`, `scripts/v2-e2e/check.sh`, and
-the former `scripts/v2-e2e/legacy-peers/check.sh` (module-level build/run
-instructions). The released-peer runner now lives in
-[Dolly scripts/legacy-peers](https://github.com/kentbull/dolly/tree/89788c5c64feea640b40a9160769fb48c8d8dd54/scripts/legacy-peers);
-the deleted KERIpy paths remain in the unit inventory with explicit successors.
-
-- Origin: these files entered this branch in
-  [`44b336798747f306886ac87b82565d5eaac21a4d`](https://github.com/kentbull/keripy/commit/44b336798747f306886ac87b82565d5eaac21a4d),
-  recorded Git author Kent Bull. That metadata alone does not establish the
-  original idea's author. The pinned base image/dependency choices are retained.
-- Classification: local operational adaptation, implemented by Codex for Kent's
-  explicit Docker/LMDB isolation requirement; not a KERI/ACDC protocol rule.
-- Change: copy source, tests, scripts, static resources, and test configuration
-  into Linux image storage and install the actual KERIpy wheel. Remove source
-  bind mounts from both runners; released-peer images already contain their
-  service program. `V2_TEST_IMAGE` selects an isolated image tag for scoped runs.
-- Rationale: source access and LMDB state must not require macOS-host bind mounts
-  during qualification. Installed-wheel testing also exposes packaging failures
-  that a source-only `PYTHONPATH` can hide.
-- Validation: five distinct-index tests and both real released-peer cases pass
-  with the copied-source runner. See `refactor-status.md` for exact commands.
-- Boundary: named test volumes remain local operational state. This change does
-  not claim to fix macOS resource accounting or establish cross-version database
-  compatibility. Dockerfiles retain existing licensing/source attribution.
+`scripts/v2-e2e/Dockerfile`, `check.sh`, and `requirements.lock` remain here
+because they build and test KERIpy independently. Their copied-source and named
+Linux-volume pattern entered in
+[`44b336798747f306886ac87b82565d5eaac21a4d`](https://github.com/kentbull/keripy/commit/44b336798747f306886ac87b82565d5eaac21a4d).
+Git records Kent Bull; Codex implemented the local operational adaptation for
+his Docker/LMDB isolation requirement. This is tooling provenance, not a protocol
+rule or a claim to fix macOS resource accounting. Peer/composition runners and
+their execution history are owned by the independent experiment repository.
 
 ## Documentation ownership
 
-`refactor-status.md` and this ledger are locally authored by Codex under Kent's
+This ledger and the historical refactor report are locally authored by Codex under Kent's
 documentation/provenance requirement. Reported execution results come from the
 specified commands. Retrospective origin research must cite evidence rather
 than silently attributing local implementation decisions to specification authors.
@@ -124,35 +108,6 @@ in `test_native_wallet.py` and `test_ipex_verification_context.py`.
   and edge schema arrival, and retained-view checks cover the shared boundary.
   Group and Dolly parser wiring have separate review units.
 
-## R1/R3-B/R4/R5-B: Dolly intake and evidence composition
-
-Targets: standalone `dolly.serving.Context.__init__`, `_parser`, `ingest`,
-`_nativeCredential`, `_nativeCurrentStanding`, `process`, `close`, `setup`;
-`IntakeEnd` methods; `dolly/tests/test_dolly.py`. Their former KERIpy paths are
-removed, not compatibility wrappers. The earlier verified extraction snapshot was
-[`89788c5c64feea640b40a9160769fb48c8d8dd54`](https://github.com/kentbull/dolly/tree/89788c5c64feea640b40a9160769fb48c8d8dd54).
-Its [per-symbol provenance ledger](https://github.com/kentbull/dolly/blob/89788c5c64feea640b40a9160769fb48c8d8dd54/docs/provenance.md)
-distinguishes retained/adapted KERIpy bodies, new local transport/schema/CLI work,
-and module/build/resource adaptations.
-
-- Dolly baseline: `a17fdc0b4601d8527224d62e0b4212e48e12f973`, recorded Git author
-  Kent Bull, with Sally composition precedent retained in the module header.
-  Existing `Serdery` provides protocol-aware decoding; existing section ownership
-  derives from `825229806db825fdce180cb2a11ec31ed66aee03`.
-- Local Codex design: validate empty grants, then classify them non-reportable
-  without hooks; isolate current-standing policy; decode original HTTP bytes
-  without a KERI-only Serder assumption; share one section store between parser
-  and verifier; schedule the evidence owner and its pruner as one child.
-- Six real own/edge schema tests exercise arrival before/after grant and full
-  reopen, without schema preloading or KEL replay. Fuller section caching cannot
-  change retained disclosure or hooks. Raw and header-form JSON evidence tests,
-  malformed framing, legacy delivery, and pruner cancellation also pass.
-- The original 16-test module result belongs to this earlier repair unit, not
-  the final standalone qualification. Extraction subsequently added actual TCP
-  intake, installed console/inspection, schema-resource packaging, and independent
-  socket/restart tests; their exact current scope and evidence belong to Dolly's
-  ledger and the final qualification record.
-
 ## R3-C/R5-C: group section intake and runtime ownership
 
 Targets: `NativeGroup.__init__`, `ExchangeDoer.run` composition, group fixture
@@ -166,25 +121,6 @@ standalone group creates and schedules exactly one Pruner. Four real threshold
 approval cases cover independent schema arrival and unchanged partial views;
 two authenticated-cache cases cover expiry, cancellation, resumed scheduling,
 and retained EXNs. All 12 group tests pass in the installed Linux wheel.
-
-## R8: historical evidence inspection versus current reporting
-
-Targets: standalone `dolly.serving.Context._nativeDisclosure`,
-`_nativeCredential`, `inspectHistorical`, `_historicalSources`, and every
-helper/test in `dolly/tests/test_dolly_historical.py`. The KERIpy source/test
-predecessors and their exact extraction destinations remain in the unit ledger.
-The disclosure boundary extracts existing logic at `9cf8dcd6`; the historical
-test adapts `test_bound_state_profile.test_production_graph_bound_authority_uses_real_anchored_history`
-from `825229806db825fdce180cb2a11ec31ed66aee03`.
-
-Codex locally designed an explicit read-only inspection purpose. It reuses core
-verification and exact retained projections, returning authenticated bound TEL/KEL
-references and `currentStanding=not-evaluated`. It emits no hook, submission,
-timestamp, or freshness claim. Current reporting still applies its all-node
-standing and observer policy. This is application policy separation, not new
-KRAM or historical snapshot semantics. Five focused tests cover a real bound
-authority graph after revocation, current-reporting refusal, historical inspection
-across reopen, invalid proof refusal, retained privacy, and actual hook silence.
 
 ## R6-A: authenticated local conflict evidence
 
@@ -447,51 +383,6 @@ records this approved provisional contract against pinned ACDC's distinction
 between block-level expansion and full disclosure, and its non-normative IPEX
 outline. Three focused regressions and the existing IPEX module pass 92 cases.
 
-## Extraction reconciliation
-
-The verified Dolly move sources are KERIpy
-`e999aa9c4a457b7c52e05e3bb3dd03f6e3c8f83c` for application/CLI and original Dolly
-tests, and `6aadd69beaf6fc7803f12e273b4ca101e6364e49` for released-peer assets and
-the native process/socket lifecycle test. Application modules now live under
-`src/dolly`; the former start handler maps to `dolly.cli.handler`. The two Dolly
-tests, released-peer test, native lifecycle test, and `scripts/legacy-peers/*`
-have exact successor rows in the branch inventory and Dolly ledger. New standalone
-transport/schema/inspection helpers retain their locally generated classification
-rather than inheriting attribution merely from the surrounding moved module.
-Apache-2.0 LICENSE, Sally NOTICE, and recorded donor context follow the move.
-The earlier published extraction snapshot does not imply that the later v1
-operator story was already present or qualified. Its bounded successor and
-remaining clean-artifact boundary are recorded below.
-
-The bounded successor-ledger snapshot for this KERIpy inventory is Dolly
-[`b9aa9d4bed1c8f69a803f4f440a3b9ceaf0c9ce0`](https://github.com/kentbull/dolly/tree/b9aa9d4bed1c8f69a803f4f440a3b9ceaf0c9ce0).
-Its intermediate `b0fc0369` commit changes only documentation in three Python
-files relative to `89788c5c`; executable-AST equality is checked. The ledger
-retains 149 explicit Python symbols and adds the module/resource provenance of
-the installed v1 operator story. Its JSON helper has no function/class symbols
-and imports no protocol APIs; the lifecycle remains visible in Bash. Shared
-KERIpy supervision/JSON helper origin is pinned at `63453fe3`, while each run's
-manifest identifies the actual source used. The inspected workflow requires
-three witnesses/quorum two, exactly two HTTP/TCP reporting hooks, locally verified
-admission files, and genuine revocation refusal with no third hook. It does not
-independently assert remote admission acknowledgment.
-
-The final developmental v1 rerun used KERIpy `c380866b` with dirty documentation
-and Dolly `b0fc0369` with dirty operator scripts. Its passing result is owner
-execution evidence, not qualification of the subsequently committed clean pair.
-Only later dependency-pin metadata and qualification-result documentation remain
-outside the bounded Dolly snapshot.
-
-The cross-repository publication sequence has a deliberate snapshot boundary.
-The KERIpy source/ledger commit precedes Dolly's dependency pin to that exact
-commit. Consequently, an earlier verified Dolly snapshot cannot describe the
-later dependency metadata as already final or carry its future file hashes.
-After the pin, qualification records the actual tested pair and checks whether
-the intervening Dolly delta contains only the planned dependency metadata. Any
-additional source change requires its own reviewed evidence. Result-documentation
-commits can then identify that bounded tested pair and the later documentation
-delta without a self-referential claim that a ledger contains its own final hash.
-
 ## S5: authenticated opening with an unavailable TEL event
 
 Targets: `IpexHandler._vetRegistry` and every class/helper/test in
@@ -515,3 +406,11 @@ digest/native registry/form/graph execution passed 336 cases. Parent source
 review confirmed this dependency contract; it does not make the verifier's
 unknown event into authenticated current state. Subsequent helper documentation
 was checked as executable-AST-equivalent and adds no runtime result.
+
+## Experiment ownership
+
+Cross-repository recipes, external acceptance scenarios and dated evidence are
+owned by the independent `keri-v2` experiment repository. They are not required
+to run this component. [Pre-extraction record](https://github.com/kentbull/keripy/blob/81964a69e0dd9897c37654e80bb2d9cc7b6e2934/docs/v2-e2e/provenance.md) preserves the
+historical source and execution scope. The extraction changes ownership only;
+runtime dependencies and verification contracts remain unchanged.
