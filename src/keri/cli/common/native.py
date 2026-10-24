@@ -402,3 +402,113 @@ class NativeAuthor(doing.DoDoer):
                                           accepted=True, state='revoked')))
             finally:
                 self.remove(workers)
+
+
+def read(args, operation):
+    """Return scheduled native inventory/evidence reads or explicit handoff work.
+
+    args carries identity, filters, registry, file, and capability options;
+    operation chooses registries/status/inventory/export/import. Return a list of
+    hio-compatible generator functions. Ordinary listing never enables custody;
+    explicit custody import/export and full blinded-evidence export may do so.
+    The worker prints results or writes an exclusive destination, propagating
+    invalid option, authentication, proof, and file errors with store cleanup."""
+    def run(tymth, tock=0.0, **kwa):
+        """Execute one selected read/handoff after the scheduler's initial yield.
+
+        tymth/tock/kwa follow hio's generator contract; args and operation come from
+        the enclosing read adapter. Print JSON inventory/evidence results or write the
+        explicit export file; return None on completion. Validation, authentication,
+        file-exclusivity, and custody failures propagate. The opened context closes
+        wallet, registry, and identity owners even when the operation fails."""
+        yield tock
+        # Plain inventory/status never composes derivation capability; only
+        # the explicit handoff/export operations below may request it.
+        with opened(args, custody=(operation == 'import' or operation == 'export'
+                    and (args.custody or args.full))) as (hby, rgy, wallet):
+            if operation == 'registries':
+                for name, reg in rgy.names.items():
+                    head = reg.store.headEvent(reg.regk)
+                    print(json.dumps(dict(name=name, registry=reg.regk, controller=reg.hab.pre,
+                        accepted=head is not None, head=head.said if head else None, sn=reg.sn)))
+            elif operation == 'status':
+                reg = registry(rgy, args.registry_name)
+                head = reg.store.headEvent(reg.regk)
+                pending = [dict(said=said, sn=sn, dependency=dependency)
+                           for escrow, dependency in ((rgy.baser.maes, 'anchor'), (rgy.baser.ooes, 'prior'))
+                           for _, sn, said in escrow.getTopItemIter(keys=reg.regk)]
+                print(json.dumps(dict(registry=reg.regk, controller=reg.hab.pre,
+                    accepted=head is not None, head=head.said if head else None, sn=reg.sn, pending=pending)))
+                if args.verbose:
+                    for raw in reg.store.cloneTelIter(reg.regk):
+                        print(raw.decode())
+            elif operation == 'inventory':
+                if args.poll:
+                    raise ConfigurationError('native admission uses accepted IPEX and explicit wallet consent')
+                hab = hby.habByName(args.alias) if args.alias else None
+                if args.alias and hab is None:
+                    raise ConfigurationError('unknown native inventory alias')
+                if args.schema and not args.issued:
+                    raise ConfigurationError('native held inventory lists admitted references; schema filtering requires the accepted disclosure')
+                records = wallet.inventory()['issued' if args.issued else 'held']
+                for record in records:
+                    owner = record.controller if args.issued else record.holder
+                    if hab and owner != hab.pre:
+                        continue
+                    acdc = wallet.issuedCredential(record.credential) if args.issued else None
+                    if args.schema and (acdc is None or acdc.sad['s'] != args.schema):
+                        continue
+                    if args.said:
+                        print(record.credential)
+                    else:
+                        result = asdict(record)
+                        if not args.verbose:
+                            result.pop('raw', None)
+                        if acdc:
+                            result['state'] = standing(wallet, rgy.regs[record.registry], acdc)
+                        print(json.dumps(result))
+            elif operation == 'export':
+                hab = hby.habByName(args.alias)
+                if hab is None:
+                    raise ConfigurationError('unknown native export alias')
+                reg = registry(rgy, args.registry_name, hab)
+                if args.custody:
+                    path = wallet.custody.exportCustody(reg.regk, args.output)
+                    print(json.dumps(dict(registry=reg.regk, custody_file=str(path))))
+                else:
+                    record = wallet.db.issued.get((args.said,))
+                    if record is None or record.registry != reg.regk:
+                        raise ConfigurationError('native export requires an issued inventory credential')
+                    acdc = wallet.issuedCredential(record.credential)
+                    if args.chains or (args.full and acdc.sad.get('e')):
+                        raise ConfigurationError('native chained evidence must be exported from its accepted IPEX disclosure')
+                    stream = bytearray()
+                    if args.kels or args.full:
+                        for msg in hby.db.clonePreIter(pre=record.controller, version=Vrsn_2_0):
+                            stream.extend(msg)
+                    if args.full and record.bound and acdc.iseaid != record.controller:
+                        for msg in hby.db.clonePreIter(pre=acdc.iseaid, version=Vrsn_2_0):
+                            stream.extend(msg)
+                    if args.tels or args.full:
+                        for raw in reg.store.cloneTelIter(reg.regk):
+                            event = SerderACDC(raw=raw)
+                            number, diger = reg.store.anchor(event.said)
+                            stream.extend(messagize(event,
+                                bonds=[SealSource(s=number.numh, d=diger.qb64)], gvrsn=Vrsn_2_0))
+                    if args.full:
+                        event = reg.store.event(record.update)
+                        if event.ilk == 'bup':
+                            bound = dict(bound=True, bsn=record.bound['bn'], bd=record.bound['bd']) if record.bound else {}
+                            proof = wallet.custody.derive(reg.regk, Number(numh=event.sad['n']).num, acdc.said, 'issued', **bound)
+                            stream.extend(messagize(acdc, bonds=[proof.data], gvrsn=Vrsn_2_0))
+                        else:
+                            stream.extend(acdc.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
+                    elif not (args.tels or args.kels):
+                        stream.extend(acdc.raw)
+                    with Path(args.output).open('xb') as output:
+                        output.write(stream)
+            elif operation == 'import':
+                wallet.custody.importCustody(args.file, regid=args.registry, controller=args.controller,
+                                            discloser=args.discloser, rewrap=args.rewrap)
+                print(json.dumps(dict(registry=args.registry, custody_imported=True)))
+    return [doing.doify(run)]

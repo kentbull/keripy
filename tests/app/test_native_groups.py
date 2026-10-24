@@ -178,6 +178,73 @@ def test_native_registry_approval_refuses_different_tel(members):
         owners[1].approveRegistry(substitute, anchor)
 
 
+def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fanout(tmp_path):
+    """Resume exact public group proposals across actual CLI process exits and issue without distributing custody secrets.
+
+    Parameters:
+        tmp_path: Pytest-owned exact proposal files surviving installed CLI process exits.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    import uuid
+    from tests.app.test_native_cli import PASSCODE, command, invoke
+
+    names = ['group-cli-' + uuid.uuid4().hex for _ in range(2)]
+    with ExitStack() as stack:
+        hbys = [stack.enter_context(openHby(name=name, base='native-cli-test', temp=False,
+                    bran=PASSCODE, version=Vrsn_2_0)) for name in names]
+        people = [hby.makeHab(name='member') for hby in hbys]
+        for hby, remote in zip(hbys, reversed(people)):
+            Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(
+                ims=bytearray(remote.replay(gvrsn=Vrsn_2_0)), local=True)
+        groups = [hby.makeGroupHab(group='group', mhab=person,
+                    smids=[member.pre for member in people], isith='2', nsith='2', version=Vrsn_2_0)
+                  for hby, person in zip(hbys, people)]
+        messages = [group.msgOwnInception(allowPartiallySigned=True, gvrsn=Vrsn_2_0)
+                    for group in groups]
+        for hby, message in zip(hbys, reversed(messages)):
+            Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(ims=bytearray(message), local=True)
+            hby.kvy.processEscrows()
+        prefix = groups[0].pre
+
+    first, second = tmp_path / 'first.cesr', tmp_path / 'second.cesr'
+    result = command(names[0], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+        '-r', 'registry', '--proposal-output', str(first), '--timeout', '0.2')
+    assert first.exists()
+    assert 'pending member approval' in result.stdout
+    pending = invoke(names[0], 'vc', 'registry', 'status', '--native', '-r', 'registry')[0]
+    assert pending['accepted'] is False and pending['pending']
+    accepted = invoke(names[1], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+        '-r', 'registry', '--proposal', str(first), '--proposal-output', str(second), '--timeout', '2')[0]
+    assert accepted['accepted'] and accepted['controller'] == prefix
+    assert accepted['custody'] == 'not requested'
+    accepted = invoke(names[0], 'vc', 'registry', 'incept', '--native', '-a', 'group',
+        '-r', 'registry', '--proposal', str(second), '--timeout', '2')[0]
+    assert accepted['accepted']
+
+    # A public update needs no independently regenerated custody secret. The
+    # exact pending TEL and KEL bodies are reused after each CLI process exits.
+    issue1, issue2 = tmp_path / 'issue1.cesr', tmp_path / 'issue2.cesr'
+    args = ('vc', 'create', '--native', '-a', 'group', '-r', 'registry',
+            '--unblinded', '--data', '{"role":"member-approved"}')
+    result = command(names[0], *args, '--proposal-output', str(issue1), '--timeout', '0.2')
+    assert 'pending member approval' in result.stdout
+    issued = invoke(names[1], *args, '--proposal', str(issue1), '--proposal-output', str(issue2), '--timeout', '2')[0]
+    assert issued['state'] == 'issued'
+    issuedAgain = invoke(names[0], *args, '--proposal', str(issue2), '--timeout', '2')[0]
+    assert issuedAgain['credential'] == issued['credential']
+    assert invoke(names[0], 'vc', 'registry', 'status', '--native', '-r', 'registry')[0]['sn'] == 1
+    # Public group authoring must not provision a secret in either member store.
+    from keri.app.credentialing import WalletBaser
+    from keri.db import openLMDB
+    for name in names:
+        with openLMDB(cls=WalletBaser, name=name, base='native-cli-test', temp=False) as wallet:
+            assert wallet.custody.get((accepted['registry'],)) is None
+    for path in (first, second, issue1, issue2):
+        parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(path.read_bytes()), processive=False)
+        wrapper = parsed[-1]
+        assert wrapper.serder.route == '/multisig/registry'
+        assert not wrapper.bsqs and not wrapper.bsss
 
 
 @contextmanager
