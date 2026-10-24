@@ -6,6 +6,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ...common import existing
+from ...common import native
 from ...common.parsing import Parsery
 
 from ....kering import ConfigurationError, Vrsn_1_0
@@ -49,9 +50,20 @@ parser.add_argument("--private-credential-nonce", help="nonce for vc",
 parser.add_argument("--private-subject-nonce", help="nonce for subject",
                     action="store")
 parser.add_argument("--time", help="timestamp for the credential creation", required=False, default=None)
+native.options(parser, author=True)
+parser.add_argument('--unblinded', action='store_true', help='use an explicit native upd issuance')
 
 
 def issueCredential(args):
+    """Route credential creation to explicit native authoring or legacy issuance.
+
+    args carries identity/registry, credential data, schema, edges/rules and CLI
+    controls. Return lifecycle Doers. --v2 selects NativeAuthor, including its
+    explicit public/blinded policy; otherwise retain legacy JSON/data validation
+    and issuance. Invalid input or core/authentication failures propagate without
+    being interpreted as accepted issuance."""
+    if getattr(args, 'native', False):
+        return [native.NativeAuthor(args, 'create')]
     name = args.name
     data = None
     rules = None
