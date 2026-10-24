@@ -9,11 +9,14 @@ IPEx protocol service support (Issuance and Presentation Exchange)
 from collections import deque, namedtuple
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
+from math import isfinite
 
 from hio.help import ogler
 
 from .. import Kinds, Protocols
-from ..kering import (Colds, DuplicitousRegistryError, FailedSchemaValidationError,
+from ..kering import (Colds, ConfigurationError, DuplicitousRegistryError,
+                      FailedSchemaValidationError,
                       Ilks, KeriError, MisanchorError, MisbindingError,
                       MissingAnchorError, MissingChainError, MissingSchemaError,
                       MissingSenderKeyStateError, MisdigestError, MisregistryError,
@@ -46,8 +49,9 @@ DisclosedNodeIlks = FieldMapIlks + (Ilks.act, Ilks.acg)
 EdgeSectionLabels = ("d", "u", "o", "w")
 EdgeGroupLabels = ("d", "u", "s", "o", "w")
 EdgeNodeLabels = ("d", "u", "n", "s", "o", "w")
-UnaryEdgeOps = ("I2I", "NI2I", "DI2I", "E1E", "NOT")
-EdgeGroupOps = ("AND", "OR")
+UnaryEdgeOps = ("I2I", "NI2I", "DI2I", "NOT")
+DelegativeEdgeOps = ("I2I", "NI2I", "DI2I")
+EdgeGroupOps = ("AND", "OR", "NAND", "NOR", "AVG", "WAVG")
 
 # Parsed attachment fields forbidden on Offer ACDC nodes.
 NodeAttachmentFields = ("sigers", "wigers", "cigars", "tsgs", "lsgs", "frcs",
@@ -461,7 +465,8 @@ class IpexHandler:
     # Receive route-filtered non-sender evidence from Exchanger.
     acceptsEvidence = True
 
-    def __init__(self, resource, hby, notifier, rgy=None):
+    def __init__(self, resource, hby, notifier, rgy=None, *, graphPolicy=None,
+                 sections=None, verification=None):
         """Create a handler for one IPEX route.
 
         Parameters:
@@ -470,14 +475,35 @@ class IpexHandler:
             notifier: Notifier-like object with an ``add`` method.
             rgy (Regery | None): Optional local registry manager used when a
                 disclosed node's ``rd`` requires verifier-side issuer-auth checks.
+            graphPolicy: Optional application policy. ``validity(serder)`` may
+                return bool or None. AVG/WAVG require ``value(near, edge, far)``
+                selecting a finite numeric property and ``accept(near, group,
+                average)`` interpreting the computed mean as bool or None.
+                Methods receive the named arguments shown. No policy is inferred.
+            sections (SectionBaser | None): Independently received schema evidence
+                shared with the application's parser. Lookup never expands the
+                retained credential's disclosed fields.
+            verification (NativeVerification | None): Concrete shared context.
+                When supplied, its policy and section store take precedence.
 
         Returns:
             None
+
+        Raises:
+            ConfigurationError: A supplied concrete context belongs to another
+                Habery/Regery or is not a NativeVerification instance.
         """
+        if verification is not None and (type(verification) is not NativeVerification
+                or verification.hby is not hby or verification.rgy is not rgy):
+            raise ConfigurationError('native verifier context must belong to this Habery and Regery')
         self.resource = resource
         self.hby = hby
         self.notifier = notifier
         self.rgy = rgy
+        self.verification = verification if verification is not None else NativeVerification(
+            hby, rgy, graphPolicy=graphPolicy, sections=sections)
+        self.graphPolicy = self.verification.graphPolicy
+        self.sections = self.verification.sections
         # Only Grant treats unresolved non-sender evidence as optional. Other
         # IPEX verbs continue rejecting foreign evidence before persistence.
         # Store this policy per route-specific handler instance.
@@ -1219,9 +1245,6 @@ class IpexHandler:
                         group, nested = groups.popleft()
                         labels = EdgeGroupLabels if nested else EdgeSectionLabels   # Leaf vs group labels
                         if "n" in group:
-                            for label in group:
-                                if label not in EdgeNodeLabels:
-                                    return None
                             edgeSaid = group.get("n")
                             if not isinstance(edgeSaid, str):
                                 return None
@@ -1231,7 +1254,7 @@ class IpexHandler:
                                 return None
                             if edgeSaid not in nodes:
                                 if closed:
-                                    return None
+                                    raise MissingChainError(f"edge requires disclosed far node {edgeSaid}")
                                 continue
                             if edgeSaid not in seen:
                                 queue.append(edgeSaid)
@@ -1251,163 +1274,343 @@ class IpexHandler:
 
         return nodes, order
 
-    def _evaluateLeafEdge(self, group, *, nodes, nserder, inheritedSchema):
-        """Evaluate one disclosed leaf edge against its referenced far node.
+    def _delegatedIssuer(self, issuer, issuee):
+        """Resolve DI2I only through accepted, fully witnessed inception events.
 
-        Parameters:
-            group (Mapping): Leaf edge mapping that must carry an ``n`` field
-                naming the far-node SAID, and may carry a string or non-empty
-                list of strings in ``o`` plus a schema pin in ``s``.
-            nodes (dict): Mapping of disclosed node SAIDs to parsed nests built
-                during the origin-graph walk.
-            nserder (Serder): Serder for the current near node whose edge block
-                is being evaluated.
-            inheritedSchema (str | Mapping | None): Optional schema pin passed
-                down from a parent edge group.
+        The KEL processor already verifies the delegator's authorization before
+        accepting a foreign dip. A mutable Kever attribute or an unaccepted dip
+        body is not delegation evidence. Follow the accepted chain transitively.
+
+        Args:
+            issuer (str): Near-node issuer whose accepted delegation chain to follow.
+            issuee (str): Far-node Issuee expected at any point in that chain.
 
         Returns:
-            bool | None: ``True`` when the leaf edge semantics are satisfied,
-                ``False`` when the leaf is well-formed but its relation or
-                schema constraints do not match, including recognized operators
-                that this verifier cannot yet evaluate, or ``None`` when the
-                leaf shape itself is malformed and verification must fail
-                closed.
-        """
-        # Reject unknown leaf labels before we inspect the reference.
-        for label in group:
-            if label not in EdgeNodeLabels:
-                return None
+            bool: Whether the Issuee is the issuer or a verified ancestor delegator.
 
-        # Resolve the far node that this edge claims to reference.
-        edgeSaid = group.get("n")
-        if edgeSaid not in nodes:
+        Raises:
+            MissingChainError: An inception, witness quorum, or delegator seal is absent."""
+        seen = set()
+        while issuer and issuer not in seen:
+            if issuer == issuee:
+                return True
+            seen.add(issuer)
+            dig = self.hby.db.kels.getLast(keys=issuer, on=0)
+            if dig is None:
+                raise MissingChainError(f"DI2I requires accepted KEL for {issuer}")
+            inception = self.hby.db.evts.get(keys=(issuer, dig))
+            if inception is None or not self.hby.db.fullyWitnessed(inception):
+                raise MissingChainError(f"DI2I requires witnessed inception for {issuer}")
+            delegator = inception.sad.get("di")
+            if delegator:
+                # Local controllers/witnesses may store their own dip before
+                # delegation completes. Require the actual delegator seal too.
+                seal = dict(i=inception.pre, s=inception.snh, d=inception.said)
+                if self.hby.db.fetchLastSealingEventByEventSeal(delegator, seal) is None:
+                    raise MissingChainError(f"DI2I requires delegation authorization for {issuer}")
+            issuer = delegator
+        return False
+    def _evaluateGraphNode(self, said, *, nodes, memo, active, averages):
+        """Evaluate authenticated node validity once, retaining unknown as None.
+
+        Issuer authentication and own-schema validation precede this evaluator
+        in Grant verification. Policy validity is optional; it may impose
+        standing, expiry or trust requirements and must return bool or None.
+        Missing/malformed evidence is never logical False and cannot be negated.
+
+        Args:
+            said (str): Authenticated disclosed node SAID to evaluate.
+            nodes (dict): Exact parsed node views indexed by SAID.
+            memo (dict): Shared completed truth values, updated in place.
+            active (set): Current recursion path, restored on every exit.
+            averages (dict): Shared computed numeric group results.
+
+        Returns:
+            bool | None: Known node truth, or unknown for cycles, unsupported structure,
+            or a policy result other than a concrete bool. Policy exceptions propagate;
+            callers must supply trusted application configuration."""
+        if said in memo:
+            return memo[said]
+        if said in active or said not in nodes:
             return None
-        far = nodes[edgeSaid]
-        fserder = far["serder"] if isinstance(far, dict) else far.serder
+        nest = nodes[said]
+        serder = nest["serder"] if isinstance(nest, dict) else nest.serder
+        if serder.said != said:
+            return None
+        active.add(said)
+        try:
+            own = True
+            validity = getattr(self.graphPolicy, "validity", None)
+            if validity is not None:
+                own = validity(serder)
+                if type(own) is not bool:
+                    return None
+            edges = serder.sad.get("e")
+            results = []
+            if edges:
+                blocks = [edges] if isinstance(edges, Mapping) else edges
+                if not isinstance(blocks, list) or not all(isinstance(e, Mapping) for e in blocks):
+                    return None
+                for edge in blocks:
+                    if "n" in edge:
+                        return None  # the edge section is always a group
+                    result = self._evaluateGroupEdge(edge, nodes=nodes, nserder=serder,
+                        nested=False, inheritedSchema=None, memo=memo,
+                        active=active, averages=averages)
+                    if result is None:
+                        return None
+                    results.append(result)
+            memo[said] = own and all(results)
+            return memo[said]
+        finally:
+            active.remove(said)
+    @staticmethod
+    def _edgeIssuee(serder):
+        """Distinguish known untargeted from an undisclosed issuee section.
 
-        # Normalize one operator or a list of operators.
+        Args:
+            serder (SerderACDC): Exact disclosed far-node credential.
+
+        Returns:
+            tuple[bool, str | None]: Whether the selected attribute block is visible,
+            and its Issuee when present. A visible block without i is known untargeted;
+            a compact digest is unknown and cannot establish that default."""
+        if "a" in serder.sad:
+            block = serder.sad["a"]
+        else:
+            aggregate = serder.sad.get("A")
+            if not isinstance(aggregate, list) or len(aggregate) < 2:
+                return False, None
+            block = aggregate[1]
+        return (True, block.get("i")) if isinstance(block, Mapping) else (False, None)
+    def _evaluateLeafEdge(self, group, *, nodes, nserder, inheritedSchema=None,
+                          memo=None, active=None, averages=None):
+        """Apply relation, all schema constraints, and optionally NOT of far truth.
+
+        ACDC f0bd097d lines 1186-1211: latest conflicting relation wins;
+        missing/empty operators default to I2I for targeted nodes, NI2I otherwise.
+        NOT affects far-node validity only, never the edge's relation or schema.
+
+        Args:
+            group (Mapping): Disclosed edge naming its far node and constraints.
+            nodes (dict): Authenticated disclosed nodes indexed by SAID.
+            nserder (SerderACDC): Near credential establishing this edge.
+            inheritedSchema: Additional ancestor schema pins, if any.
+            memo (dict | None): Already evaluated node truth values.
+            active (set | None): Nodes currently being evaluated, to reject cycles.
+            averages (dict | None): Computed child group numeric results.
+
+        Returns:
+            bool | None: Edge validity, or None when semantics are unresolved.
+
+        Raises:
+            MissingChainError: Required far node or delegation evidence is absent.
+            MissingSchemaError: A pinned schema is unavailable in KEL/section stores.
+        """
+        memo = {} if memo is None else memo
+        active = set() if active is None else active
+        averages = {} if averages is None else averages
+        said = group.get("n")
+        if not isinstance(said, str) or said not in nodes:
+            raise MissingChainError(f"edge requires disclosed far node {said}")
+        nest = nodes[said]
+        far = nest["serder"] if isinstance(nest, dict) else nest.serder
+        if far.said != said:
+            return None
         op = group.get("o")
-        if op is None:
-            recognizedOps = ()
+        if op is None or op == "":
+            ops = []
         elif isinstance(op, str):
-            recognizedOps = (op,)
-        elif (isinstance(op, list) and op
-              and all(isinstance(operator, str) for operator in op)):
-            recognizedOps = tuple(op)
+            ops = [op]
+        elif isinstance(op, list):
+            ops = op
         else:
             return None
-
-        # Every declared unary operator must be recognized.
-        if any(operator not in UnaryEdgeOps for operator in recognizedOps):
+        if any(not isinstance(item, str) or item not in UnaryEdgeOps for item in ops):
             return None
-
-        # Recognized but unevaluated leaf operators fail as unsatisfied
-        # relations instead of malformed input.
-        if "NOT" in recognizedOps or "DI2I" in recognizedOps:
-            return False
-
-        # Start from a passing state, then knock the edge down to False if
-        # any required relation check fails.
+        known, issuee = self._edgeIssuee(far)
+        relation = next((item for item in reversed(ops) if item in DelegativeEdgeOps), None)
+        if relation != "NI2I" and not known:
+            return None  # hidden issuee is not evidence of an untargeted node
+        relation = relation or ("I2I" if issuee else "NI2I")
         matched = True
-        if "E1E" in recognizedOps:
-            if (not nserder.iseaid
-                    or not fserder.iseaid
-                    or nserder.iseaid != fserder.iseaid):
-                matched = False
+        if relation == "I2I":
+            matched = bool(issuee) and nserder.israid == issuee
+        elif relation == "DI2I":
+            matched = bool(issuee) and self._delegatedIssuer(nserder.israid, issuee)
 
-        # I2I compares the near issuer to the far Issuee. NI2I is explicitly
-        # non-delegative and therefore adds no issuer-to-Issuee equality.
-        if matched and "I2I" in recognizedOps:
-            if not fserder.iseaid:
-                matched = False
-            elif nserder.israid != fserder.iseaid:
-                matched = False
-
-        # A leaf may pin the far node's schema directly, otherwise it
-        # inherits the schema pin from its parent group.
-        edgeSchema = group["s"] if "s" in group else inheritedSchema
-        if matched and edgeSchema is not None:
+        # Existing group-level schema pins remain additional constraints; a
+        # child's own pin cannot release a constraint inherited from its group.
+        pins = () if inheritedSchema is None else inheritedSchema
+        if not isinstance(pins, tuple):
+            pins = (pins,)
+        if "s" in group:
+            pins += (group["s"],)
+        for schema in pins:
+            schemaKind = nserder.kind
+            # A malformed/tampered constraint is not an ordinary false claim.
             try:
-                scheming.validateSchema(acdc=fserder, db=self.hby.db,
-                                        schema=edgeSchema)
+                if isinstance(schema, str):
+                    if Saider(qb64=schema).qb64 != schema:
+                        return None
+                    if isinstance(far.schema, Mapping) and far.schema.get("$id") == schema:
+                        schema = far.schema
+                        schemaKind = far.kind
+                elif not isinstance(schema, Mapping):
+                    return None
+                if isinstance(schema, Mapping):
+                    scheming._verifySchemer(schema, kind=schemaKind)
+            except (KeriError, ValueError, TypeError):
+                return None
+            try:
+                scheming.validateSchema(acdc=far, db=self.hby.db, schema=schema, schemaKind=schemaKind,
+                                        sections=self.sections)
             except MissingSchemaError:
                 raise
             except (FailedSchemaValidationError, ValidationError, ValueError):
                 matched = False
+        truth = self._evaluateGraphNode(said, nodes=nodes, memo=memo,
+                                        active=active, averages=averages)
+        if truth is None:
+            return None
+        if "NOT" in ops:
+            truth = not truth
+        return matched and truth
 
-        return matched
+    @staticmethod
+    def _finiteGraphNumber(value):
+        """Accept JSON numeric values without bools, infinities or overflow.
 
-    def _evaluateGroupEdge(self, group, *, nodes, nserder, nested, inheritedSchema):
-        """Evaluate one disclosed edge group and reduce its child results.
-
-        Parameters:
-            group (Mapping): Edge-section or nested edge-group mapping whose
-                child entries are either more groups or leaf edges.
-            nodes (dict): Mapping of disclosed node SAIDs to parsed nests built
-                during the origin-graph walk.
-            nserder (Serder): Serder for the current near node whose edge block
-                is being evaluated.
-            nested (bool): ``True`` when ``group`` is a nested edge group and
-                therefore allows group-only labels like ``s``; ``False`` for a
-                top-level edge section.
-            inheritedSchema (str | Mapping | None): Optional schema pin passed
-                down from the parent edge group.
+        Args:
+            value: Candidate policy-selected numeric property or arithmetic result.
 
         Returns:
-            bool | None: ``True`` when the group is well-formed and its child
-                results satisfy the group's ``AND`` or ``OR`` semantics,
-                ``False`` when the group is well-formed but the reduced child
-                result fails, or ``None`` when the group shape is malformed and
-                verification must fail closed.
-        """
-        # Top-level edge sections and nested edge groups allow slightly
-        # different reserved labels, so choose the right set up front.
-        labels = EdgeGroupLabels if nested else EdgeSectionLabels
+            bool: Whether value is an int/float safely representable as a finite float.
+            Arithmetic conversion failures are treated as invalid input."""
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return False
+        try:
+            return isfinite(value)
+        except OverflowError:
+            return False
+    def _evaluateGroupEdge(self, group, *, nodes, nserder, nested,
+                           inheritedSchema=None, memo=None, active=None, averages=None):
+        """Reduce all members; uncertainty cannot be laundered by OR/NAND/NOR.
 
-        # Nested groups may contribute an m-ary operator and a shared schema
-        # pin for every child below them.
-        groupOp = group.get("o", "AND")
-        if not isinstance(groupOp, str) or groupOp not in EdgeGroupOps:
+        AVG/WAVG require explicit graphPolicy.value(near, edge, far) and
+        graphPolicy.accept(near, group, average). The engine computes arithmetic;
+        policy selects the numeric property and interprets the resulting mean.
+        Nested AVG/WAVG results supply their computed mean to their parent.
+
+        Args:
+            group (Mapping): Disclosed operator group or leaf edge.
+            nodes (dict): Exact authenticated nodes indexed by SAID.
+            nserder (SerderACDC): Near node establishing the edge.
+            nested (bool): Whether group is below the section root.
+            inheritedSchema: Additional ancestor constraints, preserved at every child.
+            memo (dict | None): Shared node truth cache for this evaluation only.
+            active (set | None): Shared recursion path used to detect cycles.
+            averages (dict | None): Mutable group-id-to-mean results for nested averages.
+
+        Returns:
+            bool | None: Reduced truth, or unknown for any unresolved/malformed operand.
+
+        Raises:
+            MissingChainError: Required disclosed/authenticated far-node evidence is absent.
+            MissingSchemaError: A pinned schema is unavailable. Trusted policy exceptions
+            propagate instead of being mistaken for authenticated credential truth."""
+        memo = {} if memo is None else memo
+        active = set() if active is None else active
+        averages = {} if averages is None else averages
+        if "n" in group or (not nested and "w" in group):
             return None
-
-        # Nested groups can pin one schema for every child below them.
-        nextSchema = group.get("s", inheritedSchema) if nested else inheritedSchema
-        results = []
-        for label, node in group.items():
+        labels = EdgeGroupLabels if nested else EdgeSectionLabels
+        op = group.get("o", "AND")
+        if not isinstance(op, str) or op not in EdgeGroupOps:
+            return None
+        pins = () if inheritedSchema is None else inheritedSchema
+        if not isinstance(pins, tuple):
+            pins = (pins,)
+        if nested and "s" in group:
+            pins += (group["s"],)
+        members, results = [], []
+        for label, member in group.items():
             if label in labels:
                 continue
-            if not isinstance(node, Mapping):
+            if not isinstance(member, Mapping):
                 return None
-
-            # Recurse into each child and fail closed if any child is malformed.
-            if "n" in node:
-                matched = self._evaluateLeafEdge(node,
-                                                 nodes=nodes,
-                                                 nserder=nserder,
-                                                 inheritedSchema=nextSchema)
+            if "n" in member:
+                result = self._evaluateLeafEdge(member, nodes=nodes, nserder=nserder,
+                    inheritedSchema=pins, memo=memo, active=active, averages=averages)
             else:
-                matched = self._evaluateGroupEdge(node,
-                                                  nodes=nodes,
-                                                  nserder=nserder,
-                                                  nested=True,
-                                                  inheritedSchema=nextSchema)
-            if matched is None:
+                result = self._evaluateGroupEdge(member, nodes=nodes, nserder=nserder,
+                    nested=True, inheritedSchema=pins, memo=memo, active=active, averages=averages)
+            if result is None:
                 return None
-            results.append(matched)
-
+            members.append(member)
+            results.append(result)
         if not results:
             return None
+        if op == "AND":
+            return all(results)
+        if op == "OR":
+            return any(results)
+        if op == "NAND":
+            return not all(results)
+        if op == "NOR":
+            return not any(results)
 
-        # Reduce the child booleans according to the group's operator.
-        return any(results) if groupOp == "OR" else all(results)
+        value = getattr(self.graphPolicy, "value", None)
+        accept = getattr(self.graphPolicy, "accept", None)
+        if value is None or accept is None:
+            return None
+        # An invalid relation or pin cannot be made valid by its numeric score.
+        if not all(results):
+            return False
+        values, weights = [], []
+        for member in members:
+            far = None
+            if "n" in member:
+                nest = nodes[member["n"]]
+                far = nest["serder"] if isinstance(nest, dict) else nest.serder
+            number = (averages[id(member)] if id(member) in averages else
+                      value(near=nserder, edge=member, far=far))
+            weight = member.get("w") if op == "WAVG" else 1
+            if (not self._finiteGraphNumber(number)
+                    or not self._finiteGraphNumber(weight) or weight < 0):
+                return None
+            values.append(number)
+            weights.append(weight)
+        total = sum(weights)
+        if not total or not self._finiteGraphNumber(total):
+            return None
+        mean = sum(number * (weight / total) for number, weight in zip(values, weights))
+        if not isfinite(mean):
+            return None
+        result = accept(near=nserder, group=group, average=mean)
+        if type(result) is not bool:
+            return None
+        averages[id(group)] = mean
+        return result
 
     def _verifyNodeSchemas(self, nodes, order):
-        """Validate each disclosed ACDC against its embedded or cached schema."""
+        """Validate disclosed nodes without expanding their retained views.
+
+        Args:
+            nodes (dict): Authenticated disclosed nodes indexed by SAID.
+            order (list): Reachable node SAIDs to validate in graph order.
+
+        Returns:
+            bool: Whether every node satisfies its embedded or cached own schema.
+
+        Raises:
+            MissingSchemaError: Required schema evidence is not yet available.
+        """
         for said in order:
             nest = nodes[said]
             nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
             try:
-                scheming.validateSchema(acdc=nserder, db=self.hby.db)
+                scheming.validateSchema(acdc=nserder, db=self.hby.db, sections=self.sections)
             except MissingSchemaError:
                 raise
             except (FailedSchemaValidationError, ValidationError, ValueError):
@@ -1416,56 +1619,28 @@ class IpexHandler:
         return True
 
     def _verifyGraphSemantics(self, nodes, order):
-        """Verify grant edge operators and edge-schema pins across walked nodes.
+        """Use the same recursive evaluator for the presented origin and far nodes.
 
-        Parameters:
-            nodes (dict): Mapping of disclosed node SAID to parsed nest.
-            order (list): Breadth-first walk order returned by ``_walkGraph``.
+        Authenticate and schema-check all disclosed nodes before calling this
+        method. A false far-node predicate may contribute to NOT/NAND/NOR; an
+        unknown or malformed node may not. No default ecosystem trust is implied.
+
+        Args:
+            nodes (dict): Exact issuer-authenticated and own-schema-checked node views.
+            order (list[str]): Reachable traversal order, with the origin first.
 
         Returns:
-            bool: True when every walked edge block is well-formed and its
-                leaf-level and group-level operator/schema constraints are
-                satisfied; False on any malformed or violated edge semantics.
-        """
-        for said in order:
-            # Current near node from the walked grant DAG
-            near = nodes[said]
+            bool: Whether the origin evaluates to concrete True; unknown fails closed.
 
-            # Retrieve node serder
-            nserder = near["serder"] if isinstance(near, dict) else near.serder
-
-            # No edges means nothing more to validate for this node
-            edges = nserder.sad.get("e")
-            if not edges:
-                continue
-
-            # Normalize a single edge block or a list of edge blocks
-            if isinstance(edges, Mapping):
-                blocks = [edges]
-            elif isinstance(edges, list) and all(isinstance(edge, Mapping) for edge in edges):
-                blocks = edges
-            else:
-                return False
-
-            for edge in blocks:
-                # Evaluate the whole edge tree from the root down. Each leaf
-                # returns one boolean and each group reduces its child booleans
-                # with AND/OR using any inherited schema pin.
-                if "n" in edge:
-                    matched = self._evaluateLeafEdge(edge,
-                                                     nodes=nodes,
-                                                     nserder=nserder,
-                                                     inheritedSchema=None)
-                else:
-                    matched = self._evaluateGroupEdge(edge,
-                                                      nodes=nodes,
-                                                      nserder=nserder,
-                                                      nested=False,
-                                                      inheritedSchema=None)
-                if matched is not True:
-                    return False
-
-        return True
+        Raises:
+            MissingChainError, MissingSchemaError: Required edge evidence is unavailable.
+            Exceptions from trusted local graph policy propagate."""
+        if not order or set(order) != set(nodes):
+            return False
+        memo, active, averages = {}, set(), {}
+        result = self._evaluateGraphNode(order[0], nodes=nodes, memo=memo,
+                                         active=active, averages=averages)
+        return result is True and set(memo) == set(nodes)
 
     def _verifyIssuerAuthGraph(self, nodes, order):
         """Verify issuer-auth proof groups for each walked disclosed DAG node.
@@ -2008,6 +2183,37 @@ class IpexHandler:
             d=serder.said,
             m=attrs["m"],
         ))
+
+@dataclass(frozen=True)
+class NativeVerification:
+    """Concrete native semantic context shared by intake and fresh admission.
+
+    This context carries evidence and policy, never a caller assertion of
+    acceptance. Retained inspection may outlive it; fresh acceptance may not.
+
+    Parameters:
+        hby (Habery): Owner of authenticated KEL and retained EXN evidence.
+        rgy (Regery | None): Registry evidence used for issuer authentication.
+        graphPolicy: Explicit local graph validity/averaging policy, or None.
+        sections (SectionBaser | None): Parser-owned independent schema store.
+    """
+    hby: object
+    rgy: object = None
+    graphPolicy: object = None
+    sections: object = None
+
+    def handler(self, resource, notifier=None):
+        """Return a route handler using this context's evidence and policy.
+
+        Args:
+            resource (str): Native IPEX route to validate.
+            notifier: Optional receiver of accepted-message notifications.
+
+        Returns:
+            IpexHandler: Concrete route processor with no independent defaults.
+        """
+        return IpexHandler(resource, self.hby, notifier, rgy=self.rgy,
+                           verification=self)
 
 def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gvrsn=None, *, ax=None):
     """Create a signed V2 IPEX ``apply`` exchange.
