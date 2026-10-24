@@ -8,6 +8,7 @@ ACDC Schema support
 
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 import jsonschema
@@ -15,7 +16,8 @@ import referencing
 import semver
 from referencing.jsonschema import DRAFT202012
 
-from ..core import Diger, Saider, Schemer, dumps
+from .. import Kinds
+from ..core import Compactor, Diger, Mapper, Saider, Schemer, dumps
 from ..kering import (FailedSchemaValidationError, MissingSchemaError,
                       ValidationError)
 
@@ -163,10 +165,18 @@ def _verifyResource(schema, kind=None):
     saider = Saider(qb64=said)
     sad = dict(schema)
     sad["$id"] = declared.replace(said, "#" * len(said))
-    raw = dumps(sad) if kind is None else dumps(sad, kind=kind)
+    if kind == Kinds.cesr and declared == said:
+        # Native CESR saidive fields use raw dummy material, not a CESR
+        # text primitive encoding the placeholder characters.
+        actual = Mapper(mad=schema, makify=True, saidive=True, strict=False,
+                        saids={'$id': saider.code}).said
+    else:
+        raw = (Mapper(mad=sad, strict=False).raw if kind == Kinds.cesr
+               else dumps(sad, kind=kind or Kinds.json))
+        actual = Diger(ser=raw, code=saider.code).qb64
 
     # Confirm the content produces the declared SAID
-    if Diger(ser=raw, code=saider.code).qb64 != said:
+    if actual != said:
         raise FailedSchemaValidationError(
             f"bundled schema {declared} content does not match its SAID")
 
@@ -235,10 +245,19 @@ def _inspectSchema(schema, *, root=True, kind=None, base=None):
     return references
 
 
-def _verifySchemer(schema, *, expected=None):
+@dataclass(frozen=True)
+class _VerifiedSchema:
+    """Schema content authenticated in its actual section serialization kind."""
+    sed: dict
+    said: str
+    kind: str
+
+
+def _verifySchemer(schema, *, expected=None, kind=None):
     """Verify that a schema's content matches its claimed SAID.
 
-    The schema is rebuilt so its SAID is calculated again. When ``expected``
+    The schema is rebuilt in its actual encoding so its SAID is calculated
+    again. When ``expected``
     is supplied, the calculated SAID must also match that cache key or external
     reference.
 
@@ -247,12 +266,15 @@ def _verifySchemer(schema, *, expected=None):
         expected (str | None): SAID the schema is expected to have.
 
     Returns:
-        Schemer: A rebuilt schema whose content and SAID agree.
+        Schemer | _VerifiedSchema: Authenticated schema content and actual kind.
 
     Raises:
         FailedSchemaValidationError: If the schema has an invalid ``$id`` or
             its content does not match the declared or expected SAID.
-    """
+
+    Encoding parameter:
+        kind (str | None): Mapping's actual serialization kind; defaults to JSON.
+        Schemer inputs retain their own raw encoding rather than adopting this hint."""
     # Rebuild an existing Schemer from its bytes
     if isinstance(schema, Schemer):
         schemer = Schemer(raw=schema.raw, verify=False)
@@ -270,7 +292,10 @@ def _verifySchemer(schema, *, expected=None):
                 "schema has an invalid or non-SAID $id")
         # Rebuild a copy to calculate its SAID
         try:
-            schemer = Schemer(sed=deepcopy(schema), verify=False)
+            encoding = kind or Kinds.json
+            section = Compactor(mad=deepcopy(schema), makify=True, strict=False,
+                                saids={'$id': saider.code}, kind=encoding)
+            schemer = _VerifiedSchema(section.mad, section.said, encoding)
         except (TypeError, ValidationError, ValueError) as ex:
             raise FailedSchemaValidationError("schema has an invalid SAID") from ex
 
