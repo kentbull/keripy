@@ -1675,11 +1675,61 @@ class IpexHandler:
         return True
 
     def _verifyIssuerAuthNode(self, serder, nest):
-        """Verify one ACDC using its declared issuer authentication factor."""
+        """Verify one disclosed ACDC's selected issuer authentication factor.
+
+        Args:
+            serder (SerderACDC): Exact disclosed credential view.
+            nest: Parsed object or dictionary carrying that view's attachments.
+
+        Returns:
+            bool: Whether the selected registry, anchor, or signature authenticates
+                the issuer. Invalid selected evidence never falls back to another
+                factor.
+
+        Raises:
+            MissingChainError: Required authenticated KEL/TEL evidence is absent.
+            KeriError: Invalid registry opening or binding evidence.
+        """
+        from .regeventing import issuerRegistry, vetBlind, vetBound
 
         # Authentication Factor 1: Registry
         # First check if a registry was declared, if so verify it
-        regk = serder.sad.get("rd")
+        try:
+            regk = issuerRegistry(serder)
+        except MisregistryError:
+            return False
+        parsed = nest if isinstance(nest, dict) else nest.__dict__
+        # A one-way binding can identify its TEL explicitly in a source triple.
+        # Resolve the exact referenced TEL event before considering its current
+        # chain; a signature or unrelated cached registry cannot substitute.
+        if not regk and self.rgy is not None:
+            references = []
+            for prefixer, number, diger in parsed.get('ssts', []):
+                candidate = prefixer.qb64
+                if candidate == serder.israid or candidate in self.hby.kevers:
+                    continue  # these are KEL references, not registry references
+                event = self.rgy.store.seqEvent(candidate, number.num)
+                if event is None:
+                    raise MissingChainError(f'missing referenced TEL event {candidate}:{number.num}')
+                if event.said != diger.qb64:
+                    return False
+                if event.ilk == Ilks.upd:
+                    target = event.sad['td']
+                elif event.ilk == Ilks.bup:
+                    openings = [proof for proof in self._blindProofs(nest)
+                                if proof.said == event.sad['b']]
+                    if len(openings) != 1:
+                        return False
+                    target, _ = vetBlind(openings[0], blid=event.sad['b'])
+                    vetBound(openings[0], acdc=serder, db=self.hby.db)
+                else:
+                    return False
+                if target != serder.said:
+                    return False
+                references.append(candidate)
+            if len(set(references)) > 1:
+                return False
+            regk = next(iter(references), None)
         if regk:
             record = self._vetRegistry(regk=regk,
                                        proofs=self._blindProofs(nest),
@@ -1688,11 +1738,6 @@ class IpexHandler:
             if record is None:
                 return False
             return True
-
-        # An inner rd without a top-level rd selects the unsupported hidden
-        # issuer-registry form; it must not fall through to another factor.
-        if self._presentationRegistries(serder) is None:
-            return False
 
         # Authentication Factor 2: Seal Anchor
         # Registry-less ACDCs must identify a direct issuer AID.
@@ -1742,8 +1787,10 @@ class IpexHandler:
         # Fall back to signature verification when no registry or anchor is supplied
         tsgs = []
 
-        # Resolve the issuer's current key state.
-        kever = self.hby.db.kevers.get(issuer)
+        # Membership performs the existing statedict read-through from verified
+        # persisted state. Its get() only sees warmed in-memory entries, so it
+        # would incorrectly require replay of an already retained KEL on restart.
+        kever = self.hby.kevers[issuer] if issuer in self.hby.kevers else None
 
         # Read bare indexed signatures from the node stream.
         sigers = parsed.get("sigers", [])
@@ -1856,12 +1903,38 @@ class IpexHandler:
 
     def _vetRegistry(self, regk, proofs, target, controller=None, acdc=None,
                      cutoff=None, sourceSeals=None, requireSource=False):
-        """Vet one issuer or presentation registry using matching BLIDs."""
+        """Vet one issuer or presentation registry using matching BLIDs.
+
+        Args:
+            regk (str): Selected issuer or presentation registry identifier.
+            proofs (Iterable[Blinder]): Node-local disclosures, matched to TEL BLIDs.
+            target (str): Credential/exchange SAID the selected binding must commit to.
+            controller (str | None): Required registry-controlling AID.
+            acdc (SerderACDC | None): Credential for issuer-registry mutual binding.
+            cutoff: Legacy timestamp selector; common verification rejects it.
+            sourceSeals (Iterable | None): Explicit Issuee KEL source triples.
+            requireSource (bool): Require an authenticated historical binding source.
+
+        Returns:
+            RegStateRecord | None: Verified selected binding, or None for permanent
+            structural/binding failure or no injected registry owner.
+
+        Raises:
+            MissingChainError: The accepted chain, selected KEL anchor, or TEL event
+                for a self-verified target opening is unavailable. An unmatched
+                opening proves no newer ordinal, state, or freshness; even a
+                self-valid foreign opening may remain unresolved without acceptance.
+
+        The common verifier authenticates the TEL and openings. Neither a cache hit nor
+        an unsigned source locator is an independent claim of acceptance."""
 
         # Require disclosed proofs and a locally available TEL chain.
-        if not proofs or (evidence := self._registryEvidence(regk)) is None:
+        if (evidence := self._registryEvidence(regk)) is None:
             return None
 
+        # Preserve the exact disclosed set for dependency classification if the
+        # accepted prefix cannot yet consume it. Callers may supply an iterator.
+        proofs = list(proofs)
         # Import lazily to avoid the ACDC module cycle.
         from . import regeventing
         try:
@@ -1906,6 +1979,14 @@ class IpexHandler:
                     raise MissingChainError(
                         f"missing presentation anchor source for registry {regk}")
 
+            # A presentation proof names its historical KEL source. Resolve
+            # that source to an exact TEL prefix; request timeliness does not
+            # select registry history. Current issuer standing uses the head.
+            at = None
+            if requireSource and sources:
+                at = max((update for update in evidence[1] if update.said in sources),
+                         key=lambda update: Number(numh=update.sad['n']).num).said
+
             # Verify the TEL and its latest disclosed target binding.
             record = regeventing.vetBinds(rip=evidence[0],
                                           updates=evidence[1],
@@ -1915,6 +1996,7 @@ class IpexHandler:
                                           controller=controller,
                                           acdc=acdc,
                                           cutoff=cutoff,
+                                          at=at,
                                           sources=sources,
                                           requireSource=requireSource)
 
@@ -1937,10 +2019,52 @@ class IpexHandler:
                     f"missing presentation anchor source for registry {regk}") from ex
             return None
 
+        except UnverifiedBlindError as ex:
+            # A resolved historical source selects an exact accepted event;
+            # another opening cannot replace that event's required commitment.
+            if requireSource:
+                return None
+            known = {update.sad['b'] for update in evidence[1]
+                     if update.ilk == Ilks.bup}
+            unresolved = None
+            try:
+                if acdc is not None:
+                    regeventing.vetBindings(acdc, regid=regk,
+                        issuer=evidence[0].sad['i'], td=target)
+                checked = []
+                for proof in proofs:
+                    disclosed, _ = regeventing.vetBlind(proof, blid=proof.said)
+                    if proof.said in known and sum(item.said == proof.said for item in proofs) != 1:
+                        return None  # Known commitments still require one opening.
+                    checked.append((proof, disclosed))
+                missingBound = None
+                for proof, disclosed in checked:
+                    if disclosed != target:
+                        continue
+                    try:
+                        regeventing.vetBound(proof, acdc=acdc, db=self.hby.db)
+                    except MissingAnchorError as error:
+                        # Scan all target proofs before returning a dependency:
+                        # a known contradiction wins regardless of proof order.
+                        missingBound = error
+                    if proof.said not in known:
+                        unresolved = proof.said
+            except (UnverifiedBlindError, MisbindingError, MisanchorError):
+                return None
+            if unresolved is not None:
+                if missingBound is not None:
+                    raise MissingChainError(
+                        f"registry {regk} opening is missing bound KEL evidence") from missingBound
+                # This is only an authenticated disclosure with no matching
+                # accepted TEL event. Fetch/retry through normal EXN escrow;
+                # do not infer its ordinal, issuer publication time, or validity.
+                raise MissingChainError(
+                    f"registry {regk} is missing TEL evidence for disclosed blid={unresolved}") from ex
+            return None
+
         # Structurally invalid or misbound TEL evidence fails permanently.
         except (MisdigestError, MissequenceError, MisregistryError,
-                RootSealError, MisbindingError, DuplicitousRegistryError,
-                UnverifiedBlindError):
+                RootSealError, MisbindingError, DuplicitousRegistryError):
             return None
 
     @staticmethod

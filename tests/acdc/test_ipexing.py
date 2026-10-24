@@ -6849,7 +6849,13 @@ def test_ipex_v2_blind_registry_update_roundtrip_through_kram_two_haberies(fakeH
 
 
 def test_ipex_v2_two_node_registry_dag_roundtrip_through_kram_two_haberies(fakeHelpingClock):
-    """Run the full IPEX flow for a two-node DAG with node-local issuer-auth."""
+    """Run actual two-Habery IPEX/KRAM negotiation with two node-local issuer registries and explicit presentation binding.
+
+    Parameters:
+        fakeHelpingClock: Deterministic protocol clock fixture controlling real KRAM timeliness windows.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     clock = fakeHelpingClock
 
     kramConfig = {
@@ -6887,13 +6893,14 @@ def test_ipex_v2_two_node_registry_dag_roundtrip_through_kram_two_haberies(fakeH
 
             # The disclosed DAG has a registry-backed origin node that points to
             # one child node.
+            # This disclosure relationship is nondelegative; use explicit NI2I.
             child = acdcmap(israid=issuerHab.pre,
                             attribute=dict(d="", role="member"),
                             iseaid=recipientHab.pre)
             origin = acdcmap(israid=issuerHab.pre,
                              regid=registry.regk,
                              attribute=dict(d="", LEI="254900OPPU84GM83MG36"),
-                             edge=_edge("holder", child, op="E1E"),
+                             edge=_edge("holder", child, op="NI2I"),
                              iseaid=recipientHab.pre)
             schema = origin.sad["s"]["$id"]
 
@@ -8040,7 +8047,10 @@ def test_ipex_v2_presentation_registry_binds_proxy_grant():
 
 
 def test_ipex_v2_rejects_substituted_presentation_registry():
-    """A valid registry cannot replace the registry declared by the issuer."""
+    """Refuse a valid foreign presentation registry substituted for the one committed by the issuer.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
     with openHby(name="ipex-v2-substituted-presentation-registry",
                  base="test",
                  version=Vrsn_2_0) as hby:
@@ -8062,10 +8072,13 @@ def test_ipex_v2_rejects_substituted_presentation_registry():
             proof, presented = registrar.present(actualRegistry, grant=grant)
             _anchor(issuee, actualRegistry, presented)
 
-            # Simulate foreign evidence indexed under the issuer-declared key.
+            # The storage boundary refuses foreign evidence under a false key.
             declaredRegk = Diger(ser=b"declared presentation registry").qb64
-            rgy.store.accept(declaredRegk, 0, rip)
-            rgy.store.accept(declaredRegk, 1, presented)
+            from keri.kering import ValidationError, MissingChainError
+            with pytest.raises(ValidationError):
+                rgy.store.accept(declaredRegk, 0, rip)
+            with pytest.raises(ValidationError):
+                rgy.store.accept(declaredRegk, 1, presented)
 
             # Vet the substituted chain through the production registry path.
             handler = IpexHandler(resource="/ipex/grant",
@@ -8081,13 +8094,12 @@ def test_ipex_v2_rejects_substituted_presentation_registry():
             assert actualRecord.regid == actualRegistry.regk
 
             # Request the same evidence through the substituted registry key.
-            record = handler._vetRegistry(regk=declaredRegk,
+            with pytest.raises(MissingChainError):
+                handler._vetRegistry(regk=declaredRegk,
                                           proofs=[proof],
                                           target=grant,
                                           controller=issuee.pre)
-
-            # Reject Registry B even though its chain and binding are valid.
-            assert record is None
+            assert rgy.store.head(declaredRegk) is None
         finally:
             rgy.close()
 
