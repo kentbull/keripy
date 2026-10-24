@@ -275,3 +275,51 @@ def test_native_cli_unblinded_issuance_then_blind_revocation(tmp_path):
                      '--said', issued['credential'])[0]
     assert revoked['state'] == 'revoked'
     assert invoke(name, 'vc', 'list', '--native', '--issued', '-a', 'issuer')[0]['state'] == 'unknown'
+
+
+def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
+    """Use real Issuee KEL coordinates for bound issuance/revocation and preserve the exact historical issuance on retry.
+
+    Parameters:
+        tmp_path: Pytest-owned exclusive credential, public proof, private custody, and bound-evidence files.
+
+    Returns:
+        None. Assertions check the stated evidence boundary."""
+    name = 'bound-' + uuid.uuid4().hex
+    with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
+                 version=Vrsn_2_0) as hby:
+        hby.makeHab(name='issuer', version=Vrsn_2_0)
+        holder = hby.makeHab(name='holder', version=Vrsn_2_0)
+        issuee, first = holder.pre, holder.kever.serder.said
+    invoke(name, 'vc', 'registry', 'incept', '--native', '--with-custody', '-a', 'issuer', '-r', 'bound')
+    issued = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'bound',
+                    '--recipient', issuee, '--bound-event', first, '--data', '{"role":"bound"}')[0]
+    assert issued['state'] == 'issued'
+    artifact = tmp_path / 'bound.cesr'
+    invoke(name, 'vc', 'export', '--native', '-a', 'issuer', '-r', 'bound',
+           '--said', issued['credential'], '--full', '--output', str(artifact))
+    parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(artifact.read_bytes()), processive=False)
+    assert parsed[-1].bsss
+    acdc = parsed[-1].serder
+    credential = tmp_path / 'credential.json'
+    credential.write_bytes(acdc.raw)
+    with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
+                 version=Vrsn_2_0) as hby:
+        holder = hby.habByName('holder')
+        holder.interact(version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+        current = holder.kever.serder.said
+    granted = invoke(name, 'ipex', 'grant', '--native', '-a', 'issuer',
+                     '--recipient', issuee, '--said', acdc.said)[0]
+    assert granted['accepted'] is True
+    refused = command(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'bound',
+                      '--said', acdc.said, '--bound-event', first)
+    assert 'known current issuee event' in refused.stdout
+    revoked = invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'bound',
+                     '--said', acdc.said, '--bound-event', current)[0]
+    assert revoked['state'] == 'revoked'
+    repeated = invoke(name, 'vc', 'create', '--native', '-a', 'issuer', '-r', 'bound',
+                      '--credential', '@' + str(credential))[0]
+    assert repeated['update'] == issued['update']
+    assert invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'bound',
+                  '--said', acdc.said, '--bound-event', current)[0]['update'] == revoked['update']
+    assert invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'bound')[0]['sn'] == 2

@@ -1,26 +1,19 @@
-# -*- encoding: utf-8 -*-
-"""
-keri.app.cli.commands module
-
-"""
+"""Agree to an accepted v1 or native v2 IPEX offer."""
 import argparse
+from ...common import Parsery, native_exchange, legacy_negotiation
+from ....kering import ConfigurationError
 
-from hio.base import doing
-from ....core import Salter
-
-
-parser = argparse.ArgumentParser(description='Reply to IPEX offer message acknowledged willingness to accept offered '
-                                             'credential')
+parser = argparse.ArgumentParser(description='Agree to an accepted v1 or native v2 IPEX offer', parents=[Parsery.keystore()])
 parser.set_defaults(handler=lambda args: handler(args))
+parser.add_argument('--alias', '-a', required=True)
+parser.add_argument('--message', '-m', default='')
+parser.add_argument('--time', default=None)
+native_exchange.options(parser, send=True)
+parser.add_argument('--said', '-s', required=True, help='accepted offer SAID')
 
 
-def handler(_):
-    return [doing.doify(nonce)]
-
-
-def nonce(tymth, tock=0.0, **kwa):
-    """ nonce
-    """
-    _ = (yield tock)
-
-    print(Salter().qb64)
+def handler(args):
+    """Select v1 negotiation by default or the explicit native v2 command path."""
+    if not args.native:
+        return [legacy_negotiation.Negotiation(args, 'agree')]
+    return [native_exchange.ExchangeDoer(args, 'agree')]

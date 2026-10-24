@@ -4,6 +4,7 @@ keri.app.cli.commands module
 
 """
 import argparse
+from ...common import native_exchange
 import os
 
 from hio.base import doing
@@ -34,7 +35,18 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
                                             "send to recipient", required=False, default="")
 
 
+native_exchange.options(parser, send=True)
+parser.add_argument('--time', default=None)
+
 def handler(args):
+    """Select native or legacy rejection of a retained IPEX prior.
+
+    args identifies the existing sender, prior SAID, and rejection message. Return
+    the corresponding scheduled worker; --v2 is explicit and ordinary legacy
+    behavior remains the default. Authentication and prior-proof errors surface
+    from that worker; selecting rejection does not admit a credential."""
+    if args.native:
+        return [native_exchange.ExchangeDoer(args, 'spurn')]
     ed = SpurnDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,

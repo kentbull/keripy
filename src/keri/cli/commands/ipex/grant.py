@@ -4,15 +4,21 @@ keri.app.cli.commands module
 
 """
 import argparse
+import json
+import math
+from pathlib import Path
+from ...common import native_exchange, cesr_sending
 
 from hio.base import doing
 
 from ...common import Parsery, setupHby
 
-from ....kering import Vrsn_1_0
+from ....kering import Vrsn_1_0, ConfigurationError
 from ....app import (Notifier, StreamPoster, Organizer,
                      GroupHab, Multiplexor, MailboxDirector,
                      serialize, multisigExn)
+from ....app.notifying import Noter
+from ....app.keeping import Keeper
 from ....app.grouping import loadHandlers as loadGroupingHandlers
 
 from ....core import coring, parsing, serdering
@@ -39,7 +45,34 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
 parser.add_argument("--time", help="timestamp for the revocation", required=False, default=None)
 
 
+native_exchange.options(parser, send=True)
+parser.add_argument('--from-grant', help='present this admitted grant disclosure')
+parser.add_argument('--disclose', action='append', default=[], help='attribute disclosure path rooted at a')
+parser.add_argument('--prior', help='accepted apply or agree SAID')
+parser.add_argument('--refresh', action='store_true', help='use known current registry evidence for an admitted disclosure')
+parser.add_argument('--derive', action='store_true', help='explicitly use provisioned registry custody for missing openings')
+parser.add_argument('--opening', action='append', default=[], help='file containing one event-specific CESR Blinder, without a salt')
+parser.add_argument('--bound-event', help='explicit accepted issuee KEL event SAID for bound-state derivation')
+
 def handler(args):
+    """Select the explicit native presentation owner or existing legacy Grant runtime.
+
+    Args:
+        args (Namespace): Parsed identity, credential/recipient, version selection,
+        optional native capability controls, and legacy prior/output/delivery options.
+
+    Returns:
+        list[Doer]: One native ExchangeDoer when --v2 is selected, otherwise GrantDoer.
+
+    Raises:
+        ConfigurationError: Native-only controls are supplied to v1, timeout is not
+        finite/positive, or opening the selected existing legacy identity fails."""
+    if args.native:
+        return [native_exchange.ExchangeDoer(args, 'grant')]
+    if any(getattr(args, key, None) for key in ('from_grant', 'disclose', 'refresh', 'derive', 'opening', 'bound_event', 'observer', 'registry', 'proposal', 'proposal_output')):
+        raise ConfigurationError('native presentation options require --v2')
+    if not math.isfinite(args.timeout) or args.timeout <= 0:
+        raise ConfigurationError('--timeout must be positive and finite')
     ed = GrantDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,
