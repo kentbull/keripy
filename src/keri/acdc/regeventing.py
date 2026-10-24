@@ -591,13 +591,132 @@ def vetBlind(blinder, *, blid):
                                f"disclosure proves nothing.")
 
 
+def vetBound(blinder, *, acdc, db):
+    """Validate a bound opening's exact historical Issuee KEL coordinates.
+
+    Call vetBlind first to authenticate this opening against its TEL BLID.
+    ACDC f0bd097d sections 2429-2478 define bn/bd as an Issuee key event,
+    not necessarily an establishment event or the receiver's latest event.
+    This verifies that reference; it does not infer wall-clock publication time.
+
+    Returns the accepted, fully witnessed Issuee key event for a non-vacuous
+    BoundState, or None for a BlindState or a strict all-empty placeholder.
+    Missing event/witness evidence is retryable; a conflicting accepted digest,
+    missing issuee, or substituted credential is a permanent binding failure.
+
+    Args:
+        blinder (Blinder | str | bytes): Opening already authenticated by vetBlind.
+        acdc (SerderACDC): Credential fixing the expected target and Issuee.
+        db (Baser): Accepted Issuee KEL and verified witness receipt evidence.
+
+    Returns:
+        SerderKERI | None: Referenced bound key event, or None for an unbound/vacuous
+        opening with no historical authority assertion.
+
+    Raises:
+        MissingAnchorError: Referenced accepted event or witness quorum is absent.
+        MisanchorError: A different event occupies the accepted bound ordinal.
+        MisbindingError: Target, Issuee, or placeholder bound coordinates conflict.
+        UnverifiedBlindError: The opening cannot be decoded exactly."""
+    blinder = _blindCandidates(blinder)[0]
+    if blinder.clan != BoundState:
+        return None
+    if not blinder.acdc and not blinder.state:
+        if blinder.bsn != 0 or blinder.bd:
+            raise MisbindingError("bound placeholder requires bn=0 and empty bd")
+        return None
+    if not blinder.bd:
+        raise MisbindingError("non-vacuous bound state requires an Issuee key event")
+    if acdc is None:
+        raise MisbindingError("bound state requires its disclosed target ACDC")
+    credential = _coerce(acdc)
+    if blinder.acdc != credential.said:
+        raise MisbindingError("bound state does not name the presented ACDC")
+    issuee = credential.iseaid
+    if not issuee:
+        raise MisbindingError("bound state requires the disclosed ACDC Issuee")
+    dig = db.kels.getLast(keys=issuee, on=blinder.bsn)
+    if dig is None:
+        raise MissingAnchorError(f"missing Issuee key event {issuee}:{blinder.bsn}")
+    if dig != blinder.bd:
+        raise MisanchorError("bound Issuee key event digest conflicts with accepted KEL")
+    event = db.evts.get(keys=(issuee, dig))
+    if event is None or not db.fullyWitnessed(event):
+        raise MissingAnchorError("bound Issuee key event is not fully witnessed")
+    return event
 
 
 BoundStateResult = namedtuple('BoundStateResult', 'valid assurance')
 
 
+def boundStateAt(transitions, *, issuee, issuer, sn):
+    """Interpret a complete, authenticated bound history at an issuance event.
+
+    ``transitions`` contains (state, bound ordinal) pairs in verified TEL order.
+    The caller must authenticate every transition and its exact Issuee event;
+    a partial history must not be passed as a complete history.
+
+    Published ACDC f0bd097d :2457/:2476 requires the bound event to be current
+    at publication. Under that issuer assertion, an update follows its bound
+    event and precedes the next Issuee event: issuance authority therefore has
+    ``issued.bn < sn <= revoked.bn``. Equal issuance is too early; equal
+    revocation is still before revocation. This is an interpretation of the
+    normative current-event premise, NOT independent proof of publication time.
+    The assurance is explicit because valid signatures cannot prove that an
+    issuer did not choose an old bound. Different KEL ordinals are incomparable.
+
+    Args:
+        transitions (Iterable[tuple[str, int]]): Complete authenticated state/bound
+        ordinal history in verified TEL order, excluding vacuous placeholders.
+        issuee (str): KEL whose ordinals supply the authority bounds.
+        issuer (str): KEL controller of the near credential's issuance event.
+        sn (int): Near issuance event's authenticated KEL ordinal.
+
+    Returns:
+        BoundStateResult: Explicit truth/unknown result and interpretation assurance.
+        Malformed/incomparable histories are unknown rather than a negatable False."""
+    if not issuee or issuer != issuee:
+        return BoundStateResult(None, 'incomparable-kels')
+    if type(sn) is not int or sn < 0:
+        return BoundStateResult(None, 'incomplete-bound-history')
+    prior = -1
+    state = None
+    for current, bound in transitions:
+        if type(bound) is not int or bound < 0 or bound < prior or current not in ('issued', 'revoked'):
+            return BoundStateResult(None, 'incomplete-bound-history')
+        prior = bound
+        if bound < sn:
+            state = current
+    return BoundStateResult(state == 'issued', 'issuer-current-event')
 
 
+def issuerRegistry(acdc):
+    """Read the disclosed issuer registry, including protected nested rd.
+
+    A top-level registry makes inner registries application/presentation
+    declarations. Without it, disclosed a/A blocks may carry the issuer rd.
+    No cached disclosure is consulted and no hidden block is expanded.
+
+    Args:
+        acdc (SerderACDC): Exact presented credential view.
+
+    Returns:
+        str | None: Top-level rd, otherwise the unique visible inner rd, or None.
+
+    Raises:
+        MisregistryError: Visible protected sections name multiple issuer registries."""
+    serder = _coerce(acdc)
+    if regid := serder.sad.get('rd'):
+        return regid
+    sections = [serder.sad.get('a')]
+    aggregate = serder.sad.get('A')
+    if isinstance(aggregate, list):
+        sections.extend(aggregate[1:])
+    registries = {section['rd'] for section in sections
+                  if isinstance(section, dict) and section.get('rd')}
+    if len(registries) > 1:
+        raise MisregistryError('multiple disclosed issuer registries without top-level rd')
+    return next(iter(registries), None)
 
 
 def vetBindings(acdc, *, regid, issuer, td):
@@ -635,7 +754,7 @@ def vetBindings(acdc, *, regid, issuer, td):
         raise MisbindingError(f"Presented ACDC issuer {serder.sad.get('i')} "
                               f"does not match presented registry issuer "
                               f"{issuer}.")
-    rd = serder.sad.get('rd')
+    rd = issuerRegistry(serder)
     if rd:
         if rd != regid:
             raise MisbindingError(f"Presented ACDC's registry said rd={rd} "
@@ -657,7 +776,10 @@ def vet(rip, updates=None, *, db, acdc=None, blinder=None, sources=None):
     missing establishes nothing and the whole determination is retryable
     (MissingAnchorError), since concluding from an anchored prefix could
     silently bless an issuer's half-commitment or hide duplicity still in
-    flight.
+    flight. A bundle containing two independently anchored candidates for one
+    ordinal is refused. Durable ingestion instead preserves its first locally
+    authenticated accepted event and separately records a bounded conflict
+    proof; neither policy claims a globally arrival-independent winner.
 
     Returns:
         record (RegStateRecord): the verified registry state
@@ -736,8 +858,12 @@ def vet(rip, updates=None, *, db, acdc=None, blinder=None, sources=None):
 
     head = chain[-1]
     acdcsaid = state = None
-    if head.ilk == Ilks.bup and blinder is not None:
+    if head.ilk == Ilks.upd:
+        acdcsaid = head.sad['td'] or None
+        state = head.sad['ts'] or None
+    elif head.ilk == Ilks.bup and blinder is not None:
         disclosed, toldState = vetBlind(blinder=blinder, blid=head.sad['b'])
+        vetBound(blinder, acdc=acdc, db=db)
         acdcsaid = disclosed or None
         state = toldState or None
 
@@ -759,16 +885,15 @@ def vet(rip, updates=None, *, db, acdc=None, blinder=None, sources=None):
 
 
 def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
-             acdc=None, sources=None, cutoff=None, requireSource=False):
+             acdc=None, sources=None, cutoff=None, at=None, requireSource=False):
     """Verify a TEL and a disclosed non-vacuous target binding.
 
     Every blinded update from the verified head back through the latest
     non-vacuous update must have exactly one matching disclosure, and that
-    non-vacuous update must bind ``target``.  When ``cutoff`` is provided, the
-    verified head is the latest event whose timestamp is at or before that
-    receiver-observed time.  Presentation registries use the grant's KRAM
-    acceptance time as this historical cutoff; issuer registries use the
-    current head by omitting it.
+    non-vacuous update must bind ``target``. ``at`` selects an exact TEL event
+    as the historical head; every event through it still needs a verified KEL
+    anchor. Omitting it checks the supplied current head. Controller timestamps
+    and request receipt timestamps do not establish KEL ordering.
 
     Parameters:
         rip (SerderACDC | bytes): Registry inception event.
@@ -779,8 +904,9 @@ def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
         controller (str | None): Required registry-controlling AID.
         acdc (SerderACDC | bytes | None): ACDC for issuer-registry bindings.
         sources (Mapping | None): Optional TEL-event anchor locations.
-        cutoff (str | None): Optional receiver-observed ISO datetime limiting
-            the verified TEL prefix.
+        cutoff: Obsolete timestamp cutoff; rejected because it proves no
+            historical ordering. Select an exact authenticated event instead.
+        at (str | None): SAID of the historical TEL head to verify.
         requireSource (bool): True requires an explicit source claim for the
             selected non-vacuous binding event.
 
@@ -797,27 +923,15 @@ def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
 
     sources = sources if sources is not None else {}
 
-    # Restrict presentation verification to receiver-known history.
     if cutoff is not None:
-        try:
-            # Parse the receiver's KRAM acceptance timestamp.
-            cutoffTime = help.fromIso8601(cutoff)
-
-            # Reject a registry created after the historical cutoff.
-            if help.fromIso8601(rip.sad['dt']) > cutoffTime:
-                raise MisbindingError(
-                    f"Registry {rip.said} did not exist by cutoff {cutoff}.")
-
-            # Ignore updates that occurred after Grant acceptance.
-            updates = [
-                update for update in updates
-                if help.fromIso8601(update.sad["dt"]) <= cutoffTime
-            ]
-
-        # Convert malformed timestamp input into a registry validation error.
-        except (TypeError, ValueError) as ex:
-            raise ValidationError(
-                f"Invalid registry historical cutoff {cutoff}.") from ex
+        raise ValidationError('datetime cutoff cannot establish anchored history; select at=TEL SAID')
+    if at is not None:
+        chain = [rip, *updates]
+        positions = [index for index, event in enumerate(chain) if event.said == at]
+        if len(positions) != 1:
+            raise MissingAnchorError(f'historical TEL head {at} is unavailable or ambiguous')
+        ordinal = Number(numh=chain[positions[0]].sad['n']).num
+        updates = [event for event in updates if Number(numh=event.sad['n']).num <= ordinal]
 
     # Verify the selected contiguous TEL prefix and all KEL anchors.
     record = vet(rip=rip, updates=updates, db=db, sources=sources)
@@ -839,18 +953,17 @@ def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
     # Inspect each update until the latest non-vacuous state is found.
     for update in newestFirst:
 
-        # Match this blinded update to exactly one disclosed state block.
-        matches = [blinder for blinder in blinders
-                   if blinder.said == update.sad['b']]
-
-        # Missing or duplicate disclosures cannot prove this update.
-        if len(matches) != 1:
-            raise UnverifiedBlindError(
-                f"Registry update {update.said} requires exactly one disclosure "
-                f"for blid={update.sad['b']}.")
-
-        # Verify and disclose this update's target and state.
-        td, state = vetBlind(blinder=matches[0], blid=update.sad['b'])
+        if update.ilk == Ilks.upd:
+            td, state = update.sad['td'], update.sad['ts']
+        else:
+            matches = [blinder for blinder in blinders
+                       if blinder.said == update.sad['b']]
+            if len(matches) != 1:
+                raise UnverifiedBlindError(
+                    f"Registry update {update.said} requires exactly one disclosure "
+                    f"for blid={update.sad['b']}.")
+            td, state = vetBlind(blinder=matches[0], blid=update.sad['b'])
+            vetBound(matches[0], acdc=acdc, db=db)
 
         # Skip vacuous updates while retaining their chain validation.
         if not td and not state:
