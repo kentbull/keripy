@@ -8,17 +8,24 @@ Upstream start and actual merge-base with locally available upstream/main: `c7e7
 
 The union includes the last-present form of every intervening branch symbol as well as earlier/current contributions, removed/moved symbols, and current committed/working units, and untracked task artifacts. Each stable `LIN-…` ID identifies a repository-relative path and qualified symbol. Methods/constructors/dunders/nested helpers are individually listed; class entries do not conceal changed methods. Module behavior/imports, constants/fields, shell functions, and resource/configuration changes are covered. The finite intervening commit range is change evidence, not exhaustive inventor history.
 
-The snapshot enumerates **1139 units in 155 files**, including **584 production units**. Full fields, source/compare links, commit roles, current contract, working-file SHA-256, bounded inherited-function patches, and rename/copy-aware blame evidence are in [lineage-symbols.json](lineage-symbols.json).
+This product subset retains **881 units in 112 files** from the
+original 1139-unit, 155-file snapshot. The original includes moved/deleted
+application and experiment units; it remains immutable at the source link below. Full fields, source/compare links, commit roles, current contract, working-file SHA-256, bounded inherited-function patches, and rename/copy-aware blame evidence are in [lineage-symbols.json](lineage-symbols.json).
 
 Git authorship and blame are documentary evidence of recorded contributions, not proof of invention, exact external copying, approval, or liability. Immutable inherited ancestor links remain separate from local deltas. Original code/idea origin is unresolved where the cited source/profile/donor investigation does not establish it; that uncertainty is never replaced with an invented personal attribution.
 
-## Review status and remaining work
+## Historical review boundary
 
-Existing live production deltas across 67 files and test/helper deltas across 39 files have substantive source/documentation or explicit inspected owner-review evidence. Purpose, inputs, results/yields, relevant refusal/dependency errors, exact-view boundaries and lifecycle ownership were checked. Docstring presence alone did not establish completion. Documentation-only batches proved executable-AST equality against committed or saved WIP/copy-image baselines; compile and whitespace checks passed.
+The review states and hashes describe the original snapshot, not current bytes.
+The ownership filter keeps units whose paths remain in KERIpy, including deleted
+predecessor definitions in still-present files. It preserves their stable IDs,
+origin evidence and local design distinctions. It performs no new protocol audit.
+Later retained-source changes are covered by [community-lineage.md](community-lineage.md).
 
-**Bounded completion and qualification:** S5 runtime repair `7e648d3ac1f9990eaf3685f10845593c306e20fa` and its 336-case focused result are inspected. Six-story helper/module documentation is owner-reviewed; final-clean scenario execution/hashes remain separate. Committed v1 source/serve/direct-admission/author/witness/serializer/lifecycle deltas and their tests have now been inspected through c380866b. The bounded Dolly successor is b9aa9d4, including the reviewed v1 Bash artifacts. Only future dependency-pin metadata and clean-pair/result documentation remain outside this source review; no later source delta is pre-approved.
-
-Final qualification/hashes are recorded in [qualification.md](qualification.md) and [refactor-status.md](refactor-status.md). Tests enumerated here are definitions, not automatic evidence of a passing execution.
+[Complete original ledger](https://github.com/kentbull/keripy/blob/81964a69e0dd9897c37654e80bb2d9cc7b6e2934/docs/v2-e2e/lineage-symbols.json)
+retains all moved/deleted history. The independent experiment repository also
+holds an exact provenance copy and the extracted scenario attribution. Unit
+presence and historical test counts do not establish a new passing execution.
 
 ## Source/design evidence groups
 
@@ -78,35 +85,17 @@ Select existing concrete protocol owners from explicit CLI intent, retain ordina
 
 Decision detail: [provenance.md](provenance.md).
 
-Bounded idea/adaptation sources: [profile.md](profile.md), [legacy-peers.md](legacy-peers.md).
+Bounded idea/adaptation sources: [profile.md](profile.md), [legacy-peers.md](https://github.com/kentbull/keripy/blob/81964a69e0dd9897c37654e80bb2d9cc7b6e2934/docs/v2-e2e/legacy-peers.md).
 
 Working CLI changes remain WIP until their parent-owned validation and provenance pass are reconciled.
 
-### DOLLY: Dolly application extraction
+### INFRA: Core-only installed-package tooling
 
-Separate authenticated protocol verification from reportable selection, current standing, retained-view projection, and actual hook delivery. Move application ownership to kentbull/dolly.
-
-Decision detail: [provenance.md#r1r3-br4r5-b-dolly-intake-and-evidence-composition](provenance.md#r1r3-br4r5-b-dolly-intake-and-evidence-composition).
-
-Bounded idea/adaptation sources: [donor-notices.md](donor-notices.md), [https://github.com/kentbull/sally/tree/ed789de4aa5f536d5838b4ff0d4d48a4e9dbf525](https://github.com/kentbull/sally/tree/ed789de4aa5f536d5838b4ff0d4d48a4e9dbf525).
-
-Source owner supplied a literal-copy/import-rewrite move map. New standalone transport/schema/CLI symbols belong to the Dolly repository ledger and are not silently attributed to the former KERIpy module.
-
-### INFRA: Copied Linux qualification and installed peer scenarios
-
-Install and test an actual artifact in Linux-owned image/state storage, with pinned real legacy peers and explicit operational transcripts.
-
-Decision detail: [provenance.md#infra-01-copied-linux-test-source](provenance.md#infra-01-copied-linux-test-source).
-
-Bounded idea/adaptation sources: [qualification.md](qualification.md), [legacy-peers.md](legacy-peers.md).
-
-Infrastructure reproducibility and passing scenarios do not establish universal conformance or production readiness.
-
-## Dolly moves and donor chain
-
-The locally verified standalone snapshot is [`b9aa9d4bed1c8f69a803f4f440a3b9ceaf0c9ce0`](https://github.com/kentbull/dolly/tree/b9aa9d4bed1c8f69a803f4f440a3b9ceaf0c9ce0); its [per-symbol ledger](https://github.com/kentbull/dolly/blob/b9aa9d4bed1c8f69a803f4f440a3b9ceaf0c9ce0/docs/provenance.md) enumerates 149 Python class/function entries and module/build/resource lineage. Last-present history preserves post-e45 additions even after their deletion commits, including R8 inspection methods.
-
-Application modules/CLI and original Dolly tests were copied/import-adapted from KERIpy `e999aa9c4a457b7c52e05e3bb3dd03f6e3c8f83c`; released-peer assets and native process lifecycle test came from `6aadd69beaf6fc7803f12e273b4ca101e6364e49`. Each removed KERIpy unit has its exact successor path/commit in JSON. Existing qualified names remain; start.handler maps to cli.handler. Apache-2.0 LICENSE and Sally NOTICE accompany the move. New standalone StreamParser/TcpIntake/Context.dispatch/schema/console/inspection helpers remain locally generated adaptations with their own entries, not falsely assigned to the moved predecessors. The v1 Bash operator artifacts in b9aa9d4 have their own module/resource provenance and an exact KERIpy helper-origin reference. The latest passing development run used truthful dirty source manifests; clean pair qualification and later dependency metadata remain separate.
+The retained Dockerfile, check runner and requirements lock exercise KERIpy alone.
+Their local copied-source/named-volume rationale and source ancestry remain in
+[provenance.md](provenance.md#core-only-installed-package-test-tooling).
+Cross-repository orchestration and its complete historical ledger are owned by
+the independent experiment repository.
 
 ## Production units
 
@@ -293,61 +282,6 @@ Application modules/CLI and original Dolly tests were copied/import-adapted from
 | `LIN-c563f7c7ec57` | `src/keri/app/credentialing.py::_Custody` (class) | moved; CUSTODY | successor ledger |
 | `LIN-48991da39d8a` | `src/keri/app/credentialing.py::_Custody.info` (field) | moved; CUSTODY | successor ledger |
 | `LIN-55549c346c8c` | `src/keri/app/credentialing.py::_Custody.salt` (field) | moved; CUSTODY | successor ledger |
-| `LIN-3394e89f8914` | `src/keri/app/dolly/__init__.py::<module documentation>` (module_documentation) | moved; DOLLY | successor ledger |
-| `LIN-6ad955b3feee` | `src/keri/app/dolly/projecting.py::<module documentation>` (module_documentation) | moved; DOLLY | successor ledger |
-| `LIN-9865921beb9a` | `src/keri/app/dolly/projecting.py::<module imports>` (module_imports) | moved; DOLLY | successor ledger |
-| `LIN-96a811509c41` | `src/keri/app/dolly/projecting.py::project` (function) | moved; DOLLY | successor ledger |
-| `LIN-d93fe79d0247` | `src/keri/app/dolly/serving.py::<module documentation>` (module_documentation) | moved; DOLLY | successor ledger |
-| `LIN-73c20a2fa166` | `src/keri/app/dolly/serving.py::<module imports>` (module_imports) | moved; DOLLY | successor ledger |
-| `LIN-ceb6c31bfa1a` | `src/keri/app/dolly/serving.py::Context` (class) | moved; DOLLY | successor ledger |
-| `LIN-f32cc8eb1961` | `src/keri/app/dolly/serving.py::Context.__init__` (function) | moved; DOLLY | successor ledger |
-| `LIN-d39b9baf3b90` | `src/keri/app/dolly/serving.py::Context._historicalSources` (function) | moved; DOLLY | successor ledger |
-| `LIN-7135693db475` | `src/keri/app/dolly/serving.py::Context._legacyCredential` (function) | moved; DOLLY | successor ledger |
-| `LIN-9aae34d7c227` | `src/keri/app/dolly/serving.py::Context._legacyReports` (function) | moved; DOLLY | successor ledger |
-| `LIN-3c60d8316f96` | `src/keri/app/dolly/serving.py::Context._nativeCredential` (function) | moved; DOLLY | successor ledger |
-| `LIN-2367088dbbe4` | `src/keri/app/dolly/serving.py::Context._nativeCurrentStanding` (function) | moved; DOLLY | successor ledger |
-| `LIN-e48bcc349d7a` | `src/keri/app/dolly/serving.py::Context._nativeDisclosure` (function) | moved; DOLLY | successor ledger |
-| `LIN-d581a896f0f8` | `src/keri/app/dolly/serving.py::Context._parser` (function) | moved; DOLLY | successor ledger |
-| `LIN-63e40f222b3c` | `src/keri/app/dolly/serving.py::Context._queryLegacy` (function) | moved; DOLLY | successor ledger |
-| `LIN-33c6b48e049e` | `src/keri/app/dolly/serving.py::Context.close` (function) | moved; DOLLY | successor ledger |
-| `LIN-dd1d4c5edfb3` | `src/keri/app/dolly/serving.py::Context.fresh` (function) | moved; DOLLY | successor ledger |
-| `LIN-8d77cff7a642` | `src/keri/app/dolly/serving.py::Context.ingest` (function) | moved; DOLLY | successor ledger |
-| `LIN-524ec866064c` | `src/keri/app/dolly/serving.py::Context.inspectHistorical` (function) | moved; DOLLY | successor ledger |
-| `LIN-84ca5a319043` | `src/keri/app/dolly/serving.py::Context.observe` (function) | moved; DOLLY | successor ledger |
-| `LIN-f84391309f20` | `src/keri/app/dolly/serving.py::Context.process` (function) | moved; DOLLY | successor ledger |
-| `LIN-3e897e3ee8e6` | `src/keri/app/dolly/serving.py::Context.request` (function) | moved; DOLLY | successor ledger |
-| `LIN-51470fd5d7e2` | `src/keri/app/dolly/serving.py::Context.workDo` (function) | moved; DOLLY | successor ledger |
-| `LIN-ac849dbbe3d1` | `src/keri/app/dolly/serving.py::DollyBaser` (class) | moved; DOLLY | successor ledger |
-| `LIN-262b55980611` | `src/keri/app/dolly/serving.py::DollyBaser.AltTailDirPath` (field) | moved; DOLLY | successor ledger |
-| `LIN-62a62daec4b8` | `src/keri/app/dolly/serving.py::DollyBaser.TailDirPath` (field) | moved; DOLLY | successor ledger |
-| `LIN-03d41d0822fa` | `src/keri/app/dolly/serving.py::DollyBaser.reopen` (function) | moved; DOLLY | successor ledger |
-| `LIN-c12d554a1f83` | `src/keri/app/dolly/serving.py::HealthEnd` (class) | moved; DOLLY | successor ledger |
-| `LIN-3bbdfbc38259` | `src/keri/app/dolly/serving.py::HealthEnd.on_get` (function) | moved; DOLLY | successor ledger |
-| `LIN-b53d0595890d` | `src/keri/app/dolly/serving.py::IntakeEnd` (class) | moved; DOLLY | successor ledger |
-| `LIN-0351bbf4d596` | `src/keri/app/dolly/serving.py::IntakeEnd.__init__` (function) | moved; DOLLY | successor ledger |
-| `LIN-a0be506f2694` | `src/keri/app/dolly/serving.py::IntakeEnd.decode` (function) | moved; DOLLY | successor ledger |
-| `LIN-7b71912424fa` | `src/keri/app/dolly/serving.py::IntakeEnd.on_post` (function) | moved; DOLLY | successor ledger |
-| `LIN-6b4838797989` | `src/keri/app/dolly/serving.py::IntakeEnd.on_put` (field) | moved; DOLLY | successor ledger |
-| `LIN-15a57be1c1db` | `src/keri/app/dolly/serving.py::LegacyQuery` (class) | moved; DOLLY | successor ledger |
-| `LIN-fb19aae0680d` | `src/keri/app/dolly/serving.py::LegacyQuery.credential` (field) | moved; DOLLY | successor ledger |
-| `LIN-c4128242a71c` | `src/keri/app/dolly/serving.py::LegacyQuery.issuer` (field) | moved; DOLLY | successor ledger |
-| `LIN-442dd441248a` | `src/keri/app/dolly/serving.py::LegacyQuery.registry` (field) | moved; DOLLY | successor ledger |
-| `LIN-06569feba238` | `src/keri/app/dolly/serving.py::LegacyQuery.reply` (field) | moved; DOLLY | successor ledger |
-| `LIN-f61eb6e4f9e0` | `src/keri/app/dolly/serving.py::LegacyQuery.started` (field) | moved; DOLLY | successor ledger |
-| `LIN-fc9a94f9f983` | `src/keri/app/dolly/serving.py::Notices` (class) | moved; DOLLY | successor ledger |
-| `LIN-75b9b8962fbd` | `src/keri/app/dolly/serving.py::Notices.add` (function) | moved; DOLLY | successor ledger |
-| `LIN-1d50b4c7aaa1` | `src/keri/app/dolly/serving.py::Observation` (class) | moved; DOLLY | successor ledger |
-| `LIN-6ddebea36e4d` | `src/keri/app/dolly/serving.py::Observation.head` (field) | moved; DOLLY | successor ledger |
-| `LIN-1be88fadc79c` | `src/keri/app/dolly/serving.py::Observation.observed` (field) | moved; DOLLY | successor ledger |
-| `LIN-7448e83469fa` | `src/keri/app/dolly/serving.py::Observation.observer` (field) | moved; DOLLY | successor ledger |
-| `LIN-ca5c1caa1fb3` | `src/keri/app/dolly/serving.py::Submission` (class) | moved; DOLLY | successor ledger |
-| `LIN-b4d6dbba1316` | `src/keri/app/dolly/serving.py::Submission.delivered` (field) | moved; DOLLY | successor ledger |
-| `LIN-e942912f6b73` | `src/keri/app/dolly/serving.py::Submission.grant` (field) | moved; DOLLY | successor ledger |
-| `LIN-a6319c00ab52` | `src/keri/app/dolly/serving.py::Submission.payload` (field) | moved; DOLLY | successor ledger |
-| `LIN-32f805b51928` | `src/keri/app/dolly/serving.py::Submission.reason` (field) | moved; DOLLY | successor ledger |
-| `LIN-0bea84734197` | `src/keri/app/dolly/serving.py::Submission.registries` (field) | moved; DOLLY | successor ledger |
-| `LIN-8a38aef9e449` | `src/keri/app/dolly/serving.py::Submission.state` (field) | moved; DOLLY | successor ledger |
-| `LIN-a3715e9b2477` | `src/keri/app/dolly/serving.py::setup` (function) | moved; DOLLY | successor ledger |
 | `LIN-3306892105eb` | `src/keri/app/forwarding.py::introduce` (function) | mixed inherited/local; TRANSPORT | reviewed |
 | `LIN-e603b2a8401a` | `src/keri/app/grouping.py::Multiplexor` (class) | mixed inherited/local; GROUP | reviewed |
 | `LIN-f822fbe1c40c` | `src/keri/app/grouping.py::Multiplexor.__init__` (function) | mixed inherited/local; GROUP | reviewed |
@@ -457,12 +391,6 @@ Application modules/CLI and original Dolly tests were copied/import-adapted from
 | `LIN-95ea903a9c31` | `src/keri/app/registry_custody.py::_Custody.info` (field) | branch addition; CUSTODY | reviewed |
 | `LIN-cfb859aabf5f` | `src/keri/app/registry_custody.py::_Custody.salt` (field) | branch addition; CUSTODY | reviewed |
 | `LIN-e0d007c9385b` | `src/keri/app/signing.py::serialize` (function) | mixed inherited/local; TRANSPORT | reviewed |
-| `LIN-8f102f0e2e12` | `src/keri/cli/commands/dolly/__init__.py::<module documentation>` (module_documentation) | moved; DOLLY | successor ledger |
-| `LIN-2ed795e99c6f` | `src/keri/cli/commands/dolly/start.py::<module behavior>` (module_behavior) | moved; DOLLY | successor ledger |
-| `LIN-ee3e79b1d66a` | `src/keri/cli/commands/dolly/start.py::<module documentation>` (module_documentation) | moved; DOLLY | successor ledger |
-| `LIN-fb553c53bed6` | `src/keri/cli/commands/dolly/start.py::<module imports>` (module_imports) | moved; DOLLY | successor ledger |
-| `LIN-9fb0a2549aed` | `src/keri/cli/commands/dolly/start.py::handler` (function) | moved; DOLLY | successor ledger |
-| `LIN-5b8adc4b134c` | `src/keri/cli/commands/dolly/start.py::parser` (constant) | moved; DOLLY | successor ledger |
 | `LIN-1cb141140bf2` | `src/keri/cli/commands/ipex/admit.py::<module behavior>` (module_behavior) | mixed inherited/local; CLI | reviewed |
 | `LIN-4133b4094f70` | `src/keri/cli/commands/ipex/admit.py::<module imports>` (module_imports) | mixed inherited/local; CLI | reviewed |
 | `LIN-bacaa7ee076e` | `src/keri/cli/commands/ipex/admit.py::handler` (function) | mixed inherited/local; CLI | reviewed |
@@ -787,38 +715,10 @@ Every Python test/helper and shell function has its own JSON entry. This table g
 | `tests/core/test_native_registry_framing.py` | 9 | bounded source/resource review complete |
 | `tests/core/test_threshold_distinct_indices.py` | 4 | bounded source/resource review complete |
 
-## Completion rule
+## Interpretation
 
-No remaining missing production documentation is inferred from mere AST indicators. Active runtime/scenario units stay open until the owner supplies the final source and focused execution evidence. After the final mutations, regenerate against the exact KERIpy HEAD and working hashes, verify the Dolly successor commit, and preserve all prior origin evidence. Unknown historical invention is a bounded attribution uncertainty; an unexamined or omitted unit remains unfinished.
-
-This ledger is retrospective reconstruction linked to available evidence. Kent requested the capability/documentation work and approved the declared provisional profile; those decisions do not constitute independent code review. Local agent implementation/review roles are named only where execution/source-owner evidence supports them.
-
-
-## Coverage checks and remaining boundaries
-
-At this bounded snapshot the review freshness gate has 0 unreviewed production paths, 0 unreviewed test paths and 0 unreviewed resource paths. All 1139 stable IDs are unique. No selected live function lacks a docstring, and every removed unit has an explanation/successor. These checks support the inspected source/owner evidence; docstring presence alone is insufficient.
-
-Unknown historical code or idea origin remains explicitly bounded by immutable ancestor, donor/specification evidence and the recorded limits. It is attribution uncertainty after inspection, not a hidden unexamined-source queue. Later dependency-pin metadata and clean qualification/results remain outside this snapshot.
-
-
-## Generated-data format and human review
-
-The JSON ledger is generated review data covering every selected symbol and
-snippet. Its size is justified by exact inherited-source ranges, branch history,
-working hashes, contributor evidence, and bounded function diffs. Human review
-starts with this grouped index and the corresponding source/delta evidence;
-reading repeated metadata thousands of times is not an additional review gate.
-
-Schema 2 shares only equal repeated evidence through internal JSON Pointer
-objects such as `{"$ref":"#/shared_evidence/E-…"}`. Resolve each reference from
-the same document and recursively expand its value; no external fetch is needed.
-Qualified unit records and shared records each occupy one generated JSON line.
-Bounded delta excerpts stay local to their unit. This is an explicit generated
-data exception, not the layout used for handwritten source or documentation.
-
-The initial encoding retained all 1,096 units, reduced approximately 7.84 MB /
-137,000 lines to 4.38 MB / 4,600 lines, and asserted that recursive expansion
-reproduced the entire pre-encoding ledger exactly before adding encoding metadata.
-Final regeneration repeats that check. These figures describe a formatting
-comparison, not final source or runtime qualification. The ledger excludes its
-own generated artifacts from source hashes to avoid self-referential results.
+The machine ledger stores each unit on one line and shares repeated evidence via
+internal JSON Pointer references. All references resolve within the same file.
+Selection preserves each retained unit verbatim; the separate ownership metadata
+records the original ledger hash. Historical file hashes are not updated to imply
+that the extraction documents were reviewed at the earlier source snapshot.
