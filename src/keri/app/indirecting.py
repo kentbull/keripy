@@ -733,15 +733,23 @@ class Poller(doing.DoDoer):
     Polls remote SSE endpoint for event that are KERI messages to be processed"""
 
     def __init__(self, hab, witness, topics, msgs=None, retry=1000, version=None, gvrsn=None, kind=None, **kwa):
-        """
-        Returns doist compatible doing.Doer that polls a witness for mailbox messages
-        as SSE events
+        """Create a DoDoer that polls one witness mailbox for SSE messages.
 
-        Parameters:
-            hab:
-            witness:
-            topics:
-            msgs:"""
+        Args:
+            hab (Hab | GroupHab): Local identifier used to authenticate mailbox queries.
+            witness (str): Witness AID whose advertised mailbox endpoint to contact.
+            topics (Iterable[str]): Mailbox topics whose sequence cursors to request.
+            msgs: Legacy output-queue option; None creates a fresh message Deck.
+            retry (int): Initial reconnect delay in milliseconds, updated by SSE retry.
+            version (Versionage | None): Query protocol version and default genus choice.
+            gvrsn (Versionage | None): Explicit attachment genus override.
+            kind (str | None): Query body encoding; default JSON permits slash-containing
+            mailbox topic names independently of protocol/genus selection.
+            **kwa: Scheduling options passed to DoDoer.
+
+        Returns:
+            None. The caller schedules/removes this doer and owns the habitat lifecycle.
+            Construction performs no network request; eventDo handles endpoint discovery."""
         self.hab = hab
         self.pre = hab.pre
         self.witness = witness
@@ -749,7 +757,9 @@ class Poller(doing.DoDoer):
         self.retry = retry
         self.version = version
         self.gvrsn = version if gvrsn is None else gvrsn
-        self.kind = kind
+        # Mailbox topic names contain slashes, which are not CESR map labels.
+        # Keep protocol/genus selection independent from the JSON body kind.
+        self.kind = Kinds.json if kind is None else kind
         self.msgs = None if msgs is not None else decking.Deck()
         self.times = dict()
 
