@@ -122,7 +122,86 @@ class Wallet:
             This public evidence lookup loads no custody and does not derive an opening."""
         return boundEvent(self.hby, acdc, said)
 
+    def recordIssued(self, acdc, update, *, blinder=None):
+        """Record verified issuance, or return an identical historical record.
 
+        Args:
+            acdc (SerderACDC): Exact issued credential view retained as bytes.
+            update (str): Accepted issuance event SAID in its registry.
+            blinder (Blinder | None): Explicit opening required for fresh blinded
+                issuance. Derived and supplied openings use the same core verifier.
+
+        Returns:
+            IssuedCredential: Newly verified issuance or identical retained history.
+                A history retry without an opening makes no current-standing claim.
+
+        Raises:
+            ConfigurationError: Fresh blinded recording lacks an explicit opening.
+            ValidationError: Ownership, accepted event, proof, or retained bytes differ.
+            KeriError: Core registry/KEL/opening authentication fails.
+
+        This inventory boundary never derives an opening or loads private custody.
+        """
+        event = self.rgy.store.event(update)
+        regid = regeventing.issuerRegistry(acdc)
+        if regid is None and event is not None:
+            regid = event.sad.get('rd')  # explicitly supplied one-way issuance
+        rip = self.rgy.store.seqEvent(regid, 0) if regid else None
+        if rip is None or event is None or self.hby.habByPre(rip.sad['i']) is None:
+            raise ValidationError('local accepted issuance evidence is required')
+        sn = Number(numh=event.sad['n']).num
+        accepted = self.rgy.store.seqEvent(regid, sn)
+        if accepted is None or accepted.said != update:
+            raise ValidationError('issuance update is still pending')
+        old = self.db.issued.get((acdc.said,))
+        if blinder is not None and (event.ilk != 'bup' or not isinstance(blinder, Blinder)):
+            raise ValidationError('explicit issuance opening requires a native blinded update')
+        if old is not None and blinder is None:
+            # Exact retained history can be inspected after custody loss/rotation.
+            # This is not a fresh proof or current-standing assertion.
+            expected = IssuedCredential(acdc.said, regid, rip.sad['i'], update,
+                b64encode(acdc.raw).decode('ascii'), 'base64', old.bound)
+            if old != expected or event.ilk not in ('upd', 'bup'):
+                raise ValidationError('different issuance is already retained for this credential')
+            return old
+        if event.ilk == 'bup' and blinder is None:
+            raise ConfigurationError('fresh blinded issuance requires an explicit event opening')
+        proof = blinder if event.ilk == 'bup' else None
+        updates = [self.rgy.store.seqEvent(regid, ordinal) for ordinal in range(1, sn + 1)]
+        verified = regeventing.vet(rip, updates, db=self.hby.db, acdc=acdc, blinder=proof)
+        if verified.state != 'issued':
+            raise ValidationError('referenced update is not an issued state')
+        record = IssuedCredential(acdc.said, regid, rip.sad['i'], update,
+                                  b64encode(acdc.raw).decode('ascii'), 'base64',
+                                  dict(bn=proof.data.bn.num, bd=proof.data.bd.qb64)
+                                  if proof is not None and proof.clan == BoundState else {})
+        if old is not None and old != record:
+            raise ValidationError('different issuance is already retained for this credential')
+        self.db.issued.put((acdc.said,), record)
+        return record
+
+    def issuedCredential(self, credential):
+        """Reconstruct the exact originally issued credential bytes.
+
+            Args:
+                credential (str): Issued credential SAID indexing a durable inventory row.
+
+            Returns:
+                SerderACDC: Original view, including its binary serialization kind.
+
+            Raises:
+                ValidationError: Row/encoding is unsupported or bytes do not match its SAID.
+                ValueError: Corrupt stored base64 cannot be decoded.
+
+            Retrieval is historical and never infers present registry standing."""
+        record = self.db.issued.get((credential,))
+        if record is None or record.encoding != 'base64':
+            raise ValidationError('issued credential with a supported encoding is required')
+        raw = b64decode(record.raw, validate=True)
+        acdc = SerderACDC(raw=raw)
+        if acdc.raw != raw or acdc.said != credential:
+            raise ValidationError('issued credential bytes do not match their retained identifier')
+        return acdc
 
 
 
