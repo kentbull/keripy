@@ -164,6 +164,100 @@ def kel(args, operation):
     return [doing.doify(run)]
 
 
+class Request(doing.DoDoer):
+    """Own one bounded signed HTTP request and its public evidence processors."""
+
+    def __init__(self, args, operation):
+        """Schedule one signed public-evidence HTTP request under this runtime owner.
+
+        Args:
+            args (Namespace): Identity, endpoint, finite timeout, and publication/query data.
+            operation (str): publish or query, selected by the command adapter.
+
+        Returns:
+            None. Retains arguments and schedules run; no store/socket opens yet."""
+        self.args, self.operation = args, operation
+        super().__init__(doers=[doing.doify(self.run)])
+
+    def run(self, tymth, tock=0.03125, **kwa):
+        """Publish signed evidence or independently verify a fresh observer response.
+
+        Args:
+            tymth (Callable): HIO injected clock governing the finite request deadline.
+            tock (float): Cooperative request polling interval.
+            **kwa: Additional HIO lifecycle metadata, unused here.
+
+        Yields:
+            float: Initial scheduling delay and bounded waits for the HTTP response.
+
+        Returns:
+            None. Prints acceptance JSON after successful publication status, or after
+            queried KEL/TEL independently verifies to the advertised fresh registry head.
+
+        Raises:
+            ConfigurationError: Invalid timeout/endpoint/alias, non-200 status, pending or
+            rejected publication, stale response, or independently unverified query proof.
+            TimeoutError: No HTTP response arrives before the injected-clock deadline.
+            OSError, ValueError: File, ASCII evidence, or response JSON decoding fails.
+
+        Owns the scheduled HTTP client and evidence context; removes both children and
+        closes the socket before the surrounding native stores exit. Transmission/HTTP
+        202 alone never supplies an application acceptance claim."""
+        self.wind(tymth)
+        yield tock
+        args = self.args
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            raise ConfigurationError('--timeout must be positive and finite')
+        target = urlsplit(args.endpoint)
+        if target.scheme not in ('http', 'https') or not target.hostname:
+            raise ConfigurationError('public evidence requests require an HTTP(S) endpoint')
+        with native.opened(args) as (hby, rgy, wallet):
+            hab = hby.habByName(args.alias)
+            if hab is None:
+                raise ConfigurationError('unknown signing alias')
+            evidence = EvidenceContext(hby, reger=rgy.baser)
+            client = http.clienting.Client(scheme=target.scheme, hostname=target.hostname,
+                port=target.port or (443 if target.scheme == 'https' else 80))
+            owner = http.clienting.ClientDoer(client=client)
+            self.extend([owner, evidence])
+            try:
+                query = ({'stream': Path(args.file).read_bytes().decode('ascii')}
+                         if self.operation == 'publish' else {'i': args.registry})
+                route = 'tels/publish' if self.operation == 'publish' else 'tels'
+                client.request(method='POST', path=target.path or '/',
+                    body=signedQuery(hab, route, query), headers={'Content-Type': CESR_CONTENT_TYPE})
+                deadline = self.tyme + args.timeout
+                while not client.responses and self.tyme < deadline:
+                    yield tock
+                if not client.responses:
+                    raise TimeoutError('public evidence request timed out')
+                response = client.responses.popleft()
+                if response['status'] != 200:
+                    raise ConfigurationError(f"public evidence HTTP status {response['status']}")
+                if self.operation == 'publish':
+                    result = json.loads(response['body'])
+                    if result['pending'] or result['rejected']:
+                        raise ConfigurationError('publication remains pending or rejected')
+                    print(json.dumps(dict(accepted=True, result=result)))
+                else:
+                    headers = response['headers']
+                    if (headers.get('observer-evidence-state') != 'fresh'
+                            or headers.get('content-type', '').split(';')[0] != CESR_CONTENT_TYPE):
+                        raise ConfigurationError('observer evidence is not fresh')
+                    result = evidence.ingest(response['body'])
+                    head = rgy.store.headEvent(args.registry)
+                    if (result['pending'] or result['rejected'] or head is None
+                            or head.said != headers.get('observer-registry-head')
+                            or result['heads'].get(args.registry) != head.said):
+                        raise ConfigurationError('observer evidence failed independent verification')
+                    digest = write(args.output, bytes(response['body']))
+                    print(json.dumps(dict(accepted=True, fresh=True, registry=args.registry,
+                        head=head.said, sn=head.sn, output=args.output, sha256=digest)))
+            finally:
+                self.remove([owner, evidence])
+                client.close()
+
+
 def inspect(args):
     """Build an inspection operation reporting exact retained native EXN views.
 
