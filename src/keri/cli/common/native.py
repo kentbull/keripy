@@ -10,13 +10,13 @@ from hio.base import doing
 
 from .existing import setupHby
 from ...acdc import messaging, scheming
-from ...acdc.regeventing import issuerRegistry
+from ...acdc.regeventing import issuerRegistry, _blindCandidates, vet
 from ...acdc.registraring import Regery
 from ...app import GroupHab, HaberyDoer, Keeper, Notifier, Organizer, Receiptor
 from ...app.credentialing import Wallet
 from ...app.registry_custody import RegistryCustody
 from ...app.native_grouping import NativeGroup
-from ...core import Codens, Counter, Number, Prefixer, SealSource, SerderACDC, messagize
+from ...core import Codens, Counter, Number, Prefixer, SealEvent, SealSource, SerderACDC, messagize
 from ...kering import AuthError, ConfigurationError, Vrsn_2_0
 from ...peer import Exchanger
 
@@ -50,6 +50,61 @@ def load(value):
     if value is None:
         return None
     return json.loads(Path(value[1:]).read_text() if value.startswith('@') else value)
+
+
+def loadOpening(path):
+    """Read one event-specific CESR Blinder from path, without accessing custody.
+
+    Return the parsed candidate, not an authenticated opening. Callers must verify
+    it against their exact event and credential. Reuses the existing IPEX CLI
+    file contract; malformed or multiple openings raise ConfigurationError.
+    """
+    candidates = _blindCandidates(Path(path).read_bytes().strip())
+    if len(candidates) != 1:
+        raise ConfigurationError('opening file must contain exactly one CESR Blinder')
+    return candidates[0]
+
+
+def issuanceOrigin(wallet, acdc, record, *, opening=None):
+    """Compose exact historical issuance evidence after common core verification.
+
+    wallet supplies accepted TEL/KEL history and optional explicitly selected
+    custody; acdc and record identify the original issued credential/event.
+    opening is a possessed event-specific Blinder and takes precedence over
+    derivation. Return credential bytes with verified proof/source attachments.
+    Missing evidence raises ConfigurationError; core authentication failures
+    propagate before the caller creates any output file.
+
+    Unlike registryProof's current-head traversal, this export fixes its head at
+    record.update. Later revocation or issuee rotation cannot substitute a newer
+    event. This local CLI composition reuses regeventing.vet, not a new verifier.
+    """
+    rgy = wallet.rgy
+    event = rgy.store.event(record.update)
+    if event is None or event.ilk not in ('upd', 'bup'):
+        raise ConfigurationError('retained issuance event is unavailable')
+    sn = Number(numh=event.sad['n']).num
+    accepted = rgy.store.seqEvent(record.registry, sn)
+    if accepted is None or accepted.said != record.update:
+        raise ConfigurationError('retained issuance event is not accepted')
+    if event.ilk == 'bup' and opening is None:
+        if wallet.custody is None:
+            raise ConfigurationError('issuance opening unavailable; supply --opening or use --derive with provisioned custody')
+        bound = (dict(bound=True, bsn=record.bound['bn'], bd=record.bound['bd'])
+                 if record.bound else {})
+        opening = wallet.custody.derive(record.registry, sn, acdc.said, 'issued', **bound)
+    if event.ilk == 'upd' and opening is not None:
+        raise ConfigurationError('public issuance does not use an --opening')
+    updates = [rgy.store.seqEvent(record.registry, ordinal) for ordinal in range(1, sn + 1)]
+    verified = vet(rgy.store.seqEvent(record.registry, 0), updates,
+                   db=wallet.hby.db, acdc=acdc, blinder=opening)
+    if verified.state != 'issued':
+        raise ConfigurationError('retained event does not establish issuance')
+    bonds = [opening.data] if opening is not None else []
+    if issuerRegistry(acdc) is None:
+        bonds.append(SealEvent(i=record.registry, s=event.sad['n'], d=event.said))
+    return (messagize(acdc, bonds=bonds, gvrsn=Vrsn_2_0) if bonds else
+            acdc.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
 
 
 @contextmanager
@@ -410,7 +465,8 @@ def read(args, operation):
     args carries identity, filters, registry, file, and capability options;
     operation chooses registries/status/inventory/export/import. Return a list of
     hio-compatible generator functions. Ordinary listing never enables custody;
-    explicit custody import/export and full blinded-evidence export may do so.
+    explicit custody import/export or --derive may do so. --full selects public
+    evidence plus the historical issuance proof, never permission to load salts.
     The worker prints results or writes an exclusive destination, propagating
     invalid option, authentication, proof, and file errors with store cleanup."""
     def run(tymth, tock=0.0, **kwa):
@@ -425,7 +481,7 @@ def read(args, operation):
         # Plain inventory/status never composes derivation capability; only
         # the explicit handoff/export operations below may request it.
         with opened(args, custody=(operation == 'import' or operation == 'export'
-                    and (args.custody or args.full))) as (hby, rgy, wallet):
+                    and (args.custody or args.derive))) as (hby, rgy, wallet):
             if operation == 'registries':
                 for name, reg in rgy.names.items():
                     head = reg.store.headEvent(reg.regk)
@@ -482,6 +538,11 @@ def read(args, operation):
                     acdc = wallet.issuedCredential(record.credential)
                     if args.chains or (args.full and acdc.sad.get('e')):
                         raise ConfigurationError('native chained evidence must be exported from its accepted IPEX disclosure')
+                    # Authenticate the exact historical opening before constructing
+                    # output. A salt-derived Blinder is only a candidate until vet.
+                    origin = (issuanceOrigin(wallet, acdc, record,
+                              opening=loadOpening(args.opening) if args.opening else None)
+                              if args.full else None)
                     stream = bytearray()
                     if args.kels or args.full:
                         for msg in hby.db.clonePreIter(pre=record.controller, version=Vrsn_2_0):
@@ -496,13 +557,7 @@ def read(args, operation):
                             stream.extend(messagize(event,
                                 bonds=[SealSource(s=number.numh, d=diger.qb64)], gvrsn=Vrsn_2_0))
                     if args.full:
-                        event = reg.store.event(record.update)
-                        if event.ilk == 'bup':
-                            bound = dict(bound=True, bsn=record.bound['bn'], bd=record.bound['bd']) if record.bound else {}
-                            proof = wallet.custody.derive(reg.regk, Number(numh=event.sad['n']).num, acdc.said, 'issued', **bound)
-                            stream.extend(messagize(acdc, bonds=[proof.data], gvrsn=Vrsn_2_0))
-                        else:
-                            stream.extend(acdc.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
+                        stream.extend(origin)
                     elif not (args.tels or args.kels):
                         stream.extend(acdc.raw)
                     with Path(args.output).open('xb') as output:

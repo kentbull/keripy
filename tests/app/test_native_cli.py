@@ -6,6 +6,7 @@ import sys
 import uuid
 
 import multicommand
+import pytest
 
 from keri import Vrsn_2_0
 from keri.acdc import Regery
@@ -93,7 +94,7 @@ def test_native_cli_authoring_reopen_and_private_export(tmp_path):
     assert SerderACDC(raw=public.read_bytes()).said == credential
     full = tmp_path / 'full.cesr'
     invoke(name, 'vc', 'export', '--native', '-a', 'issuer', '-r', 'authority',
-           '--said', credential, '--full', '--output', str(full))
+           '--said', credential, '--full', '--derive', '--output', str(full))
     parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(full.read_bytes()), processive=False)
     tels = [item for item in parsed if isinstance(item.serder, SerderACDC)
             and item.serder.ilk in ('rip', 'bup')]
@@ -297,7 +298,7 @@ def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
     assert issued['state'] == 'issued'
     artifact = tmp_path / 'bound.cesr'
     invoke(name, 'vc', 'export', '--native', '-a', 'issuer', '-r', 'bound',
-           '--said', issued['credential'], '--full', '--output', str(artifact))
+           '--said', issued['credential'], '--full', '--derive', '--output', str(artifact))
     parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(artifact.read_bytes()), processive=False)
     assert parsed[-1].bsss
     acdc = parsed[-1].serder
@@ -309,7 +310,7 @@ def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
         holder.interact(version=Vrsn_2_0, gvrsn=Vrsn_2_0)
         current = holder.kever.serder.said
     granted = invoke(name, 'ipex', 'grant', '--native', '-a', 'issuer',
-                     '--recipient', issuee, '--said', acdc.said)[0]
+                     '--recipient', issuee, '--said', acdc.said, '--derive')[0]
     assert granted['accepted'] is True
     refused = command(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'bound',
                       '--said', acdc.said, '--bound-event', first)
@@ -323,3 +324,120 @@ def test_native_cli_bound_issue_revoke_and_historical_retry(tmp_path):
     assert invoke(name, 'vc', 'revoke', '--native', '-a', 'issuer', '-r', 'bound',
                   '--said', acdc.said, '--bound-event', current)[0]['update'] == revoked['update']
     assert invoke(name, 'vc', 'registry', 'status', '--native', '-r', 'bound')[0]['sn'] == 2
+    historical = tmp_path / 'historical.cesr'
+    invoke(name, 'vc', 'export', '--v2', '-a', 'issuer', '-r', 'bound',
+           '--said', acdc.said, '--full', '--derive', '--output', str(historical))
+    old = Parser(version=Vrsn_2_0).parse(ims=bytearray(historical.read_bytes()), processive=False)[-1]
+    # Compare wire primitives, not identities of independently parsed objects.
+    assert [[field.qb64 for field in proof] for proof in old.bsss] == [
+        [field.qb64 for field in proof] for proof in parsed[-1].bsss]
+
+
+def test_full_export_requires_explicit_verified_opening(tmp_path):
+    """Reject wrong supplied/derived proofs before output; valid held proof ignores custody.
+
+    tmp_path owns the exclusive artifacts. A deliberately replaced test salt is
+    structurally valid and correctly encrypted, but cannot open the old issuance.
+    This exercises real installed commands and core vet, not mocked verification.
+    """
+    from keri.core import Blinder, Salter
+
+    name = 'export-proof-' + uuid.uuid4().hex
+    with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
+                 version=Vrsn_2_0) as hby:
+        prefix = hby.makeHab(name='issuer', version=Vrsn_2_0).pre
+    regid = invoke(name, 'vc', 'registry', 'incept', '--v2', '--with-custody',
+                   '-a', 'issuer', '-r', 'r')[0]['registry']
+    said = invoke(name, 'vc', 'create', '--v2', '-a', 'issuer', '-r', 'r',
+                  '--data', '{"status":"valid"}')[0]['credential']
+    full = ['vc', 'export', '--v2', '-a', 'issuer', '-r', 'r', '-s', said, '--full']
+    missing = tmp_path / 'missing.cesr'
+    refusal = command(name, *full, '--output', str(missing))
+    assert refusal.returncode != 0 and 'issuance opening unavailable' in refusal.stdout + refusal.stderr
+    assert not missing.exists()
+
+    valid = tmp_path / 'opening.cesr'
+    invoke(name, 'vc', 'registry', 'opening', '-r', 'r', '-s', said,
+           '--ordinal', '1', '--output', str(valid))
+    bad = tmp_path / 'wrong-opening.cesr'
+    bad.write_bytes(Blinder.blind(salt=Salter().qb64, sn=1, acdc=said, state='issued').qb64b)
+    wrong = tmp_path / 'wrong.cesr'
+    refusal = command(name, *full, '--opening', str(bad), '--output', str(wrong))
+    assert refusal.returncode != 0
+    assert not wrong.exists()
+
+    # Import a well-formed wrong salt after explicitly losing only this test's
+    # row. Possession, encryption and bindings cannot replace event verification.
+    private = tmp_path / 'salt.json'
+    invoke(name, 'vc', 'export', '--v2', '-a', 'issuer', '-r', 'r',
+           '--custody', '--output', str(private))
+    payload = json.loads(private.read_text())
+    payload['salt'] = Salter().qb64
+    private.write_text(json.dumps(payload))
+    with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
+                 version=Vrsn_2_0) as hby:
+        rgy = Regery(hby=hby, name=name, base=hby.base)
+        wallet = Wallet(hby, rgy)
+        try:
+            assert wallet.db.custody.rem((regid,))
+        finally:
+            wallet.close()
+            rgy.close()
+    invoke(name, 'vc', 'import', '--v2', '--custody', '--file', str(private),
+           '--registry', regid, '--controller', prefix, '--discloser', prefix)
+    wrongSalt = tmp_path / 'wrong-salt.cesr'
+    refusal = command(name, *full, '--derive', '--output', str(wrongSalt))
+    assert refusal.returncode != 0
+    assert not wrongSalt.exists()
+    with openHby(name=name, base='native-cli-test', temp=False, bran=PASSCODE,
+                 version=Vrsn_2_0) as hby:
+        rgy = Regery(hby=hby, name=name, base=hby.base)
+        wallet = Wallet(hby, rgy)
+        try:
+            row = wallet.db.custody.get((regid,))
+            row.cipher = 'invalid-ciphertext'
+            wallet.db.custody.pin((regid,), row)
+        finally:
+            wallet.close()
+            rgy.close()
+    # Even unusable custody cannot disable export of a possessed valid proof.
+    supplied = tmp_path / 'supplied.cesr'
+    invoke(name, *full, '--opening', str(valid), '--output', str(supplied))
+    parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(supplied.read_bytes()), processive=False)
+    assert parsed[-1].serder.said == said and parsed[-1].bsqs
+    public = tmp_path / 'public.cesr'
+    invoke(name, 'vc', 'export', '--v2', '-a', 'issuer', '-r', 'r', '-s', said,
+           '--kels', '--tels', '--output', str(public))
+    assert public.stat().st_size > 0
+    # Exclusive creation still protects an existing artifact, even on retries.
+    original = supplied.read_bytes()
+    assert command(name, *full, '--opening', str(valid), '--output', str(supplied)).returncode != 0
+    assert supplied.read_bytes() == original
+
+
+@pytest.mark.parametrize('tokens, message', [
+    (['vc', 'export', '-a', 'issuer', '--custody'], 'require --v2'),
+    (['vc', 'export', '-a', 'issuer', '--derive'], 'require --v2'),
+    (['vc', 'export', '-a', 'issuer', '--opening', 'absent'], 'require --v2'),
+    *[(['vc', 'export', '--v2', '-a', 'issuer', '--custody', *flag], 'cannot be combined')
+      for flag in (['--full'], ['--kels'], ['--tels'], ['--chains'], ['--files'],
+                   ['--said', 'credential'], ['--derive'], ['--opening', 'absent'])],
+    (['vc', 'export', '--v2', '-a', 'issuer', '--derive'], 'require --v2 --full'),
+    (['vc', 'export', '--v2', '-a', 'issuer', '--opening', 'absent'], 'require --v2 --full'),
+    (['vc', 'export', '--v2', '-a', 'issuer', '--files'], 'uses --output'),
+    *[(['vc', 'import', '--file', 'absent', *flag], 'require --v2 --custody')
+      for flag in (['--custody'], ['--rewrap'], ['--registry', 'r'],
+                   ['--controller', 'i'], ['--discloser', 'h'])],
+    (['vc', 'import', '--v2', '--file', 'absent', '--said', 'credential'], 'not credentials'),
+])
+def test_provisioning_options_fail_before_store_or_file_access(tokens, message):
+    """Reject incompatible modes before touching nonexistent identity/file inputs.
+
+    tokens selects a real parser/handler path; message identifies its boundary.
+    No database or output is provisioned by this parameterized refusal test.
+    """
+    from keri.kering import ConfigurationError
+
+    args = multicommand.create_parser(commands).parse_args([*tokens, '--name', 'does-not-exist'])
+    with pytest.raises(ConfigurationError, match=message):
+        args.handler(args)

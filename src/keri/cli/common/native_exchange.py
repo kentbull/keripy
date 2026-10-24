@@ -12,7 +12,7 @@ from hio.core import http
 
 from keri import Vrsn_2_0, Kinds
 from keri.acdc import ipexing
-from keri.acdc.regeventing import issuerRegistry, _blindCandidates
+from keri.acdc.regeventing import issuerRegistry
 from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import GroupHab, Notifier
 from keri.app.native_grouping import NativeGroup
@@ -154,8 +154,8 @@ class ExchangeDoer(doing.DoDoer):
         """Execute one IPEX verb or serve intake with explicit capability owners.
 
         ``tymth`` and ``tock`` drive cooperative scheduling. Retained holder
-        presentations need no custody; explicit derivation or issuer proof
-        generation enables it. All child work is cancelled before stores close.
+        presentations and issuer grants need no custody unless --derive explicitly
+        selects it. All child work is cancelled before stores close.
         Verification failures propagate without recording consent or delivery.
         """
         self.wind(tymth)
@@ -164,8 +164,7 @@ class ExchangeDoer(doing.DoDoer):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
-        derives = (getattr(args, 'derive', False) or
-                   self.verb == 'grant' and not args.from_grant and not getattr(args, 'opening', []))
+        derives = getattr(args, 'derive', False)
         with (native.opened(args, custody=derives) as (hby, rgy, wallet),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections,
               ExitStack() as activity):
@@ -356,11 +355,7 @@ class ExchangeDoer(doing.DoDoer):
         core opening/bound-proof failures and file errors propagate."""
         retained = list(retained)
         for path in getattr(self.args, 'opening', []):
-            raw = Path(path).read_bytes().strip()
-            candidates = _blindCandidates(raw)
-            if len(candidates) != 1:
-                raise ConfigurationError('opening file must contain exactly one CESR Blinder')
-            retained.append(candidates[0])
+            retained.append(native.loadOpening(path))
         explicit = (wallet.boundEvent(credential, self.args.bound_event)
                     if self.args.bound_event else {})
         issued = wallet.db.issued.get((credential.said,))

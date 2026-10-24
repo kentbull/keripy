@@ -103,8 +103,8 @@ def test_public_kel_and_explicit_blind_commands(tmp_path):
     assert not bad.exists()
     full, grant = tmp_path / 'full.cesr', tmp_path / 'grant.cesr'
     invoke(alice, 'vc', 'export', '--v2', '-a', 'self', '-r', 'r',
-        '-s', issued['credential'], '--full', '--output', str(full))
-    granted = invoke(alice, 'ipex', 'grant', '--v2', '-a', 'self', '-r', bob_aid,
+        '-s', issued['credential'], '--full', '--derive', '--output', str(full))
+    granted = invoke(alice, 'ipex', 'grant', '--v2', '--derive', '-a', 'self', '-r', bob_aid,
         '-s', issued['credential'], '--output', str(grant))[0]
     incoming = tmp_path / 'incoming.cesr'
     incoming.write_bytes(full.read_bytes() + grant.read_bytes())

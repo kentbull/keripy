@@ -88,7 +88,7 @@ class RegistryCustody:
             controller (str): Expected registry controller AID.
             discloser (str): Explicit designated recipient AID, with known KEL.
             importing (bool): Require the local recipient rather than controller.
-            rewrap (bool): Permit local controller to re-import its protected copy.
+            rewrap (bool): Permit local controller to re-import its plaintext copy.
 
         Returns:
             None. Local checks are guardrails, not signed delegation or transfer
@@ -202,7 +202,7 @@ class RegistryCustody:
             AuthError: Keeper is unencrypted, unauthenticated, or uses another AEID.
             ValidationError: Registry or participant bindings are invalid.
             ConfigurationError: Accepted blinded history exists without custody;
-                restore an explicit protected handoff instead of recreating salt.
+                restore an explicit plaintext handoff instead of recreating salt.
         """
         self._manager()
         rip = self.rgy.store.seqEvent(regid, 0)
@@ -262,7 +262,7 @@ class RegistryCustody:
         """Create an owner-only plaintext operator handoff file, never overwrite it.
 
         The operator transfers it over an authenticated private channel. This is
-        a protected local artifact, not an IPEX payload or a new wire protocol.
+        an owner-only plaintext artifact, not an IPEX payload or a new wire protocol.
         Mode 0600 does not authenticate a sender, encrypt transit, or protect
         against other processes running as the same user.
 
@@ -293,7 +293,7 @@ class RegistryCustody:
         return path
 
     def importCustody(self, path, *, regid, controller, discloser, rewrap=False):
-        """Import a protected artifact; only explicit rewrap can replace old-AEID custody.
+        """Import a plaintext salt file; explicit rewrap can replace old-AEID custody.
 
         Rewrap trusts the authenticated operator handoff, retains its original
         salt/profile, and encrypts it under the currently authenticated Keeper.

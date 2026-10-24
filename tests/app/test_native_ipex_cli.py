@@ -67,7 +67,7 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
     invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
         '--said', said, '--output', str(credentialFile))
     invoke(names['issuer'], 'vc', 'export', '--native', '-a', 'issuer', '-r', 'r',
-        '--said', said, '--full', '--output', str(evidence))
+        '--said', said, '--full', '--derive', '--output', str(evidence))
     credential = SerderACDC(raw=credentialFile.read_bytes())
     plan = json.dumps([[[credential.schema['$id'], '/', ['']]]])
     application = tmp_path / 'apply.cesr'
@@ -81,8 +81,20 @@ def test_native_cli_full_negotiation_and_holder_presentation(tmp_path):
     agree = invoke(names['holder'], 'ipex', 'agree', '--native', '-a', 'holder',
         '-s', offer['exchange'], '--input', str(offered), '--output', str(agreement))[0]
     granted = tmp_path / 'grant.cesr'
+    implicit = subprocess.run([sys.executable, '-m', 'keri.cli.kli', 'ipex', 'grant',
+        '--v2', '-a', 'issuer', '-r', prefixes['holder'], '-s', said,
+        '--output', str(granted), '--name', names['issuer'], '--base', 'native-ipex-cli'],
+        env=dict(os.environ, KLI_KEYSTORE_PASSCODE=PASSCODE), capture_output=True, text=True, timeout=20)
+    assert implicit.returncode != 0
+    assert 'opening unavailable' in implicit.stdout + implicit.stderr
+    assert not granted.exists()
+    # A previously obtained event opening suffices for the issuer too. No salt
+    # capability is selected by the evidence-producing Grant operation.
+    originalOpening = tmp_path / 'original-opening.cesr'
+    invoke(names['issuer'], 'vc', 'registry', 'opening', '-r', 'r', '-s', said,
+           '--ordinal', '1', '--output', str(originalOpening))
     grant = invoke(names['issuer'], 'ipex', 'grant', '--native', '-a', 'issuer',
-        '-r', prefixes['holder'], '-s', said, '--prior', agree['exchange'],
+        '-r', prefixes['holder'], '-s', said, '--opening', str(originalOpening), '--prior', agree['exchange'],
         '--input', str(agreement), '--output', str(granted))[0]
     incoming = tmp_path / 'incoming.cesr'
     incoming.write_bytes(evidence.read_bytes() + granted.read_bytes())

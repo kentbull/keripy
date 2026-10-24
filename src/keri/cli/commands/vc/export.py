@@ -35,7 +35,9 @@ parser.add_argument("--full", help="export credential, signatures, tels, kels an
 parser.add_argument("--files", help="export artifacts to individual files keyed off of AIDs or SAIDS, default is "
                                     "stdout", action="store_true")
 native.options(parser)
-parser.add_argument('--custody', action='store_true', help='export native private custody to an owner-only file')
+parser.add_argument('--custody', action='store_true', help='export a plaintext per-registry salt file with owner-only permissions; arrange authenticated private transfer separately')
+parser.add_argument('--derive', action='store_true', help='with --v2 --full, explicitly derive a missing historical issuance opening from provisioned custody')
+parser.add_argument('--opening', help='with --v2 --full, use one event-specific CESR opening file without loading registry salts')
 parser.add_argument('--registry-name', '-r', default=None)
 parser.add_argument('--output', default=None, help='native export destination (created exclusively)')
 
@@ -49,9 +51,20 @@ def export_credentials(args):
     plaintext custody export is an explicit capability, never implied by listing.
     Legacy export behavior remains the default."""
     if getattr(args, 'native', False):
+        # Reject mixed public/private requests before opening any identity or
+        # secret store. Custody must never silently take precedence over evidence.
+        if args.custody and any((args.said, args.tels, args.kels, args.chains,
+                                args.full, args.files, args.derive, args.opening)):
+            raise ConfigurationError('--custody cannot be combined with credential/evidence export options')
+        if args.files:
+            raise ConfigurationError('native export uses --output, not --files')
+        if (args.derive or args.opening) and not args.full:
+            raise ConfigurationError('--derive and --opening require --v2 --full')
         if not args.output or not args.registry_name:
             raise ConfigurationError('native export requires --output and --registry-name')
         return native.read(args, 'export')
+    if args.custody or args.derive or args.opening:
+        raise ConfigurationError('--custody, --derive and --opening require --v2')
     tels = args.tels
     kels = args.kels
     chains = args.chains if args.chains is not None else {}

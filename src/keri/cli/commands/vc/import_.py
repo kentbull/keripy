@@ -21,7 +21,7 @@ from ....vdr import Tevery, Verifier, Regery
 
 logger = ogler.getLogger()
 
-parser = argparse.ArgumentParser(description='Import an ACDC credential in CESR stream format')
+parser = argparse.ArgumentParser(description='Import a legacy CESR credential, or explicitly provision native registry salt custody with --v2 --custody')
 parser.set_defaults(handler=lambda args: imprt(args),
                     transferable=True)
 parser.add_argument('--name', '-n', help='keystore name and file location of KERI keystore', required=True)
@@ -29,25 +29,32 @@ parser.add_argument('--base', '-b', help='additional optional prefix to file loc
                     required=False, default="")
 parser.add_argument('--passcode', '-p', help='21 character encryption passcode for keystore (is not saved)',
                     dest="bran", default=getenv('KLI_KEYSTORE_PASSCODE'))  # passcode => bran
-parser.add_argument("--file", help="File of streamed CESR credential to import", required=True)
+parser.add_argument("--file", help="Legacy CESR credential, or native plaintext per-registry salt file with owner-only permissions received through operator-arranged authenticated private transfer", required=True)
 parser.add_argument("--said", "-s", help="SAID of the credential to expect.", required=False, default=None)
 native.options(parser)
-parser.add_argument('--custody', action='store_true', help='import native protected disclosure custody')
+parser.add_argument('--custody', action='store_true', help='import a plaintext per-registry salt file into encrypted local custody (requires --v2)')
 parser.add_argument('--registry', default=None)
 parser.add_argument('--controller', default=None)
 parser.add_argument('--discloser', default=None)
-parser.add_argument('--rewrap', action='store_true', help='explicitly rewrap imported custody after Keeper AEID change')
+parser.add_argument('--rewrap', action='store_true', help='explicitly re-import plaintext salt under the current Keeper encryption identity; does not migrate old ciphertext or provide automatic key rotation')
 
 
 def imprt(args):
-    """ Command line list credential registries handler
+    """Select legacy credential import or explicit native plaintext provisioning.
 
+    args supplies the file, identity and exact registry/controller/discloser
+    bindings. Reject mode-incompatible options before store or file access.
+    Return scheduled import work; native credential intake remains IPEX's job.
     """
 
     if getattr(args, 'native', False):
+        if args.said:
+            raise ConfigurationError('native import provisions salt custody, not credentials; use IPEX intake for credentials')
         if not args.custody or not all((args.registry, args.controller, args.discloser)):
             raise ConfigurationError('native import requires --custody, --registry, --controller and --discloser')
         return native.read(args, 'import')
+    if any((args.custody, args.registry, args.controller, args.discloser, args.rewrap)):
+        raise ConfigurationError('custody provisioning options require --v2 --custody')
     ed = ImportDoer(name=args.name,
                     base=args.base,
                     bran=args.bran,
