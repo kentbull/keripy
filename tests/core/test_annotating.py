@@ -3,9 +3,32 @@
 tests.core.test_annotating module
 
 """
+import re
 from binascii import unhexlify
-from keri.kering import Kinds
+import pytest
+
+from keri.kering import (Kinds, InvalidVersionError, Versionage, Vrsn_1_0,
+                         Vrsn_2_0)
 from keri.core import dumps, annot, denot
+from keri.core.coring import decodeB64
+from keri.core.counting import Counter, Codens
+from keri.core.annotating import Annotator, _annot_codex
+
+
+KERIPY_NATIVE_V2_ICP_FIX_BODY = (
+    b'-FA50OKERICAACAAXicpEFaYE2LTv8dItUgQzIHKRA9FaHDrHtIHNs-m5DJKWXRNDNG2arBDtH'
+    b'K_JyHRAq-emRdC6UM-yIpCAeJIWDiXp4HxMAAAMAAB-JALDNG2arBDtHK_JyHRAq-emRdC6UM-yI'
+    b'pCAeJIWDiXp4HxMAAB-JALEFXIx7URwmw7AVQTBcMxPXfOOJ2YYA1SJAam69DXV8D2MAAA-JAA'
+    b'-JAA-JAA')
+
+SIGER = b'A' * 88
+JSON_RPY = b'{"v":"KERI10JSON00002e_","t":"rpy","d":"Eabc"}'
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def strip_ansi(value):
+    """Remove ANSI SGR escapes from a rendered annotation."""
+    return ANSI_RE.sub("", value)
 
 
 def test_annot():
@@ -211,9 +234,172 @@ def test_annot():
     """End Test"""
 
 
+def test_annot_complete_streams():
+    """Test complete CESR stream annotation, not just native event bodies."""
+    sigs = Counter.enclose(qb64=SIGER, code=Codens.ControllerIdxSigs,
+                           version=Vrsn_2_0)
+
+    stream = KERIPY_NATIVE_V2_ICP_FIX_BODY + sigs
+    ams = annot(bytearray(stream))
+    assert "FixBodyGroup" in ams
+    assert "ControllerIdxSigs" in ams
+    assert denot(ams) == stream
+
+    stream = KERIPY_NATIVE_V2_ICP_FIX_BODY + KERIPY_NATIVE_V2_ICP_FIX_BODY
+    ams = annot(bytearray(stream))
+    assert ams.count("FixBodyGroup") == 2
+    assert denot(ams) == stream
+
+    ams = annot(bytearray(JSON_RPY))
+    assert "SERDER KERI JSON" in ams
+    assert "ilk=rpy" in ams
+    assert denot(ams) == JSON_RPY
+
+
+def test_annot_wrapped_streams_and_qb2():
+    """Test wrapper groups, opaque fallback, and qb2 canonical annotation."""
+    sigs = Counter.enclose(qb64=SIGER, code=Codens.ControllerIdxSigs,
+                           version=Vrsn_2_0)
+
+    generic = Counter.enclose(qb64=KERIPY_NATIVE_V2_ICP_FIX_BODY,
+                              code=Codens.GenericGroup, version=Vrsn_2_0)
+    ams = annot(bytearray(generic))
+    assert "GenericGroup" in ams
+    assert "FixBodyGroup" in ams
+    assert denot(ams) == generic
+
+    both = Counter.enclose(qb64=KERIPY_NATIVE_V2_ICP_FIX_BODY + sigs,
+                           code=Codens.BodyWithAttachmentGroup,
+                           version=Vrsn_2_0)
+    ams = annot(bytearray(both))
+    assert "BodyWithAttachmentGroup" in ams
+    assert "ControllerIdxSigs" in ams
+    assert denot(ams) == both
+
+    attachments = Counter.enclose(qb64=sigs, code=Codens.AttachmentGroup,
+                                  version=Vrsn_2_0)
+    ams = annot(bytearray(attachments))
+    assert "AttachmentGroup" in ams
+    assert "ControllerIdxSigs" in ams
+    assert denot(ams) == attachments
+
+    opaque = Counter.enclose(qb64=b"MAAA", code=Codens.NonNativeBodyGroup,
+                             version=Vrsn_2_0)
+    ams = annot(bytearray(opaque))
+    assert "NonNativeBodyGroup" in ams
+    assert "OPAQUE CESR body" in ams
+    assert denot(ams) == opaque
+
+    qb2 = decodeB64(KERIPY_NATIVE_V2_ICP_FIX_BODY + sigs)
+    ams = annot(bytearray(qb2))
+    assert "FixBodyGroup" in ams
+    assert "ControllerIdxSigs" in ams
+    assert "Ed25519_Sig" in ams
+
+
+def test_annot_pretty_json():
+    """Test display-oriented pretty rendering for message-domain JSON."""
+    ams = annot(bytearray(JSON_RPY), pretty=True)
+    assert "SERDER KERI JSON" in ams
+    assert '\n  "v":' in ams
+    assert ams.splitlines()[-1].startswith("} # SERDER KERI JSON")
+    assert denot(ams) == JSON_RPY
+
+
+def test_denot_accepts_byte_inputs():
+    """Test deannotation accepts text and bytes-like annotated streams."""
+    ams = annot(bytearray(JSON_RPY))
+    encoded = ams.encode("utf-8")
+
+    assert denot(ams) == JSON_RPY
+    assert denot(encoded) == JSON_RPY
+    assert denot(bytearray(encoded)) == JSON_RPY
+    assert denot(memoryview(encoded)) == JSON_RPY
+
+
+def test_denot_strips_comments_and_whitespace_outside_json_strings():
+    """Test deannotation preserves JSON string data while stripping markup."""
+    ams = r'''
+    # full-line comment
+    {
+      "x": "a # b",
+      "y": " spaced value ",
+      "z": "escaped \" quote and \\ slash"
+    } # inline comment
+    '''
+    expected = (
+        br'{"x":"a # b","y":" spaced value ",'
+        br'"z":"escaped \" quote and \\ slash"}'
+    )
+
+    assert denot(ams) == expected
+
+
+def test_annot_colored_comments_and_opaque_lines():
+    """Test semantic color rendering keeps plain annotation recoverable."""
+    plain = annot(bytearray(JSON_RPY))
+    colored = Annotator().annotate(bytearray(JSON_RPY), colored=True)
+
+    assert "\x1b[90mSERDER KERI JSON ilk=rpy " in colored
+    assert "\x1b[94mEabc\x1b[0m" in colored
+    assert strip_ansi(colored) == plain
+
+    opaque = Counter.enclose(qb64=b"MAAA", code=Codens.NonNativeBodyGroup,
+                             version=Vrsn_2_0)
+    plain = annot(bytearray(opaque))
+    colored = Annotator().annotate(bytearray(opaque), colored=True)
+
+    assert "\x1b[91mMAAA\x1b[0m" in colored
+    assert strip_ansi(colored) == plain
+
+
+def test_annot_colored_pretty_json_preserves_text():
+    """Test jq-like pretty JSON token coloring is display-only."""
+    plain = annot(bytearray(JSON_RPY), pretty=True)
+    colored = Annotator(pretty=True).annotate(bytearray(JSON_RPY),
+                                              colored=True)
+
+    assert '\x1b[94m"v"\x1b[0m' in colored
+    assert '\x1b[32m"KERI10JSON00002e_"\x1b[0m' in colored
+    assert '\x1b[90mSERDER KERI JSON ilk=rpy ' in colored
+    assert strip_ansi(colored) == plain
+
+
+def test_annot_codex_uses_counter_codes():
+    """Test annotation group classification is derived from Counter codices."""
+    v1 = _annot_codex(Vrsn_1_0)
+    v1_codes = Counter.Codes[Vrsn_1_0.major][Vrsn_1_0.minor]
+
+    assert v1_codes.AttachmentGroup in v1.AttachmentWrappers
+    assert v1_codes.AttachmentGroup not in v1.FrameStarts
+    assert v1_codes.NonNativeBodyGroup in v1.FrameGroups
+    assert v1_codes.ControllerIdxSigs in v1.AttachmentGroups
+
+    v2 = _annot_codex(Vrsn_2_0)
+    v2_codes = Counter.Codes[Vrsn_2_0.major][Vrsn_2_0.minor]
+    v2_mucodes = Counter.MUCodes[Vrsn_2_0.major][Vrsn_2_0.minor]
+
+    assert v2_mucodes.FixBodyGroup in v2.FrameGroups
+    assert v2_mucodes.MapBodyGroup in v2.FrameGroups
+    assert v2_mucodes.NonNativeBodyGroup in v2.FrameGroups
+    assert v2_codes.AttachmentGroup in v2.AttachmentWrappers
+    assert v2_codes.AttachmentGroup not in v2.FrameStarts
+    assert v2_codes.ControllerIdxSigs in v2.AttachmentGroups
+
+
+def test_annot_rejects_unsupported_genus_version():
+    """Test annotation validates explicit stream genus versions."""
+    future = Versionage(major=Vrsn_2_0.major, minor=Vrsn_2_0.minor + 1)
+    gv = Counter(code=Codens.KERIACDCGenusVersion,
+                 countB64=Counter.verToB64(version=future),
+                 version=Vrsn_2_0)
+
+    with pytest.raises(InvalidVersionError):
+        annot(bytearray(gv.qb64b + JSON_RPY))
+
+    with pytest.raises(InvalidVersionError):
+        _annot_codex(future)
+
 
 if __name__ == "__main__":
     test_annot()
-
-
-
