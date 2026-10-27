@@ -164,6 +164,30 @@ def kel(args, operation):
     return [doing.doify(run)]
 
 
+def verifiedRegistryResponse(evidence, regid, response):
+    """Ingest once and require the exact advertised/requested registry result.
+
+    ``evidence`` is the caller's existing EvidenceContext. Its ordinary processors
+    authenticate the body; this CLI postcondition neither authenticates the HTTP
+    source nor establishes observation freshness. A declared fresh CESR response
+    must have no pending/rejected work and its returned, local and advertised
+    requested heads must agree, or ConfigurationError is raised.
+    """
+    if response.get('status') != 200:
+        raise ConfigurationError(f"observer HTTP status {response.get('status')}")
+    headers = response.get('headers', {})
+    if (headers.get('observer-evidence-state') != 'fresh'
+            or headers.get('content-type', '').split(';')[0] != CESR_CONTENT_TYPE):
+        raise ConfigurationError('observer response requires declared fresh CESR evidence')
+    result = evidence.ingest(response['body'])
+    head = evidence.store.headEvent(regid)
+    if (result['pending'] or result['rejected'] or head is None
+            or head.said != headers.get('observer-registry-head')
+            or result['heads'].get(regid) != head.said):
+        raise ConfigurationError('observer evidence failed exact registry synchronization')
+    return head
+
+
 class Request(doing.DoDoer):
     """Own one bounded signed HTTP request and its public evidence processors."""
 
@@ -180,7 +204,7 @@ class Request(doing.DoDoer):
         super().__init__(doers=[doing.doify(self.run)])
 
     def run(self, tymth, tock=0.03125, **kwa):
-        """Publish signed evidence or independently verify a fresh observer response.
+        """Publish signed evidence or independently verify an exact observer result.
 
         Args:
             tymth (Callable): HIO injected clock governing the finite request deadline.
@@ -192,7 +216,8 @@ class Request(doing.DoDoer):
 
         Returns:
             None. Prints acceptance JSON after successful publication status, or after
-            queried KEL/TEL independently verifies to the advertised fresh registry head.
+            queried KEL/TEL independently verifies to the advertised registry head.
+            Evidence synchronization alone does not establish observation freshness.
 
         Raises:
             ConfigurationError: Invalid timeout/endpoint/alias, non-200 status, pending or
@@ -232,26 +257,17 @@ class Request(doing.DoDoer):
                 if not client.responses:
                     raise TimeoutError('public evidence request timed out')
                 response = client.responses.popleft()
-                if response['status'] != 200:
-                    raise ConfigurationError(f"public evidence HTTP status {response['status']}")
                 if self.operation == 'publish':
+                    if response['status'] != 200:
+                        raise ConfigurationError(f"public evidence HTTP status {response['status']}")
                     result = json.loads(response['body'])
                     if result['pending'] or result['rejected']:
                         raise ConfigurationError('publication remains pending or rejected')
                     print(json.dumps(dict(accepted=True, result=result)))
                 else:
-                    headers = response['headers']
-                    if (headers.get('observer-evidence-state') != 'fresh'
-                            or headers.get('content-type', '').split(';')[0] != CESR_CONTENT_TYPE):
-                        raise ConfigurationError('observer evidence is not fresh')
-                    result = evidence.ingest(response['body'])
-                    head = rgy.store.headEvent(args.registry)
-                    if (result['pending'] or result['rejected'] or head is None
-                            or head.said != headers.get('observer-registry-head')
-                            or result['heads'].get(args.registry) != head.said):
-                        raise ConfigurationError('observer evidence failed independent verification')
+                    head = verifiedRegistryResponse(evidence, args.registry, response)
                     digest = write(args.output, bytes(response['body']))
-                    print(json.dumps(dict(accepted=True, fresh=True, registry=args.registry,
+                    print(json.dumps(dict(accepted=True, fresh=False, registry=args.registry,
                         head=head.said, sn=head.sn, output=args.output, sha256=digest)))
             finally:
                 self.remove([owner, evidence])

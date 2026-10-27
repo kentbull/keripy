@@ -25,6 +25,7 @@ from keri.kering import ConfigurationError, MissingChainError, MissingSchemaErro
 from keri.peer import exchanging
 from keri.db import openLMDB
 from keri.cli.common import acdc_v2, cesr_sending
+from keri.cli.common.public_evidence import verifiedRegistryResponse
 
 
 class Notices:
@@ -198,11 +199,7 @@ class ExchangeDoer(doing.DoDoer):
                 if urlsplit(args.observer).scheme not in ('http', 'https'):
                     raise ConfigurationError('observer queries require an HTTP(S) endpoint')
                 response = yield from self.request(args.observer, signedQuery(hab, 'tels', {'i': regid}))
-                if response.get('headers', {}).get('observer-evidence-state') != 'fresh':
-                    raise ConfigurationError('observer has no fresh evidence')
-                result = peer.evidence.ingest(response['body'])
-                if result['pending'] or result['rejected']:
-                    raise ConfigurationError('observer evidence is incomplete or invalid')
+                verifiedRegistryResponse(peer.evidence, regid, response)
                 peer.process()
             if self.verb == 'receive':
                 app = falcon.App()
