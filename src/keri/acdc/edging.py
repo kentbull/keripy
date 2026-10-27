@@ -293,9 +293,9 @@ class EdgeEvaluator:
             serder (SerderACDC): Exact disclosed far-node credential.
 
         Returns:
-            tuple[bool, str | None]: Whether the selected attribute block is visible,
-            and its Issuee when present. A visible block without i is known untargeted;
-            a compact digest is unknown and cannot establish that default."""
+            tuple[bool, str | None]: Whether the selected Issuee is known, and its
+            string value when present. A visible block without i is known untargeted;
+            a compact block or present non-string i is unresolved."""
         if "a" in serder.sad:
             block = serder.sad["a"]
         else:
@@ -303,7 +303,12 @@ class EdgeEvaluator:
             if not isinstance(aggregate, list) or len(aggregate) < 2:
                 return False, None
             block = aggregate[1]
-        return (True, block.get("i")) if isinstance(block, Mapping) else (False, None)
+        if not isinstance(block, Mapping):
+            return False, None
+        if "i" not in block:
+            return True, None
+        issuee = block["i"]
+        return (True, issuee) if isinstance(issuee, str) else (False, None)
 
 
     def _boundEdgeValidity(self, near, far, *, nodes, historical=False):
@@ -652,7 +657,7 @@ class EdgeEvaluator:
         return result
 
 
-    def verify(self, nodes, order, *, historical=False):
+    def evaluate(self, nodes, order, *, historical=False):
         """Use the same recursive evaluator for the presented origin and far nodes.
 
         Authenticate and schema-check all disclosed nodes before calling this
@@ -664,14 +669,18 @@ class EdgeEvaluator:
             order (list[str]): Reachable traversal order, with the origin first.
 
         Returns:
-            bool: Whether the origin evaluates to concrete True; unknown fails closed.
+            bool | None: The complete root verdict, preserving unresolved truth.
 
         Raises:
             MissingChainError, MissingSchemaError: Required edge evidence is unavailable.
             Exceptions from trusted local graph policy propagate."""
         if not order or set(order) != set(nodes):
-            return False
+            return None
         memo, active, averages = {}, set(), {}
         result = self._evaluateGraphNode(order[0], nodes=nodes, memo=memo,
                                          active=active, averages=averages, historical=historical)
-        return result is True and set(memo) == set(nodes)
+        return result if set(memo) == set(nodes) else None
+
+    def verify(self, nodes, order, *, historical=False):
+        """Require explicit root True without collapsing intermediate unknowns."""
+        return self.evaluate(nodes, order, historical=historical) is True

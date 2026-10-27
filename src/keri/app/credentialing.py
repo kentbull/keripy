@@ -341,6 +341,8 @@ class Wallet:
         for route, message in (('/ipex/grant', gexn), ('/ipex/admit', aexn)):
             if not verification.verifyAccepted(message.said, route):
                 raise ValidationError('ACDC v2 IPEX semantic acceptance is required before wallet admission')
+        if verification.evaluateGrant(grant) is not True:
+            raise ValidationError('ACDC v2 graph semantic acceptance is required before wallet admission')
         record = AdmittedCredential(origins[0], grant, admit, holder, helping.nowIso8601())
         # Only this application environment participates in the transaction.
         with self.db.env.begin(write=True) as txn:

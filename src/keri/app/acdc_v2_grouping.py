@@ -268,6 +268,17 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
         child = parsed[0]
         if child.serder.ilk != Ilks.exn or child.serder.pre != self.ghab.pre:
             raise ValidationError('exchange is not issued by this group')
+        route = child.serder.route
+        if (route == '/ipex/grant' and child.serder.sad['a'].get('o')) or route == '/ipex/admit':
+            handler = self.exc.routes['/ipex/grant']
+            verification = getattr(handler, 'acdcV2', handler).verification
+            if route == '/ipex/grant':
+                origins = child.serder.sad['a']['o']
+                if (not isinstance(origins, list) or len(origins) != 1
+                        or verification.evaluateDisclosure(origins[0], child.nests) is not True):
+                    raise ValidationError('credential graph is false or unresolved')
+            elif verification.evaluateGrant(child.serder.sad['p']) is not True:
+                raise ValidationError('credential graph is false or unresolved')
         child.tsgs.append((self.ghab.kever.prefixer,
             Number(num=self.ghab.kever.lastEst.s), Diger(qb64=self.ghab.kever.lastEst.d),
             self.ghab.sign(child.serder.raw)))
@@ -284,5 +295,6 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
                 said (str): Child exchange identifier, not its proposal wrapper SAID.
 
             Returns:
-                bool: Whether its authenticated threshold and semantic workflow completed."""
+                bool: Whether its authenticated threshold and protocol workflow completed.
+                Completion alone is not application graph authorization."""
         return self.exc.complete(said)

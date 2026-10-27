@@ -272,7 +272,7 @@ def test_bound_interval_does_not_compare_different_kels_or_inconsistent_history(
 
 
 @pytest.mark.parametrize('when,expected', [('before-issued', False), ('resealed-before-issued', False), ('during', True),
-                                          ('after-revoked', False), ('partial', False)])
+                                          ('after-revoked', False), ('partial', None)])
 @pytest.mark.parametrize('registryNear', [False, True])
 def test_production_graph_bound_authority_uses_real_anchored_history(when, expected, registryNear):
     """Evaluate bound authority using actual signed KEL/TEL history through direct and registry-backed near issuance.
@@ -369,7 +369,7 @@ def test_production_graph_bound_authority_uses_real_anchored_history(when, expec
                 nearSource = anchorNear()
 
             exc = Exchanger(hby=hby, handlers=[])
-            loadHandlers(hby, exc, Notices(), rgy=rgy)
+            verification = loadHandlers(hby, exc, Notices(), rgy=rgy)
             origin = (messagize(near, bonds=[proof.data for proof in nearProofs],
                                 framed=False, gvrsn=Vrsn_2_0)
                       if nearReg else messagize(near, bonds=[nearSource], framed=False, gvrsn=Vrsn_2_0))
@@ -381,7 +381,11 @@ def test_production_graph_bound_authority_uses_real_anchored_history(when, expec
             exn, atc = grant(issuee, holder.pre, 'historical bound authority',
                               origin=origin, artifacts=[artifact], modifiers=plan)
             Parser(version=Vrsn_2_0, exc=exc).parse(ims=bytearray(exn.raw + atc))
-            assert exc.complete(exn.said) is expected
+            assert exc.complete(exn.said) is True
+            assert hby.db.exns.get((exn.said,)).raw == exn.raw
+            assert verification.verifyAccepted(exn.said, '/ipex/grant') is True
+            assert verification.evaluateGrant(exn.said) is expected
+            assert verification.evaluateGrant(exn.said, historical=True) is expected
             if when == 'partial':
                 # NOT must not turn an undisclosed historical state into proof.
                 handler = exc.routes['/ipex/grant']
