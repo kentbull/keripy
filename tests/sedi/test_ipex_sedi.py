@@ -3077,8 +3077,8 @@ def test_sedi_grant_escrows_for_presentation_anchor():
                 ]
 
 
-def test_residence_sedi_rejects_invalid_issuee_relationship():
-    """Reject authentic SEDI nodes whose declared I2I relationship is false."""
+def test_residence_sedi_retains_but_refuses_false_issuee_relationship():
+    """Retain authentic SEDI evidence while its false I2I edge refuses use."""
     with _openSediHaberies("ipex-invalid-sedi-edge") as (
         rootHby,
         orgHby,
@@ -3276,10 +3276,16 @@ def test_residence_sedi_rejects_invalid_issuee_relationship():
                 Parser(version=Vrsn_2_0).parse(ims=ims, kvy=verifierKvy)
                 assert ims == bytearray()
 
-                # All evidence is available, so the false edge is a permanent refusal.
-                assert verifierHby.db.exns.get(keys=(grant.said,)) is None
+                # Authentication retains the exact disclosure; the known false
+                # relationship remains a refusal at the explicit graph-use boundary.
+                storedGrant, _ = cloneMessage(verifierHby, grant.said)
+                assert storedGrant.raw == grant.raw
                 assert verifierHby.db.epse.get(keys=(grant.said,)) is None
-                assert all(item["d"] != grant.said for item in verifierRecorder.items)
+                assert verifierKvy.exc.complete(grant.said) is True
+                verification = verifierKvy.exc.routes["/ipex/grant"].verification
+                assert verification.verifyAccepted(grant.said, "/ipex/grant") is True
+                assert verification.evaluateGrant(grant.said) is False
+                assert any(item["d"] == grant.said for item in verifierRecorder.items)
 
 
 def test_residence_sedi_supporting_dag_through_ipex():
