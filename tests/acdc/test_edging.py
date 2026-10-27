@@ -1,12 +1,14 @@
 """Published graph-profile vectors; policy meaning remains explicitly supplied.
 
 ACDC f0bd097d, spec-body.md 1105-1120 and 1172-1211. These tests exercise
-production IPEX evaluation and accepted KEL delegation without fixture tables.
+the shared semantic owner and accepted KEL delegation without fixture tables.
 """
 import pytest
 
 from keri import Vrsn_2_0
-from keri.acdc import IpexHandler, acdcmap, grant, loadHandlers
+from keri.acdc import acdcmap, grant, loadHandlers
+from keri.acdc.edging import EdgeEvaluator
+from keri.acdc.proving import PresentedEvidence
 from keri.app import openHby
 from keri.core import (Compactor, Diger, Kevery, Noncer, Number, Parser, SealSource, Signer,
                        delcept, messagize)
@@ -78,15 +80,15 @@ class DeclaredScorePolicy:
 
 @pytest.fixture
 def graph():
-    """Yield temporary issuer/other habitats and a real Grant semantic handler.
+    """Yield temporary issuer/other habitats and a concrete semantic evaluator.
 
     Yields:
-        tuple: (Habery, issuer Hab, other Hab, IpexHandler). The fixture closes its
+        tuple: (Habery, issuer Hab, other Hab, EdgeEvaluator). The fixture closes its
         temporary identity stores after each case; no cached validity table is used."""
     with openHby(name='acdc-v2-graph-profile', version=Vrsn_2_0) as hby:
         issuer = hby.makeHab(name='issuer')
         other = hby.makeHab(name='other')
-        handler = IpexHandler('/ipex/grant', hby, Notices())
+        handler = EdgeEvaluator(PresentedEvidence(hby))
         yield hby, issuer, other, handler
 
 
@@ -109,7 +111,7 @@ def evaluate(handler, origin, *far):
     """Evaluate exact disclosed views through the production graph evaluator.
 
     Args:
-        handler (IpexHandler): Handler whose explicit policy to apply.
+        handler (EdgeEvaluator): Evaluator whose explicit policy to apply.
         origin (SerderACDC): Root credential, placed first in traversal order.
         *far: Disclosed far-node credentials indexed by their own SAIDs.
 
@@ -117,7 +119,7 @@ def evaluate(handler, origin, *far):
         bool: Production graph verdict. MissingChainError/MissingSchemaError remain
         retryable exceptions rather than synthetic false operands."""
     nodes = {serder.said: {'serder': serder} for serder in (origin,) + far}
-    return handler._verifyGraphSemantics(nodes, list(nodes))
+    return handler.verify(nodes, list(nodes))
 
 
 @pytest.mark.parametrize('operator,expected', [
@@ -412,7 +414,7 @@ def test_di2i_uses_real_accepted_delegation_not_unaccepted_dip(graph):
             ndigs=[Diger(ser=nextkey.verfer.qb64b).qb64], version=Vrsn_2_0)
         parser.parse(ims=messagize(dip, sigers=[signer.sign(dip.raw, index=0)], gvrsn=Vrsn_2_0))
         assert observer.db.kels.getLast(keys=dip.pre, on=0) is None
-        checker = IpexHandler('/ipex/grant', observer, Notices())
+        checker = EdgeEvaluator(PresentedEvidence(observer))
         with pytest.raises(MissingChainError):
             checker._delegatedIssuer(dip.pre, issuer.pre)
         anchor = issuer.interact(data=[dict(i=dip.pre, s='0', d=dip.said)])
@@ -475,7 +477,9 @@ def test_production_grant_uses_shared_graph_policy_and_rejects_bad_proof(graph):
         kvy = Kevery(db=receiver.db, lax=False, local=False)
         exc = Exchanger(hby=receiver, handlers=[])
         policy = DeclaredScorePolicy()
-        loadHandlers(receiver, exc, Notices(), graphPolicy=policy)
+        loadHandlers(receiver, exc, Notices())
+        # Preserve the handler's existing policy binding after route construction.
+        exc.routes['/ipex/grant'].graphPolicy = policy
         parser = Parser(kvy=kvy, exc=exc, version=Vrsn_2_0)
         parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0)))
         far = credential(issuer.pre, eligible=False)
