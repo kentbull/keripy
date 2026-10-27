@@ -264,8 +264,14 @@ def _validateUpdate(evt, *, regid, prior=None):
 
 # Shared KEL anchor primitives
 def _kever(db, pre):
-    """Return the Kever for pre from db's read-through kevers cache, or None
-    when the KEL is not available."""
+    """Read the persisted accepted head, refreshing a stale process-local Kever.
+
+    Another process may have advanced or recovered the shared KEL. Reuse the
+    ordinary read-through reconstruction; absent state still returns None."""
+    state = db.states.get(keys=pre)
+    cached = db.kevers.get(pre)
+    if cached is not None and (state is None or cached.serder.said != state.d):
+        del db.kevers[pre]
     try:
         return db.kevers[pre]
     except KeyError:
