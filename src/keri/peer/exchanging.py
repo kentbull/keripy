@@ -140,6 +140,7 @@ class Exchanger:
         behavior = self.routes[route] if route in self.routes else None
         # Read the route's optional evidence-selection hook.
         evidenceVerifier = getattr(behavior, "verifyEvidence", None)
+        acceptsEvidence = getattr(behavior, "acceptsEvidence", False)
         # Read whether unresolved extras may be dropped after querying.
         acceptsMissingEvidence = getattr(behavior, "acceptsMissingEvidence", False)
         tsgs = list(tsgs or [])
@@ -171,8 +172,13 @@ class Exchanger:
 
         # A seal couple implies the sender AID. Store both attachment forms as
         # an explicit sealing AID and historical event reference.
-        sourceSeals = [(Prefixer(qb64=sender), number, diger)
-                       for number, diger in sscs]
+        sourceSeals = []
+        for number, diger in sscs:
+            try:
+                prefixer = Prefixer(qb64=sender)
+            except Exception as ex:
+                raise ValidationError(f"Invalid exchange sender prefix = {sender}.") from ex
+            sourceSeals.append((prefixer, number, diger))
         sourceSeals.extend(ssts)
 
         senderTsgs = [tsg for tsg in tsgs if tsg[0].qb64 == sender]
@@ -383,10 +389,9 @@ class Exchanger:
         # Isolate verification-only arguments from handler arguments.
         verifyKwa = dict(kwa)
         # Pass selected evidence only to handlers that advertise support.
-        if getattr(behavior, "acceptsEvidence", False):
-            # Only an opted-in V2 behavior sees the post-KRAM evidence selected
-            # by its policy.  Legacy handlers retain their existing signatures.
-            verifyKwa["evidence"] = acceptedExtras
+        if acceptsEvidence:
+            # Keep signatures available through route-level authentication.
+            verifyKwa["evidence"] = (tsgs, cigars, sourceSeals)
         try:
             if verifier is not None and not verifier(serder=serder, **verifyKwa):
                 logger.error("exn event for route %s failed behavior verification. said=%s", route, serder.said)
@@ -776,7 +781,7 @@ class Exchanger:
 
         # Only behavior-approved non-sender endorsements enter this durable
         # reverse index; sender authentication and escrow evidence do not.
-        # Add one Grant SAID entry under each accepted grantor AID.
+        # Add one Grant SAID entry under each accepted endorser AID.
         for endorser in endorsers:
             self.hby.db.eidx.add(keys=(endorser,), val=exnDiger)
         if pdig:
