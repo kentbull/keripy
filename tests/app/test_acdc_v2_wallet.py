@@ -585,7 +585,7 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
                     origin = acdcmap(israid=issuer.pre, iseaid=holder.pre,
                         attribute={'d': '', 'purpose': 'independent edge schema'},
                         edge={'d': '', 'member': {'d': '', 'n': partial.said,
-                                                  'o': 'NI2I', 's': schema}})
+                                                  's': schema, 'o': 'NI2I'}})
                     artifacts = [signed(partial, issuer)]
                 plan = [[origin.schema if isinstance(origin.schema, str) else origin.schema['$id'], '/', []]]
                 if artifacts:
