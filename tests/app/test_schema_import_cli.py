@@ -68,11 +68,12 @@ def test_schema_import_preserves_keeper_aeid(tmp_path, seeder, encrypted):
         """Run installed schema import with passcode in the subprocess environment.
 
         passcode is a public fixture value. Return CompletedProcess with actual
-        exit/output; EOF stdin prevents an incorrect passcode from waiting for an
+        exit/output; --no-prompt rejects an incorrect passcode without an
         interactive retry. Process I/O and the ten-second timeout propagate.
         """
         return subprocess.run([sys.executable, '-m', 'keri.cli.kli', 'vc', 'schema',
-            'import_', '--name', name, '--base', base, '--schema', str(schema_file)],
+            'import_', '--name', name, '--base', base, '--schema', str(schema_file),
+            '--no-prompt'],
             env=dict(os.environ, KLI_KEYSTORE_PASSCODE=passcode),
             stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
 

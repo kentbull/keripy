@@ -1,5 +1,6 @@
 """Optional registry capabilities never gate ordinary retained credential use."""
 from contextlib import ExitStack
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,21 @@ from keri.kering import AuthError, ConfigurationError, ValidationError
 from keri.peer import Exchanger
 from tests.app.test_acdc_v2_wallet import (Notices, anchored, encrypted,
                                            receive, regery, signed)
+
+
+@pytest.mark.parametrize('platform', ['nt', 'posix'], ids=['non-posix', 'missing-primitives'])
+@pytest.mark.parametrize('operation, arguments', [
+    ('exportCustody', dict(regid='unused', path=object())),
+    ('importCustody', dict(path=object(), regid='unused', controller='', discloser='')),
+], ids=['export', 'import'])
+def test_protected_handoff_refuses_before_secret_or_file_access(monkeypatch, platform, operation, arguments):
+    """Unsupported handoff refuses before unusable owners or paths are inspected."""
+    from keri.app import registry_custody
+
+    monkeypatch.setattr(registry_custody, 'os', SimpleNamespace(name=platform))
+    custody = RegistryCustody(None, None, db=None)
+    with pytest.raises(ConfigurationError, match='requires POSIX file protections'):
+        getattr(custody, operation)(**arguments)
 
 
 @pytest.mark.parametrize('publicTail', [False, True])

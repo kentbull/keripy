@@ -558,6 +558,6 @@ def test_tever_reload(mockHelpingNowUTC, mockCoringRandomNonce, mockHelpingNowIs
         assert issuer.regk == 'EClqKVJREM3MWKBqR2j712s3Z6rPxhqO-h-p8Ls6_9hQ'
 
         rsr = regery.reger.states.get(keys=issuer.regk)
-        tever = Tever(rsr=rsr, reger=regery.reger)
+        tever = Tever(rsr=rsr, db=hby.db, reger=regery.reger)
         assert tever.regk == issuer.regk
         assert tever.pre == bobHab.pre

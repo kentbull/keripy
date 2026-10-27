@@ -61,6 +61,14 @@ def test_installed_witness_receipts_preserve_existing_protocol():
                 assert len(issuer.db.wigs.get((hab.pre, event.said))) == 1
                 assert SerderKERI(raw=receipt).pvrsn == version
         finally:
-            process.terminate()
+            protocol_failed = sys.exc_info()[0] is not None
+            terminated = process.poll() is None
+            if terminated:
+                process.terminate()
             output = process.communicate(timeout=5)[0]
-            assert process.returncode in (0, -15, -2), output.decode()
+            expected = (0, -15, -2)
+            if os.name == 'nt' and terminated:
+                # Windows terminate() requests TerminateProcess(..., 1).
+                expected += (1,)
+            if not protocol_failed:
+                assert process.returncode in expected, output.decode()

@@ -18,6 +18,13 @@ from keri.core import Blinder, Number, Prefixer, Salter
 from keri.kering import AuthError, ConfigurationError, ValidationError
 
 
+def _requirePosixHandoff():
+    """Require the existing protected plaintext file contract before secret access."""
+    if os.name != 'posix' or not all(hasattr(os, name) for name in
+            ('O_NOFOLLOW', 'O_NONBLOCK', 'fchmod', 'geteuid')):
+        raise ConfigurationError('protected plaintext custody handoff requires POSIX file protections')
+
+
 @dataclass
 class CustodyInfo:
     """Public registry/controller/discloser bindings and fixed derivation profile."""
@@ -267,7 +274,7 @@ class RegistryCustody:
                              acdc=credential, state=state, bound=bound, bsn=bsn, bd=bd)
 
     def exportCustody(self, regid, path):
-        """Create an owner-only plaintext operator handoff file, never overwrite it.
+        """Create a POSIX-only owner-only plaintext handoff file, never overwrite it.
 
         The operator transfers it over an authenticated private channel. This is
         an owner-only plaintext artifact, not an IPEX payload or a new wire protocol.
@@ -283,9 +290,10 @@ class RegistryCustody:
 
         Raises:
             AuthError: Existing custody cannot be authenticated/decrypted.
-            ConfigurationError: Capability is not provisioned.
+            ConfigurationError: POSIX protections are unavailable or capability is not provisioned.
             OSError: Safe exclusive creation, write, or durability operation fails.
         """
+        _requirePosixHandoff()
         secret = self._load(regid)
         path = Path(path)
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
@@ -301,7 +309,7 @@ class RegistryCustody:
         return path
 
     def importCustody(self, path, *, regid, controller, discloser, rewrap=False):
-        """Import a plaintext salt file; explicit rewrap can replace old-AEID custody.
+        """Import a POSIX-only plaintext salt file; explicit rewrap replaces old-AEID custody.
 
         Rewrap trusts the authenticated operator handoff, retains its original
         salt/profile, and encrypts it under the currently authenticated Keeper.
@@ -320,10 +328,12 @@ class RegistryCustody:
             CustodyInfo: Public metadata for the retained encrypted capability.
 
         Raises:
+            ConfigurationError: Required POSIX file protections are unavailable.
             AuthError: Keeper/AEID authentication or replacement authorization fails.
             ValidationError: File, profile, identity, registry, or local-role check fails.
             OSError: Protected file opening/reading fails, including symlinks.
         """
+        _requirePosixHandoff()
         if not isinstance(rewrap, bool):
             raise ValidationError('explicit rewrap must be a boolean')
         self._manager()

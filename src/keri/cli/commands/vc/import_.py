@@ -29,10 +29,10 @@ parser.add_argument('--base', '-b', help='additional optional prefix to file loc
                     required=False, default="")
 parser.add_argument('--passcode', '-p', help='21 character encryption passcode for keystore (is not saved)',
                     dest="bran", default=getenv('KLI_KEYSTORE_PASSCODE'))  # passcode => bran
-parser.add_argument("--file", help="Legacy CESR credential, or ACDC v2 plaintext per-registry salt file with owner-only permissions received through operator-arranged authenticated private transfer", required=True)
+parser.add_argument("--file", help="Legacy CESR credential, or POSIX-only ACDC v2 plaintext per-registry salt file with owner-only permissions received through operator-arranged authenticated private transfer", required=True)
 parser.add_argument("--said", "-s", help="SAID of the credential to expect.", required=False, default=None)
 acdc_v2.options(parser)
-parser.add_argument('--custody', action='store_true', help='import a plaintext per-registry salt file into encrypted local custody (requires --acdc-v2)')
+parser.add_argument('--custody', action='store_true', help='import a POSIX-only plaintext per-registry salt file into encrypted local custody (requires --acdc-v2)')
 parser.add_argument('--registry', default=None)
 parser.add_argument('--controller', default=None)
 parser.add_argument('--discloser', default=None)

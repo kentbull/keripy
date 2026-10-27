@@ -21,7 +21,7 @@ from keri.core import (Kramer, SerderKERI, Kevery, Pruner, Salter,
                        AuthTypes, exchange, exchept, reply, query, verifySigs)
 
 from keri.app import openHby, openCF
-from keri.db import openDB
+from keri.db import Baser, openDB
 from keri.peer import Exchanger
 from keri.recording import MsgCacheRecord, TxnMsgCacheRecord
 from keri.help import helping
@@ -809,6 +809,50 @@ def test_assk(mockHelpingNowUTC):
             assert cue['sn'] is None
 
     """Done Test"""
+
+
+def test_assk_loads_persisted_sender_state_on_first_query(tmp_path, mockHelpingNowUTC):
+    """KRAM loads an accepted sender KEL from disk before its first signed query."""
+    salt = Salter(raw=b'0123456789abcdef').qb64
+    name = "cold_receiver"
+
+    with openHby(name="cold_sender", base="test", salt=salt) as senderHby:
+        senderHab = senderHby.makeHab(
+            name="cold_sender", isith='1', icount=1,
+            transferable=True, version=V2, kind=Kinds.cesr)
+        db = Baser(name=name, headDirPath=str(tmp_path), reopen=True)
+        try:
+            crossKvy = Kevery(db=db, lax=False, local=False)
+            senderIcp = senderHab.msgOwnEvent(sn=0, framed=True, gvrsn=V2)
+            Parser(version=V2).parse(ims=bytearray(senderIcp), kvy=crossKvy)
+            assert senderHab.pre in crossKvy.kevers
+
+            db.close(clear=False)
+            db = Baser(name=name, headDirPath=str(tmp_path), reopen=True)
+            assert not dict.__contains__(db.kevers, senderHab.pre)
+
+            with openCF(name="kram_cold_start", base="test") as cf:
+                cf.put(KRAM_INTEGRATION_CONFIG)
+                kramer = Kramer(db=db, cf=cf)
+                kvy = Kevery(db=db, lax=False, local=False, kramer=kramer)
+                stamp = helping.nowIso8601()
+                msg = query(
+                    pre=senderHab.pre,
+                    route="ksn",
+                    query={"i": senderHab.pre, "src": senderHab.pre},
+                    stamp=stamp,
+                    pvrsn=V2,
+                )
+                sigers = senderHab.mgr.sign(
+                    ser=msg.raw, verfers=senderHab.kever.verfers, indexed=True)
+                kwa = {"serder": msg, "lsgs": [(Prefixer(qb64=senderHab.pre), sigers)]}
+
+                kvy.processMsg(kwa)
+
+                assert db.kramMSGC.get(keys=(senderHab.pre, msg.said)) is not None
+                assert kvy.cues.popleft()["kin"] == "reply"
+        finally:
+            db.close(clear=True)
 
 
 def test_asmk(mockHelpingNowUTC):
@@ -6223,7 +6267,7 @@ def test_kram_uses_persisted_sender_state_with_cold_cache(transactioned, thresho
                         stamp=helping.nowIso8601(), pvrsn=V2)
         sigers = hab.mgr.sign(ser=msg.raw, verfers=hab.kever.verfers, indexed=True)
         receiver.db.kevers.pop(hab.pre)
-        assert receiver.db.kevers.get(hab.pre) is None
+        assert not dict.__contains__(receiver.db.kevers, hab.pre)
         assert receiver.db.states.get(keys=hab.pre) is not None
         result = kramer.kramit(msg, dict(lsgs=[(Prefixer(qb64=hab.pre), sigers[:1])]))
         if threshold == 2:

@@ -4,6 +4,9 @@ import os
 import subprocess
 import sys
 import uuid
+from types import SimpleNamespace
+
+import pytest
 
 from keri.core import Blinder, BlindState
 
@@ -39,18 +42,8 @@ def invoke(name, *arguments, okay=True):
     return [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
 
 
-def test_public_kel_and_explicit_blind_commands(tmp_path):
-    """Exercise public evidence and explicit opening/custody capabilities through installed KLI.
-
-    Args:
-        tmp_path (Path): Exclusive bootstrap, KEL, proof, and private fixture-transfer
-        files owned by pytest; existing files must not be silently overwritten.
-
-    Returns:
-        None. Assertions cover signed endpoint/KEL import, accepted ACDC v2 issuance,
-        distinct later openings, real holder admission/inspection, absent derivation
-        capability, wrong-recipient import, and wrong-credential/state refusals.
-        Successful per-event opening output contains no registry salt."""
+def _public_blind_cli_case(tmp_path):
+    """Create actual signed public evidence and an admitted two-actor Grant."""
     alice, bob = 'alice-' + uuid.uuid4().hex, 'bob-' + uuid.uuid4().hex
     options = tmp_path / 'incept.json'
     options.write_text(json.dumps(dict(transferable=True, wits=[], toad=0,
@@ -113,8 +106,34 @@ def test_public_kel_and_explicit_blind_commands(tmp_path):
     opening_args = ('vc', 'registry', 'opening', '--registry', registry,
         '--from-grant', granted['exchange'], '-s', issued['credential'], '--ordinal', '2',
         '--output', str(held_opening))
+    return SimpleNamespace(alice=alice, bob=bob, aid=aid, bob_aid=bob_aid, registry=registry,
+                           granted=granted,
+                           initial=initial, latest=latest, current=current,
+                           held_opening=held_opening, opening_args=opening_args)
+
+
+def test_public_kel_and_explicit_blind_commands(tmp_path):
+    """Public evidence and exact Grant binding checks do not require salt handoff."""
+    case = _public_blind_cli_case(tmp_path)
+    bob, registry, initial, granted = case.bob, case.registry, case.initial, case.granted
+    opening_args, held_opening = case.opening_args, case.held_opening
     invoke(bob, *opening_args, okay=False)
     assert not held_opening.exists()
+    wrong_credential = tmp_path / 'wrong-credential.opening'
+    refusal = invoke(bob, 'vc', 'registry', 'opening', '--registry', registry,
+        '--from-grant', granted['exchange'], '-s', initial['opening'], '--ordinal', '2',
+        '--output', str(wrong_credential), okay=False)
+    assert 'admitted grant does not bind the requested credential' in refusal
+    assert not wrong_credential.exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
+def test_holder_opening_after_protected_custody_handoff(tmp_path):
+    """Only the designated recipient can import protected custody and derive the same opening."""
+    case = _public_blind_cli_case(tmp_path)
+    alice, bob, aid, bob_aid = case.alice, case.bob, case.aid, case.bob_aid
+    registry, latest, current = case.registry, case.latest, case.current
+    opening_args, held_opening = case.opening_args, case.held_opening
     private = tmp_path / 'custody.json'
     invoke(alice, 'vc', 'export', '--acdc-v2', '-a', 'self', '-r', 'r', '--custody', '--output', str(private))
     invoke(bob, 'vc', 'import', '--acdc-v2', '--custody', '--registry', registry,
@@ -124,11 +143,6 @@ def test_public_kel_and_explicit_blind_commands(tmp_path):
         '--controller', aid, '--discloser', bob_aid, '--file', str(private))
     derived = invoke(bob, *opening_args)[0]
     assert derived['opening'] == latest['opening'] and held_opening.read_bytes() == current.read_bytes()
-    wrong_credential = tmp_path / 'wrong-credential.opening'
-    invoke(bob, 'vc', 'registry', 'opening', '--registry', registry,
-        '--from-grant', granted['exchange'], '-s', initial['opening'], '--ordinal', '2',
-        '--output', str(wrong_credential), okay=False)
-    assert not wrong_credential.exists()
 
 
 def test_unencrypted_kel_operations_ignore_environment_passcode(tmp_path):

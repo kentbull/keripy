@@ -10,7 +10,7 @@ import pysodium
 import pytest
 
 from keri import Kinds, Vrsn_1_0, Vrsn_2_0
-from keri.kering import MissingSignatureError
+from keri.kering import MissingSignatureError, ValidationError
 from keri.core import (Salter, Counter, Dater, Texter, Pather, Kevery, Kramer,
                        Diger, Prefixer, Number, Verser, Noncer, Labeler,
                        SealEvent, SealSource, SealKind, TypeMedia, Mediar,
@@ -163,6 +163,27 @@ def test_v1_handler_does_not_receive_sender_source_couples():
         assert exc.processEvent(serder=serder, tsgs=tsgs, sscs=sscs) is True
         assert handler.verified is True
         assert handler.handled is True
+
+
+def test_v1_source_couples_reject_non_prefix_sender():
+    """A valid CESR salt in a V1 sender field is a typed intake rejection."""
+    with openHby(name="invalid-source-sender", base="test") as hby:
+        hab = hby.makeHab(name="sender", version=Vrsn_1_0)
+        exn = exchange(sender=Salter(raw=b'0123456789abcdef').qb64,
+                       route="/test/invalid-source-sender",
+                       attributes={},
+                       pvrsn=Vrsn_1_0,
+                       gvrsn=Vrsn_1_0,
+                       kind=Kinds.json)
+        serder = SerderKERI(raw=exn.raw)
+        sscs = [(Number(sn=hab.kever.sn), Diger(qb64=hab.kever.serder.said))]
+        exc = Exchanger(hby=hby, handlers=[])
+
+        with pytest.raises(ValidationError, match="Invalid exchange sender prefix"):
+            exc.processEvent(serder=serder, sscs=sscs)
+
+        assert hby.db.exns.get(keys=(serder.said,)) is None
+        assert not exc.cues
 
 
 def test_hab_exchange(mockHelpingNowUTC):
