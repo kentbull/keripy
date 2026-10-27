@@ -501,7 +501,7 @@ class EdgeEvaluator:
                 elif not isinstance(schema, Mapping):
                     return None
                 if isinstance(schema, Mapping):
-                    scheming._verifySchemer(schema, kind=schemaKind)
+                    scheming._checkProfile(scheming._verifySchemer(schema, kind=schemaKind))
             except (KeriError, ValueError, TypeError):
                 return None
             try:

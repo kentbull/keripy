@@ -413,7 +413,8 @@ def test_malformed_schema_pin_cannot_be_inverted(graph):
         None. Assertions check the stated evidence boundary."""
     _, issuer, _, handler = graph
     far = credential(issuer.pre)
-    for pin in (None, 'not-a-said', 5, {'$id': 'not-a-said'}):
+    invalid = Schemer(sed={'$id': '', 'version': 'invalid-version', 'type': 'object'})
+    for pin in (None, 'not-a-said', 5, {'$id': 'not-a-said'}, invalid.sed):
         group = dict(o='NOR', proof=dict(n=far.said, s=pin))
         assert handler._evaluateGroupEdge(group, nodes={far.said: {'serder': far}},
             nserder=far, nested=False) is None
