@@ -1,4 +1,4 @@
-"""Query an observer and verify its exact registry proof without claiming freshness."""
+"""Query an observer and verify its exact registry proof with optional authenticated-source freshness."""
 import argparse
 from ....common import Parsery, public_evidence
 
@@ -8,4 +8,5 @@ parser.add_argument('--endpoint', required=True)
 parser.add_argument('--registry', required=True)
 parser.add_argument('--output', required=True)
 parser.add_argument('--timeout', type=float, default=10.0)
+public_evidence.observerOptions(parser)
 parser.set_defaults(handler=lambda args: [public_evidence.Request(args, 'query')])

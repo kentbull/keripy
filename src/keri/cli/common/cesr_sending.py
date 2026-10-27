@@ -9,7 +9,7 @@ from keri.app.httping import CESR_CONTENT_TYPE
 from keri.kering import ConfigurationError
 
 
-def send(doer, url, body, timeout):
+def send(doer, url, body, timeout, *, cafilepath=None, certedhost=None, redirectable=True):
     """Transmit exact CESR bytes through bounded cooperatively scheduled transport.
 
     Args:
@@ -17,6 +17,8 @@ def send(doer, url, body, timeout):
         url (str): HTTP(S) intake or raw TCP host with an explicit port.
         body (bytes): Complete preselected stream; this helper does not authenticate it.
         timeout (float): Positive finite injected-clock duration validated by the caller.
+        cafilepath, certedhost: Optional HIO TLS trust for this HTTP(S) request.
+        redirectable (bool): Existing HTTP redirect behavior; False refuses redirects.
 
     Yields:
         float: Caller tock while connection/send or HTTP response remains pending.
@@ -63,7 +65,8 @@ def send(doer, url, body, timeout):
             or target.username or target.password or target.fragment):
         raise ConfigurationError('an HTTP(S) or TCP endpoint is required')
     client = http.clienting.Client(scheme=target.scheme, hostname=target.hostname,
-        port=target.port or (443 if target.scheme == 'https' else 80))
+        port=target.port or (443 if target.scheme == 'https' else 80),
+        cafilepath=cafilepath, certedhost=certedhost, redirectable=redirectable)
     owner = http.clienting.ClientDoer(client=client)
     doer.extend([owner])
     try:

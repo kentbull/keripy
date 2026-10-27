@@ -25,7 +25,7 @@ from keri.kering import ConfigurationError, MissingChainError, MissingSchemaErro
 from keri.peer import exchanging
 from keri.db import openLMDB
 from keri.cli.common import acdc_v2, cesr_sending
-from keri.cli.common.public_evidence import verifiedRegistryResponse
+from keri.cli.common.public_evidence import ObserverPolicy, observerOptions, verifiedRegistryResponse
 
 
 class Notices:
@@ -115,10 +115,12 @@ def options(parser, *, send=False):
     parser is mutated in place and returns no result. send additionally exposes
     an explicit HTTP(S)/TCP endpoint. ACDC v2 selection remains opt-in; observer
     synchronization, public file handoff, and group proposals are explicit inputs,
-    not switches that disable core verification."""
+    not switches that disable core verification. For receive, observation freshness
+    controls apply to initial synchronization, not continuous intake monitoring."""
     acdc_v2.options(parser)
     parser.add_argument('--input', help='receive signed CESR evidence before this operation')
     parser.add_argument('--observer', help='configured ACDC v2 observer URL')
+    observerOptions(parser)
     parser.add_argument('--registry', action='append', default=[], help='registry SAID to synchronize from observer')
     parser.add_argument('--output', help='create a CESR message file without overwriting')
     parser.add_argument('--timeout', type=float, default=10.0)
@@ -142,14 +144,15 @@ class ExchangeDoer(doing.DoDoer):
         self.args, self.verb = args, verb
         super().__init__(doers=[doing.doify(self.run)])
 
-    def request(self, url, body):
+    def request(self, url, body, *, cafilepath=None, certedhost=None, redirectable=True):
         """Yield through bounded direct delivery of exact CESR body bytes to url.
 
         Use this command's timeout and child ownership. Return the checked HTTP
         response or a TCP send-buffer marker; neither is authenticated receiver
         acceptance. Network, timeout, and invalid-endpoint errors propagate after
         shared transport cleanup."""
-        return (yield from cesr_sending.send(self, url, body, self.args.timeout))
+        return (yield from cesr_sending.send(self, url, body, self.args.timeout,
+            cafilepath=cafilepath, certedhost=certedhost, redirectable=redirectable))
 
     def run(self, tymth, tock=0.03125, **kwa):
         """Execute one IPEX verb or serve intake with explicit capability owners.
@@ -165,6 +168,8 @@ class ExchangeDoer(doing.DoDoer):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
+        policy = ObserverPolicy.fromArgs(args, args.observer if args.registry else None)
+        observations = []
         derives = getattr(args, 'derive', False)
         with (acdc_v2.opened(args, custody=derives) as (hby, rgy, wallet),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections,
@@ -198,9 +203,13 @@ class ExchangeDoer(doing.DoDoer):
                     raise ConfigurationError('--registry synchronization requires --observer')
                 if urlsplit(args.observer).scheme not in ('http', 'https'):
                     raise ConfigurationError('observer queries require an HTTP(S) endpoint')
-                response = yield from self.request(args.observer, signedQuery(hab, 'tels', {'i': regid}))
-                verifiedRegistryResponse(peer.evidence, regid, response)
+                response = yield from self.request(args.observer, signedQuery(hab, 'tels', {'i': regid}),
+                                                   **policy.clientOptions())
+                head = verifiedRegistryResponse(peer.evidence, regid, response)
+                if (stamp := policy.observedAt(response)) is not None:
+                    observations.append((regid, head.said, stamp))
                 peer.process()
+            policy.recheck(peer.evidence, observations)
             if self.verb == 'receive':
                 app = falcon.App()
                 intake = Intake(peer)
@@ -325,6 +334,7 @@ class ExchangeDoer(doing.DoDoer):
                 peer.ingest(raw)
             if not peer.exc.complete(exn.said):
                 raise ConfigurationError('locally authored IPEX message is pending verification')
+            policy.recheck(peer.evidence, observations)
             if self.verb == 'admit':
                 wallet.recordAdmission(args.said, exn.said, consent=True)
             if args.output:
