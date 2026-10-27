@@ -47,6 +47,7 @@ def handler(args):
     from that worker; selecting rejection does not admit a credential."""
     if args.acdc_v2:
         return [acdc_v2_ipex.ExchangeDoer(args, 'spurn')]
+    acdc_v2_ipex.ObserverPolicy.fromArgs(args, None)
     ed = SpurnDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,

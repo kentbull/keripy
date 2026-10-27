@@ -15,7 +15,7 @@ from keri import Vrsn_1_0
 from keri.app import GroupHab, Notifier, StreamPoster, serialize
 from keri.app.keeping import Keeper
 from keri.app.notifying import Noter
-from keri.cli.common import setupHby, cesr_sending
+from keri.cli.common import setupHby, cesr_sending, public_evidence
 from keri.core import Kevery, Parser, SerderKERI, SerderACDC
 from keri.kering import ConfigurationError
 from keri.peer import exchanging
@@ -90,6 +90,7 @@ class Negotiation(doing.DoDoer):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
+        public_evidence.ObserverPolicy.fromArgs(args, None)
         unsupported = ('plan', 'observer', 'registry', 'proposal', 'proposal_output',
                        'from_grant', 'disclose')
         if self.verb != 'admit' and args.time:
