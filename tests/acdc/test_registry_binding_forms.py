@@ -1,4 +1,4 @@
-"""Protected issuer registry declarations and explicit one-way TEL references."""
+"""Generic TEL bindings and the narrower IPEX issuer-authentication profile."""
 from types import SimpleNamespace
 
 import pytest
@@ -7,7 +7,7 @@ from keri import Vrsn_2_0
 from keri.acdc import messaging, ipexing, regeventing
 from keri.acdc.regbasing import RegBaser
 from keri.app import openHby
-from keri.core import Blinder, Diger, Parser, Kevery, SealEvent, messagize
+from keri.core import Blinder, Diger, Number, Parser, Kevery, SealEvent, messagize
 from keri.db import openLMDB
 from keri.kering import MisbindingError
 from keri.peer import Exchanger
@@ -25,12 +25,12 @@ class Notices:
         pass
 
 
-@pytest.mark.parametrize('form', ['attribute', 'aggregate', 'oneway'])
+@pytest.mark.parametrize('form', ['top-level', 'attribute', 'aggregate', 'oneway'])
 def test_issuer_registry_forms_use_actual_anchored_tel(form):
-    """Authenticate protected attribute/aggregate or explicit one-way issuer registries; refuse wrong source digest, ordinal, and target.
+    """Vet generic TEL forms while IPEX selects only a top-level issuer rd.
 
     Parameters:
-        form: Protected attribute, protected aggregate, or explicit one-way binding form.
+        form: Top-level, protected attribute/aggregate, or one-way binding form.
 
     Returns:
         None. Assertions check the stated evidence boundary."""
@@ -42,11 +42,12 @@ def test_issuer_registry_forms_use_actual_anchored_tel(form):
         rip = messaging.regcept(israid=issuer.pre)
         issuer.interact(data=[dict(s='0', d=rip.said)], gvrsn=Vrsn_2_0)
         attributes = dict(d='', i=recipient.pre, status='issued')
-        if form != 'oneway':
+        if form in ('attribute', 'aggregate'):
             attributes['rd'] = rip.said
         credential = (messaging.acdcagg(israid=issuer.pre, aggregate=['', attributes])
                       if form == 'aggregate' else
-                      messaging.acdcmap(israid=issuer.pre, attribute=attributes))
+                      messaging.acdcmap(israid=issuer.pre, attribute=attributes,
+                          regid=rip.said if form == 'top-level' else None))
         opening = Blinder.blind(acdc=credential.said, state='issued')
         issued = messaging.blindate(rip.said, rip.said, opening.said)
         issuer.interact(data=[dict(s='1', d=issued.said)], gvrsn=Vrsn_2_0)
@@ -59,6 +60,28 @@ def test_issuer_registry_forms_use_actual_anchored_tel(form):
         record = regeventing.vet(rip, [issued], db=receiver.db,
                                  acdc=credential, blinder=opening)
         assert record.binding == ('oneway' if form == 'oneway' else 'mutual')
+        assert regeventing.vetBindings(credential, regid=rip.said,
+            issuer=issuer.pre, td=credential.said) == record.binding
+        with pytest.raises(MisbindingError):
+            regeventing.vetBindings(credential, regid=rip.said,
+                issuer=issuer.pre, td=Diger(ser=b'other credential').qb64)
+        if form != 'oneway':
+            with pytest.raises(MisbindingError):
+                regeventing.vetBindings(credential, regid=Diger(ser=b'substitute').qb64,
+                                        issuer=issuer.pre, td=credential.said)
+
+        if form == 'top-level':
+            # Explicit source couples belong to the shared anchor verifier. The
+            # general vetAnchor source argument is only a lookup hint, not a claim.
+            source = dict(db=receiver.db, issuer=issuer.pre,
+                          number=Number(num=issuer.kever.sn),
+                          diger=Diger(qb64=issuer.kever.serder.said))
+            assert regeventing._verifyAnchorCouple(issued, **source)
+            assert not regeventing._verifyAnchorCouple(issued,
+                **dict(source, diger=Diger(ser=b'wrong')))
+            assert not regeventing._verifyAnchorCouple(issued,
+                **dict(source, number=Number(num=issuer.kever.sn - 1)))
+
         exc = Exchanger(receiver, handlers=[])
         ipexing.loadHandlers(receiver, exc, Notices(), SimpleNamespace(store=rever.store))
         bonds = [opening.data]
@@ -67,21 +90,21 @@ def test_issuer_registry_forms_use_actual_anchored_tel(form):
         exn, atc = ipexing.grant(issuer, recipient.pre, 'protected registry',
             origin=messagize(credential, bonds=bonds, gvrsn=Vrsn_2_0))
         Parser(kvy=kvy, exc=exc, version=Vrsn_2_0).parse(ims=bytearray(exn.raw + atc))
-        assert exc.complete(exn.said)
-        assert ipexing.IpexHandler._presentationRegistries(credential) == []
+        if form == 'top-level':
+            # The supported IPEX form authenticates against the actual TEL.
+            assert exc.complete(exn.said)
+        else:
+            # Generic inner/one-way TEL support does not select an IPEX issuer
+            # factor. Aggregate rd is application data; it needs issuer auth.
+            assert not exc.complete(exn.said)
+            assert receiver.db.exns.get(keys=(exn.said,)) is None
+        assert receiver.db.epse.get(keys=(exn.said,)) is None
+        assert [cue for cue in exc.cues if cue['kin'] == 'proof'] == []
+        assert ipexing.IpexHandler._presentationRegistries(credential) == (
+            None if form == 'attribute' else [])
         if form == 'oneway':
-            # A real registry identity with a false TEL-event digest cannot be
-            # treated as an unsigned hint or silently replaced by cached state.
-            bad, batc = ipexing.grant(issuer, recipient.pre, 'wrong reference',
-                origin=messagize(credential, bonds=[opening.data,
-                    SealEvent(i=rip.said, s='1', d=Diger(ser=b'wrong').qb64)], gvrsn=Vrsn_2_0))
-            Parser(kvy=kvy, exc=exc, version=Vrsn_2_0).parse(ims=bytearray(bad.raw + batc))
-            assert not exc.complete(bad.said)
-            wrong, watc = ipexing.grant(issuer, recipient.pre, 'inception is not issuance',
-                origin=messagize(credential, bonds=[opening.data,
-                    SealEvent(i=rip.said, s='0', d=rip.said)], gvrsn=Vrsn_2_0))
-            Parser(kvy=kvy, exc=exc, version=Vrsn_2_0).parse(ims=bytearray(wrong.raw + watc))
-            assert not exc.complete(wrong.said)
+            # Preserve generic one-way binding checks against genuine accepted
+            # later TEL states, independently of IPEX's narrower wire profile.
             otherOpening = Blinder.blind(
                 acdc=Diger(ser=b'other credential').qb64, state='issued')
             other = messaging.blindate(rip.said, issued.said,
@@ -94,12 +117,10 @@ def test_issuer_registry_forms_use_actual_anchored_tel(form):
             parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0)))
             assert rever.processEvent(other)
             assert rever.processEvent(current)
-            wrong, watc = ipexing.grant(issuer, recipient.pre, 'wrong accepted target',
-                origin=messagize(credential, bonds=[otherOpening.data,
-                    SealEvent(i=rip.said, s='2', d=other.said)], gvrsn=Vrsn_2_0))
-            Parser(kvy=kvy, exc=exc, version=Vrsn_2_0).parse(ims=bytearray(wrong.raw + watc))
-            assert not exc.complete(wrong.said)
-        else:
             with pytest.raises(MisbindingError):
-                regeventing.vetBindings(credential, regid=Diger(ser=b'substitute').qb64,
-                                        issuer=issuer.pre, td=credential.said)
+                regeventing.vet(rip, [issued, other], db=receiver.db,
+                                acdc=credential, blinder=otherOpening)
+            currentRecord = regeventing.vet(rip, [issued, other, current],
+                db=receiver.db, acdc=credential, blinder=currentOpening)
+            assert currentRecord.said == current.said
+            assert currentRecord.binding == 'oneway'
