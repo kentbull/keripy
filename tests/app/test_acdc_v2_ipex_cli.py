@@ -67,16 +67,7 @@ def _negotiated_cli_case(tmp_path):
         '--said', said, '--full', '--derive', '--output', str(evidence))
     credential = SerderACDC(raw=credentialFile.read_bytes())
     plan = json.dumps([[credential.schema['$id'], '/', ['a/status']]])
-    application = tmp_path / 'apply.cesr'
-    app = invoke(names['holder'], 'ipex', 'apply', '--acdc-v2', '-a', 'holder',
-        '-r', prefixes['issuer'], '--plan', plan, '--output', str(application))[0]
-    offered = tmp_path / 'offer.cesr'
-    offer = invoke(names['issuer'], 'ipex', 'offer', '--acdc-v2', '-a', 'issuer',
-        '-r', prefixes['holder'], '-s', said, '--prior', app['exchange'],
-        '--input', str(application), '--output', str(offered))[0]
-    agreement = tmp_path / 'agree.cesr'
-    agree = invoke(names['holder'], 'ipex', 'agree', '--acdc-v2', '-a', 'holder',
-        '-s', offer['exchange'], '--input', str(offered), '--output', str(agreement))[0]
+    # Prepare capabilities before the freshness-sensitive signed negotiation.
     granted = tmp_path / 'grant.cesr'
     implicit = subprocess.run([sys.executable, '-m', 'keri.cli.kli', 'ipex', 'grant',
         '--acdc-v2', '-a', 'issuer', '-r', prefixes['holder'], '-s', said,
@@ -90,6 +81,16 @@ def _negotiated_cli_case(tmp_path):
     originalOpening = tmp_path / 'original-opening.cesr'
     invoke(names['issuer'], 'vc', 'registry', 'opening', '-r', 'r', '-s', said,
            '--ordinal', '1', '--output', str(originalOpening))
+    application = tmp_path / 'apply.cesr'
+    app = invoke(names['holder'], 'ipex', 'apply', '--acdc-v2', '-a', 'holder',
+        '-r', prefixes['issuer'], '--plan', plan, '--output', str(application))[0]
+    offered = tmp_path / 'offer.cesr'
+    offer = invoke(names['issuer'], 'ipex', 'offer', '--acdc-v2', '-a', 'issuer',
+        '-r', prefixes['holder'], '-s', said, '--prior', app['exchange'],
+        '--input', str(application), '--output', str(offered))[0]
+    agreement = tmp_path / 'agree.cesr'
+    agree = invoke(names['holder'], 'ipex', 'agree', '--acdc-v2', '-a', 'holder',
+        '-s', offer['exchange'], '--input', str(offered), '--output', str(agreement))[0]
     grant = invoke(names['issuer'], 'ipex', 'grant', '--acdc-v2', '-a', 'issuer',
         '-r', prefixes['holder'], '-s', said, '--opening', str(originalOpening), '--prior', agree['exchange'],
         '--input', str(agreement), '--output', str(granted))[0]
