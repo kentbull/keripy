@@ -14,6 +14,7 @@ from hio.help import ogler
 
 from ...common import (Parsery, Colors, Symbols,
                        setupHby, aliasInput)
+from ...common import acdc_v2
 
 from ....kering import ConfigurationError
 from ....app import MailboxDirector
@@ -37,12 +38,18 @@ parser.add_argument("--said", "-s", help="Display only the SAID of found credent
                     action="store_true")
 parser.add_argument("--schema", help="Display only credentials with the given schema SAID.",
                     action="store", default=None)
+acdc_v2.options(parser)
 
 
 def list_credentials(args):
-    """ Command line list credential registries handler
+    """Return ACDC v2 inventory read work or the existing legacy listing worker.
 
-    """
+    args selects identity, optional owner/schema filters, issued/held inventory,
+    and output verbosity. ACDC v2 listing reads retained references without custody
+    or automatic admission; unopened blinded standing may remain unknown. Return
+    scheduled Doers; filtering/authentication errors propagate during their work."""
+    if getattr(args, 'acdc_v2', False):
+        return acdc_v2.read(args, 'inventory')
     ld = ListDoer(name=args.name,
                   alias=args.alias,
                   base=args.base,

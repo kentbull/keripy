@@ -168,7 +168,12 @@ class Serdery:
             fixed (bool): when CESR native message.
                                True means top-level fixed field
                                False means top-level field map
-        """
+
+        Framing boundary:
+            Native field-map inspection advances past the complete variable-size label
+            primitive (fullSize), then reads its version value. Extraction consumes the
+            selected message bytes; incomplete primitives raise ShortageError and invalid
+            protocol/version/framing raises the existing extraction/validation errors."""
         if ctr:  # parser sniffed and peekd so native and assigned ctr, size, fixed
             # parser already peeked to see .FixBodyGroup or .MapBodyGroup so
             # know it's native and assigned ctr, size, and fixed
@@ -183,7 +188,7 @@ class Serdery:
             lsize = 0  # label size in bytes
             if not fixed:  # extract label for version field
                 labeler = Labeler(qb64b=ims[ctr.fullSize:])  # offset past ctr
-                lsize = labeler.fullsize
+                lsize = labeler.fullSize
 
             verser = Verser(qb64b=ims[ctr.fullSize+lsize:])  # in text domain
             proto, pvrsn, gvrsn = verser.versage
@@ -2896,7 +2901,15 @@ class SerderACDC(Serder):
 
         Raises a ValidationError (or subclass) if any verification fails
 
-        """
+        Args:
+            **kwa: Compatibility verification options; this protocol override uses none.
+
+        Returns:
+            None on success. Every expanded v2 s/a/A/e/r section must reproduce the
+            commitment of exactly its exposed nodes. Compact fields are not resolved.
+
+        Verification compares a recomputed copy rather than rewriting received bytes;
+        section validity alone authenticates neither the issuer nor registry standing."""
         #super(SerderACDC, self)._verify(**kwa)
         sad, saids = self._validate()
 
@@ -2932,6 +2945,12 @@ class SerderACDC(Serder):
         if self.gvrsn != gvrsn:
             raise ValidationError(f"Inconsistent genus version={self.gvrsn} from"
                                   f" deversify of sad.")
+        if self.pvrsn.major >= 2:
+            for label in ('s', 'a', 'A', 'e', 'r'):
+                if value := self.sad.get(label):
+                    if isinstance(value, (Mapping, list)):
+                        if self.saidifySection(value, label, self.kind) != value:
+                            raise ValidationError(f"Invalid disclosed {label} section commitment")
         # verified successfully since no exception
 
         if (not self.ilk or self.ilk in
@@ -2945,6 +2964,35 @@ class SerderACDC(Serder):
 
             if code not in PreDex:
                 raise ValidationError(f"Invalid issuer AID code = {code}.")
+
+    @staticmethod
+    def saidifySection(value, label, kind):
+        """Compute section commitments while retaining exactly its exposed nodes.
+
+        Builders use this to author valid section values; verification compares
+        the result with received values without rewriting authenticated bytes.
+
+        Args:
+            value: Compact primitive or expanded section mapping/aggregate list.
+            label (str): Normative field selecting schema $id, map d, or aggregate AGID.
+            kind (str): Serialization kind used to recompute commitments.
+
+        Returns:
+            object: Value with commitments calculated over the same exposed nodes;
+            compact/nonmapping values pass through unchanged.
+
+        Raises:
+            ValidationError, ValueError: Unsupported section content or encoding fails
+            the existing Compactor/Aggor construction checks."""
+        if label == 'A' and isinstance(value, list):
+            return Aggor(ael=value, makify=True, kind=kind).ael
+        if not isinstance(value, Mapping) or not value:
+            return value
+        if label == 's':
+            return Compactor(mad=value, makify=True, strict=False,
+                             saids={'$id': 'E'}, kind=kind).mad
+        section = Compactor(mad=value, makify=True, compactify=True, kind=kind)
+        return list(section.partials.values())[-1].mad if section.partials else section.mad
 
 
 

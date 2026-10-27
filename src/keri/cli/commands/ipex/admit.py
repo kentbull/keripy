@@ -4,6 +4,7 @@ keri.app.cli.commands module
 
 """
 import argparse
+from ...common import acdc_v2_ipex, legacy_negotiation
 
 from hio.base import doing
 
@@ -36,7 +37,22 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
 parser.add_argument("--time", help="timestamp", required=False, default=None)
 
 
+acdc_v2_ipex.options(parser, send=True)
+
 def handler(args):
+    """Select explicit ACDC v2 IPEX admission or the established legacy admit worker.
+
+    args supplies the local identity, retained grant SAID, message, and timestamp.
+    Return lifecycle Doers; ACDC v2 IPEX admission revalidates the accepted grant before
+    recording explicit wallet consent. Core/authentication errors propagate during
+    scheduled work. Omitting --acdc-v2 keeps legacy protocol behavior. Explicit
+    input/output/endpoint selects the bounded individual direct adapter; the
+    existing mailbox/group worker remains the default otherwise."""
+    if args.acdc_v2:
+        return [acdc_v2_ipex.ExchangeDoer(args, 'admit')]
+    acdc_v2_ipex.ObserverPolicy.fromArgs(args, None)
+    if args.input or args.output or args.endpoint:
+        return [legacy_negotiation.Negotiation(args, 'admit')]
     ed = AdmitDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,

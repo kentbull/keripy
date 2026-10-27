@@ -140,6 +140,7 @@ class Exchanger:
         behavior = self.routes[route] if route in self.routes else None
         # Read the route's optional evidence-selection hook.
         evidenceVerifier = getattr(behavior, "verifyEvidence", None)
+        acceptsEvidence = getattr(behavior, "acceptsEvidence", False)
         # Read whether unresolved extras may be dropped after querying.
         acceptsMissingEvidence = getattr(behavior, "acceptsMissingEvidence", False)
         tsgs = list(tsgs or [])
@@ -171,8 +172,13 @@ class Exchanger:
 
         # A seal couple implies the sender AID. Store both attachment forms as
         # an explicit sealing AID and historical event reference.
-        sourceSeals = [(Prefixer(qb64=sender), number, diger)
-                       for number, diger in sscs]
+        sourceSeals = []
+        for number, diger in sscs:
+            try:
+                prefixer = Prefixer(qb64=sender)
+            except Exception as ex:
+                raise ValidationError(f"Invalid exchange sender prefix = {sender}.") from ex
+            sourceSeals.append((prefixer, number, diger))
         sourceSeals.extend(ssts)
 
         senderTsgs = [tsg for tsg in tsgs if tsg[0].qb64 == sender]
@@ -383,10 +389,9 @@ class Exchanger:
         # Isolate verification-only arguments from handler arguments.
         verifyKwa = dict(kwa)
         # Pass selected evidence only to handlers that advertise support.
-        if getattr(behavior, "acceptsEvidence", False):
-            # Only an opted-in V2 behavior sees the post-KRAM evidence selected
-            # by its policy.  Legacy handlers retain their existing signatures.
-            verifyKwa["evidence"] = acceptedExtras
+        if acceptsEvidence:
+            # Keep signatures available through route-level authentication.
+            verifyKwa["evidence"] = (tsgs, cigars, sourceSeals)
         try:
             if verifier is not None and not verifier(serder=serder, **verifyKwa):
                 logger.error("exn event for route %s failed behavior verification. said=%s", route, serder.said)
@@ -711,6 +716,27 @@ class Exchanger:
 
     def logEvent(self, serder, pathed=None, tsgs=None, cigars=None, essrs=None,
                  sourceSeals=None, nests=None, endorsers=None):
+        """Persist a route-accepted exchange and its verified authentication evidence.
+
+        Args:
+            serder (Serder): Sender-authenticated body already accepted by the route flow.
+            pathed (Iterable | None): Exact legacy embedded attachment paths.
+            tsgs (Iterable | None): Verified transferable signature groups to accumulate.
+            cigars (Iterable | None): Verified nontransferable signatures to accumulate.
+            essrs (Iterable | None): Encrypted peer payload fragments to retain.
+            sourceSeals (Iterable | None): Verified explicit KEL anchor triples.
+            nests (Iterable | None): Exact parsed native nested disclosure streams.
+            endorsers (Iterable[str] | None): Behavior-approved non-sender AIDs for the
+            accepted-endorsement reverse index, excluding escrow-only evidence.
+
+        Returns:
+            None. Updates body/authentication storage and the prior-response index.
+
+        One accepted exchange SAID retains its first disclosed paths/nests. A replay may
+        add authentication evidence but cannot replace that view with a fuller one.
+        Transitioning from escrow first discards provisional attachments, then stores the
+        accepted set. Storage/serialization failures propagate; this method is not a
+        standalone semantic verifier or an atomic transaction across every EXN table."""
         dig = serder.said
         pdig = serder.ked['p']
         pathed = pathed or []
@@ -739,10 +765,14 @@ class Exchanger:
             self.hby.db.ecigs.add(keys=(dig,), val=(cigar.verfer, cigar))
 
         exnDiger = Diger(qb64=serder.said)
-        self.hby.db.epath.pin(keys=(dig,), vals=[bytes(p) for p in pathed])
-        if nests:
-            self.hby.db.enst.pin(keys=(dig,),
-                                 vals=[bytes(serializeParsedSubstream(nest)) for nest in nests])
+        # One accepted grant identifies one retained disclosure. Supplemental
+        # authentication may accumulate, but a replay must not replace its
+        # credential view. A fuller disclosure uses a distinct grant SAID.
+        if self.hby.db.exns.get(keys=(dig,)) is None:
+            self.hby.db.epath.pin(keys=(dig,), vals=[bytes(p) for p in pathed])
+            if nests:
+                self.hby.db.enst.pin(keys=(dig,),
+                                     vals=[bytes(serializeParsedSubstream(nest)) for nest in nests])
         for texter in essrs:
             self.hby.db.essrs.add(keys=(dig,), val=texter)
         for prefixer, number, diger in sourceSeals:
@@ -751,7 +781,7 @@ class Exchanger:
 
         # Only behavior-approved non-sender endorsements enter this durable
         # reverse index; sender authentication and escrow evidence do not.
-        # Add one Grant SAID entry under each accepted grantor AID.
+        # Add one Grant SAID entry under each accepted endorser AID.
         for endorser in endorsers:
             self.hby.db.eidx.add(keys=(endorser,), val=exnDiger)
         if pdig:

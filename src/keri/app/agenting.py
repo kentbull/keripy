@@ -87,67 +87,96 @@ class Receiptor(doing.DoDoer):
 
         clients = dict()
         doers = []
-        for wit in wits:
-            try:
-                client, clientDoer = httpClient(hab, wit)
-                clients[wit] = client
-                doers.append(clientDoer)
-                self.extend([clientDoer])
-            except (MissingEntryError, gaierror) as e:
-                logger.error(f"unable to create http client for witness {wit}: {e}")
+        try:
+            for wit in wits:
+                try:
+                    client, clientDoer = httpClient(hab, wit)
+                    clients[wit] = client
+                    doers.append(clientDoer)
+                    self.extend([clientDoer])
+                except (MissingEntryError, gaierror) as e:
+                    logger.error(f"unable to create http client for witness {wit}: {e}")
 
-        # send to each witness and gather receipts
-        rcts = dict()
-        for wit, client in clients.items():
-            headers = dict()
-            if wit in auths:
-                headers["Authorization"] = auths[wit]
+            rcts = yield from self._collectReceipts(hab, clients, msg, auths)
 
-            streamCESRRequests(client=client, dest=wit, ims=bytearray(msg), path="/receipts", headers=headers)
-            while not client.responses:
-                yield self.tock
+            wigers = hab.db.wigs.get(keys=(ser.preb, ser.saidb))
+            wigerByWit = {wits[wiger.index]: wiger for wiger in wigers}
 
-            rep = client.respond()
-            if rep.status == 200:
-                hab.psr.parseOne(bytearray(rep.body))
-                rcts[wit] = None
-            else:
-                print(f"invalid response {rep.status} from witnesses {wit}")
+            # send retrieved receipts to all other witnesses
+            for wit in rcts:
+                ewits = [w for w in wits if w != wit and w in wigerByWit]
+                wigers = [wigerByWit[w] for w in ewits]
+                if not wigers:
+                    continue
 
-        wigers = hab.db.wigs.get(keys=(ser.preb, ser.saidb))
-        wigerByWit = {wits[wiger.index]: wiger for wiger in wigers}
+                msg = bytearray()
+                if ser.ked['t'] in (coring.Ilks.icp, coring.Ilks.dip):  # introduce new witnesses
+                    msg.extend(schemes(self.hby.db, eids=ewits))
+                elif ser.ked['t'] in (coring.Ilks.rot, coring.Ilks.drt) and \
+                        ("ba" in ser.ked and wit in ser.ked["ba"]):  # Newly added witness, introduce to all
+                    msg.extend(schemes(self.hby.db, eids=ewits))
 
-        # send retrieved receipts to all other witnesses
-        for wit in rcts:
-            ewits = [w for w in wits if w != wit and w in wigerByWit]
-            wigers = [wigerByWit[w] for w in ewits]
-            if not wigers:
-                continue
+                rserder = eventing.receipt(pre=hab.pre,
+                                           sn=sn,
+                                           said=ser.said,
+                                           version=ser.pvrsn,
+                                           kind=ser.kind)
+                msg.extend(eventing.messagize(serder=rserder, wigers=wigers,
+                                              framed=True, gvrsn=ser.pvrsn))
 
-            msg = bytearray()
-            if ser.ked['t'] in (coring.Ilks.icp, coring.Ilks.dip):  # introduce new witnesses
-                msg.extend(schemes(self.hby.db, eids=ewits))
-            elif ser.ked['t'] in (coring.Ilks.rot, coring.Ilks.drt) and \
-                    ("ba" in ser.ked and wit in ser.ked["ba"]):  # Newly added witness, introduce to all
-                msg.extend(schemes(self.hby.db, eids=ewits))
+                client = clients[wit]
 
-            rserder = eventing.receipt(pre=hab.pre,
-                                       sn=sn,
-                                       said=ser.said,
-                                       version=ser.pvrsn,
-                                       kind=ser.kind)
-            msg.extend(eventing.messagize(serder=rserder, wigers=wigers,
-                                          framed=True, gvrsn=ser.pvrsn))
+                sent = streamCESRRequests(client=client, dest=wit, ims=bytearray(msg))
+                while len(client.responses) < sent:
+                    yield self.tock
 
-            client = clients[wit]
-
-            sent = streamCESRRequests(client=client, dest=wit, ims=bytearray(msg))
-            while len(client.responses) < sent:
-                yield self.tock
-
-        self.remove(doers)
+        finally:
+            self.remove(doers)
 
         return rcts.keys()
+
+    def _collectReceipts(self, hab, clients, msg, auths):
+        """Collect and verify receipt replies using the supplied live clients.
+
+        Args:
+            hab: Local controller habitat whose parser verifies each receipt.
+            clients: Witness-prefix to owned HTTP-client mapping.
+            msg: Exact controller event with matching attachment genus.
+            auths: Optional witness-prefix to authorization-header mapping.
+
+        Yields:
+            float: Cooperative network progress; no accepted rows are written here.
+
+        Returns:
+            dict: Witnesses returning HTTP 200. Only the habitat parser may retain
+                verified signatures; an HTTP response alone is not a valid receipt.
+
+        Extracted from Receiptor.receipt at 325f2507. Dispatch is concurrent;
+        client lifecycle and receipt propagation remain with receipt. The caller
+        retains its existing quorum and deadline policy.
+        """
+        # Dispatch to every witness before waiting. A stalled first endpoint
+        # must not prevent later authenticated receipts from reaching the parser.
+        for wit, client in clients.items():
+            headers = {"Authorization": auths[wit]} if wit in auths else {}
+            streamCESRRequests(client=client, dest=wit, ims=bytearray(msg),
+                               path="/receipts", headers=headers)
+        pending, rcts = dict(clients), {}
+        while pending:
+            for wit, client in list(pending.items()):
+                if not client.responses:
+                    continue
+                rep = client.respond()
+                del pending[wit]
+                if rep.status == 200:
+                    hab.psr.parseOne(bytearray(rep.body))
+                    rcts[wit] = None
+                else:
+                    logger.error(f"invalid response {rep.status} from witness {wit}")
+            if pending:
+                yield self.tock
+
+        return rcts
 
     def get(self, pre, sn=None):
         """
@@ -537,7 +566,8 @@ class WitnessInquisitor(doing.DoDoer):
 
             msg = hab.query(target, src=witer.wit, route=r, query=q, **kwa)  # Query for remote pre Event
 
-            kel = introduce(hab, witer.wit, gvrsn=self.hby.version)
+            kel = introduce(hab, witer.wit,
+                            gvrsn=kwa.get("gvrsn", self.hby.version))
             if kel:
                 witer.msgs.append(bytearray(kel))
 
@@ -752,76 +782,49 @@ class TCPMessenger(doing.DoDoer):
 
 
 class TCPStreamMessenger(doing.DoDoer):
-    """Stream a CESR message to a witness via TCP and parse inbound receipts."""
+    """Send one immutable CESR stream and close after its TCP buffer drains.
 
-    def __init__(self, hab, wit, url, msgs=None, sent=None, doers=None, **kwa):
-        """Initialize TCP stream messenger with queues and parser wiring.
+    This is the finite counterpart to TCPMessenger's persistent queue service.
+    Completion describes local transport only: it proves neither peer parsing,
+    receipt authentication, credential acceptance, nor durable remote storage.
+    """
 
-        Parameters:
-            hab (Hab): habitat for KEL parsing and db access.
-            wit (str): qb64 witness identifier.
-            url (str): tcp endpoint URL for the witness.
-            msgs (Deck | None): outbound message queue.
-            sent (Deck | None): sent message queue."""
-        self.hab = hab
-        self.wit = wit
-        self.url = url
-        self.version = self.hab.psr.version
-        self.posted = 0
-        self.msgs = msgs if msgs is not None else decking.Deck()
-        self.sent = sent if sent is not None else decking.Deck()
-        self.parser = None
-        doers = doers if doers is not None else []
-        doers.extend([doing.doify(self.receiptDo)])
+    def __init__(self, hab, wit, url, msg, **kwa):
+        """Own one TCP client and its scheduler child for the exact supplied bytes.
 
-        self.kevery = eventing.Kevery(db=self.hab.db,
-                                      **kwa)
+        Args:
+            hab: Sending habitat, retained for the stream-messenger contract.
+            wit: Destination AID, retained for caller correlation.
+            url: TCP endpoint with host and explicit port.
+            msg: Bytes-like CESR stream, copied before enqueueing.
+            **kwa: hio DoDoer scheduling options.
 
-        super(TCPStreamMessenger, self).__init__(doers=doers)
+        Raises:
+            ValueError: The endpoint is not a plain TCP host/port URL.
+        """
+        self.hab, self.wit = hab, wit
+        up = urlparse(url)
+        if (up.scheme != Schemes.tcp or not up.hostname or not up.port
+                or up.username or up.password or up.path not in ('', '/')
+                or up.query or up.fragment):
+            raise ValueError('TCP stream delivery requires tcp://host:port')
+        self.client = clienting.Client(host=up.hostname, port=up.port)
+        self.client.tx(bytes(msg))
+        self.clientDoer = clienting.ClientDoer(client=self.client)
+        super().__init__(doers=[self.clientDoer], **kwa)
 
-    def receiptDo(self, tymth=None, tock=0.0, **kwa):
-        """Doer loop that sends queued messages over TCP.
+    def recur(self, tyme, deeds=None):
+        """Finish only after connection and send-buffer drain; unwind owned I/O.
 
-        Pushes the original request to self.sent to signal completion"""
-        self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
-
-        up = urlparse(self.url)
-        if up.scheme != Schemes.tcp:
-            raise ValueError(f"invalid scheme {up.scheme} for TcpWitnesser")
-
-        client = clienting.Client(host=up.hostname, port=up.port)
-        self.parser = parsing.Parser(ims=client.rxbs,
-                                     framed=True,
-                                     kvy=self.kevery,
-                                     version=self.version)
-
-        clientDoer = clienting.ClientDoer(client=client)
-        self.extend([clientDoer, doing.doify(self.msgDo)])
-
-        while True:
-            while not self.msgs:
-                yield self.tock
-
-            msg = self.msgs.popleft()
-            self.posted += 1
-
-            client.tx(msg)  # send to connected remote
-
-            while client.txbs:
-                yield self.tock
-
-            self.sent.append(msg)
-            yield self.tock
-
-    def msgDo(self, tymth=None, tock=0.0, **opts):
-        """Doer loop that parses inbound TCP messages into the Kevery."""
-        yield from self.parser.parsator(local=True)  # process messages continuously
-
-    @property
-    def idle(self):
-        return len(self.sent) == self.posted
+        tyme/deeds follow hio's cooperative scheduler. A cutoff before completion
+        raises ConnectionError. The enclosing command supplies its timeout; its
+        cancellation closes this messenger's child through normal DoDoer exit.
+        """
+        if self.client.cutoff:
+            raise ConnectionError('TCP peer closed before stream delivery completed')
+        if self.client.connected and not self.client.txbs:
+            return True
+        return super().recur(tyme, deeds)
 
 
 class HTTPMessenger(doing.DoDoer):
@@ -1011,23 +1014,30 @@ def messengerFrom(hab, pre, urls, auth=None):
 
 
 def streamMessengerFrom(hab, pre, urls, msg, headers=None):
-    """Create a stream messenger (HTTP or TCP) for a single outbound message.
+    """Create one finite messenger carrying the exact supplied outbound stream.
 
     Parameters:
-        hab (Habitat): Environment to use to look up witness URLs
-        pre (str): qb64 identifier prefix of recipient to create a messanger for
-        urls (dict): map of schemes to urls of available endpoints
-        msg (bytes): bytes of message to send
-        headers (dict): optional headers to send with HTTP requests
+        hab (Habitat): Sending habitat retained by the messenger.
+        pre (str): Destination AID for transport correlation.
+        urls (dict): Available endpoint URLs; HTTPS precedes HTTP, then TCP.
+        msg (bytes): Complete serialized stream, including its attachments.
+        headers (dict | None): Additional HTTP request headers.
 
     Returns:
-        Optional (TcpWitnesser, HTTPMessenger): witnesser for ensuring full reciepts"""
+        HTTPStreamMessenger | TCPStreamMessenger: Owned one-shot transport work.
+        HTTP completion has a response; TCP completion means buffer drain only.
+        Neither result establishes authenticated receiver acceptance.
+
+    Raises:
+        ConfigurationError: No supported endpoint scheme is available.
+        ValueError: The selected endpoint is malformed.
+    """
     if Schemes.http in urls or Schemes.https in urls:
         url = urls[Schemes.https] if Schemes.https in urls else urls[Schemes.http]
         witer = HTTPStreamMessenger(hab=hab, wit=pre, url=url, msg=msg, headers=headers)
     elif Schemes.tcp in urls:
         url = urls[Schemes.tcp]
-        witer = TCPStreamMessenger(hab=hab, wit=pre, url=url)
+        witer = TCPStreamMessenger(hab=hab, wit=pre, url=url, msg=msg)
     else:
         raise ConfigurationError(f"unable to find a valid endpoint for witness {pre}")
 

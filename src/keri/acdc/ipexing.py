@@ -9,23 +9,28 @@ IPEx protocol service support (Issuance and Presentation Exchange)
 from collections import deque, namedtuple
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 
 from hio.help import ogler
 
 from .. import Kinds, Protocols
-from ..kering import (Colds, DuplicitousRegistryError, FailedSchemaValidationError,
+from ..kering import (Colds, ConfigurationError, DuplicitousRegistryError,
+                      FailedSchemaValidationError,
                       Ilks, KeriError, MisanchorError, MisbindingError,
                       MissingAnchorError, MissingChainError, MissingSchemaError,
-                      MissingSenderKeyStateError, MisdigestError, MisregistryError,
+                      MisdigestError, MisregistryError,
                       MissequenceError, RootSealError, UnverifiedBlindError,
                       ValidationError, Vrsn_2_0, sniff)
-from ..core import (Aggor, BlindState, Blinder, BoundState, Compactor, Counter,
+from ..core import (Aggor, Compactor, Counter,
                     Codens, Diger, GenDex, Noncer, Number, Pather, Prefixer,
-                    Parser, Saider, SealEvent, SealSource, Serdery, Texter, exchange,
+                    Parser, Saider, SealEvent, SealSource, SerderACDC, Serdery, Texter, exchange,
                     messagize)
 from ..peer.exchanging import (cloneMessage, loadParsedNestedSubstreams,
                                verifyAttachments)
 from . import scheming
+from .edging import (EdgeEvaluator, EdgeSectionLabels, EdgeGroupLabels,
+                     edgeTarget, fixedEdgeOrder)
+from .proving import PresentedEvidence
 
 logger = ogler.getLogger()
 
@@ -43,12 +48,6 @@ PreviousRoutes = {
 
 FieldMapIlks = (None, Ilks.acm, Ilks.ace)
 DisclosedNodeIlks = FieldMapIlks + (Ilks.act, Ilks.acg)
-EdgeSectionLabels = ("d", "u", "o", "w")
-EdgeGroupLabels = ("d", "u", "s", "o", "w")
-EdgeNodeLabels = ("d", "u", "n", "s", "o", "w")
-UnaryEdgeOps = ("I2I", "NI2I", "DI2I", "E1E", "NOT")
-EdgeGroupOps = ("AND", "OR")
-
 # Parsed attachment fields forbidden on Offer ACDC nodes.
 NodeAttachmentFields = ("sigers", "wigers", "cigars", "tsgs", "lsgs", "frcs",
                         "sscs", "ssts", "tdcs", "bsqs", "bsss", "tmqs",
@@ -260,72 +259,86 @@ def _validSingleDagList(value, itemtype):
     return all(isinstance(item, itemtype) for item in value)
 
 
-def _validDisclosurePath(value):
-    """Validate one DAG's disclose-path plan.
+def _disclosurePathError(value):
+    """Return the validation error for one normative disclosure-path plan."""
+    if not isinstance(value, list):
+        return "q.dp must be a flat list of disclosure-path triples"
 
-    Callers interpret an empty plan as inheriting the prior plan when one
-    exists and requesting no disclosure otherwise. Within a plan entry, an
-    empty field list requires only the selected node and schema and permits any
-    valid compaction level. A sole empty-string path requests the whole selected
-    ACDC. Any other field list requests the canonical disclosure closure for
-    those relative paths.
+    # The earlier local profile wrapped the one supported DAG in another list.
+    # Its signed bytes retain that historical meaning; never reinterpret them as
+    # the maintained v1.1 flat profile.
+    if (len(value) == 1 and isinstance(value[0], list)
+            and (not value[0]
+                 or all(isinstance(item, list) and len(item) == 3
+                        for item in value[0]))):
+        return ("the historical nested q.dp profile is unsupported; "
+                "q.dp must be the flat list of disclosure-path triples")
+
+    for item in value:
+        if not isinstance(item, list) or len(item) != 3:
+            return "each q.dp entry must be a three-element array"
+
+        schema, prefix, paths = item
+        if not isinstance(schema, str):
+            return "each q.dp schema SAID must be a string"
+        try:
+            Saider(qb64=schema)
+        except Exception:
+            return "each q.dp schema must be a qualified SAID"
+
+        if not isinstance(prefix, str):
+            return "each q.dp path prefix must be a string"
+        if prefix not in ("", "/"):
+            if not (prefix.startswith("/e/") and prefix.endswith("/_/")):
+                return ("a non-empty non-origin q.dp prefix must start at /e/ "
+                        "and end at a far-node _/ hop")
+
+            segments = prefix.strip("/").split("/")
+            if any(not segment for segment in segments):
+                return "q.dp path prefixes may not contain empty components"
+            for idx, segment in enumerate(segments):
+                if segment == "_" and idx != len(segments) - 1:
+                    if segments[idx + 1] != "e":
+                        return "each intermediate q.dp far-node hop must resume at e"
+
+        if not isinstance(paths, list):
+            return "each q.dp path collection must be a list"
+        if any(not isinstance(path, str) for path in paths):
+            return "each q.dp path must be a string"
+        for path in paths:
+            if path.startswith("/"):
+                return "q.dp tuple paths must be ACDC-relative"
+            if not path:
+                continue
+            try:
+                Pather(path=path, relative=True)
+            except Exception:
+                return f"invalid relative q.dp path {path!r}"
+
+    return None
+
+
+def _validDisclosurePath(value):
+    """Validate one flat normative disclose-path plan.
+
+    Callers interpret an empty plan only as inheriting a prior plan. Within a
+    plan entry, an empty path list requests nothing from that node. An empty
+    path under a non-empty prefix or the relative path ``d/`` requests the
+    whole selected ACDC. Other paths request their disclosure closures.
 
     Parameters:
         value: Candidate disclose-path list for one DAG.
 
     Returns:
-        bool: True when ``value`` is a list whose entries are disclosure-path
-            triples of ``[schema SAID, DAG path, ACDC paths]`` for one DAG.
-            The DAG path is either ``"/"`` for the root node or a canonical
-            edge-to-node prefix that starts and ends with ``/`` and terminates
-            at the far-node hop ``"_/"`` such as ``"/e/holder/_/"``.
+        bool: True when ``value`` is the flat list of disclosure-path triples
+            ``[schema SAID, path prefix, ACDC-relative paths]``.
     """
-    if not isinstance(value, list):
-        return False
-
-    for item in value:
-        if not isinstance(item, list) or len(item) != 3:
-            return False
-
-        schema, path, fields = item
-        if not isinstance(schema, str):
-            return False
-        if not isinstance(path, str):
-            return False
-        if path == "/":
-            pass
-        else:
-            # Non-root DAG prefixes must point at a far-node hop so later
-            # field paths append cleanly beneath that disclosed node.
-            if not (path.startswith("/") and path.endswith("/")):
-                return False
-
-            segments = path.strip("/").split("/")
-            if not segments or any(not isinstance(segment, str) or not segment for segment in segments):
-                return False
-            if segments[-1] != "_":
-                return False
-
-        if not isinstance(fields, list):
-            return False
-        if fields == [""]:
-            continue
-        if any(not isinstance(field, str) or not field for field in fields):
-            return False
-        for field in fields:
-            if field.startswith("/"):
-                return False
-            try:
-                Pather(path=field, relative=True)
-            except Exception:
-                return False
-
-    return True
+    return _disclosurePathError(value) is None
 
 
 def _sign(hab, serder, *, nests=None, anchor=False, endorsers=None,
           anchorers=None, gvrsn=None):
-    """Sign and messagize an outer IPEX exchange with optional nested streams.
+    """Authenticate and messagize an outer IPEX exchange with optional nests.
 
     Parameters:
         hab (Hab): Habitat used to sign the outer exchange.
@@ -333,17 +346,18 @@ def _sign(hab, serder, *, nests=None, anchor=False, endorsers=None,
         nests (list[bytes | bytearray] | None): Optional nested substreams to
             append in the outer attachment section.
         anchor (bool): True creates a permitted KEL event sealing
-            ``serder.said`` and attaches its source-seal couple to the exchange.
+            ``serder.said`` and attaches its source-seal couple instead of a
+            redundant sender signature.
         endorsers (list[Hab] | None): Additional local habitats that sign the
-            same outer exchange as non-sender grantors (e.g proxy AIDs).
+            same outer exchange as non-sender endorsers (e.g. principal AIDs).
         anchorers (list[Hab] | None): Additional local transferable habitats
             whose KELs seal the same outer exchange.
         gvrsn (Versionage | None): Optional CESR genus version override for the
             attachment and nesting groups.
 
     Returns:
-        bytearray: Full signed exchange stream including the outer message body,
-            attachments, and any nested substreams.
+        bytearray: Full authenticated exchange stream including the outer message
+            body, attachments, and any nested substreams.
     """
     gvrsn = gvrsn if gvrsn is not None else Vrsn_2_0
     nests = nests if nests else None
@@ -360,11 +374,13 @@ def _sign(hab, serder, *, nests=None, anchor=False, endorsers=None,
 
         # Local signing requires access to the same hab
         if endorser.db is not hab.db:
-            raise ValueError("additional grantors must belong to the sender's Habery")
+            raise ValueError(
+                "additional authentication habitats must belong to the sender's Habery")
 
         # The sender is already authenticated separately
         if endorser.pre == hab.pre:
-            raise ValueError("sender must not be repeated as an additional grantor")
+            raise ValueError(
+                "sender must not be repeated as an additional endorser or anchorer")
 
     if anchor:
         # Only transferable identifiers can append the KEL event that carries the seal.
@@ -411,24 +427,25 @@ def _sign(hab, serder, *, nests=None, anchor=False, endorsers=None,
         # Explicitly name the non-sender anchorer in a source triple.
         bonds.append(SealEvent(i=anchorer.pre, s=aserder.snh, d=aserder.said))
 
-    # Sign after anchoring so an Establishment Only rotation's new keys and lastEst are used.
     # Collect transferable signature groups separately from cigars.
     tsgs = []
     cigars = []
 
-    # Sign the outer EXN with the sender's current key state.
-    if hab.kever.prefixer.transferable:
-        # Transferable senders produce indexed signatures.
-        sigers = hab.sign(ser=serder.raw, indexed=True)
+    # A direct sender KEL anchor already authenticates the outer EXN. Sign only
+    # when no sender anchor was created so the wire carries one sender factor.
+    if not anchor:
+        if hab.kever.prefixer.transferable:
+            # Transferable senders produce indexed signatures.
+            sigers = hab.sign(ser=serder.raw, indexed=True)
 
-        # Bind those signatures to the sender's latest establishment event.
-        tsgs.append((hab.kever.prefixer,
-                     Number(sn=hab.kever.lastEst.s),
-                     Diger(qb64=hab.kever.lastEst.d),
-                     sigers))
-    else:
-        # Non-transferable senders authenticate with cigars.
-        cigars.extend(hab.sign(ser=serder.raw, indexed=False))
+            # Bind those signatures to the sender's latest establishment event.
+            tsgs.append((hab.kever.prefixer,
+                         Number(sn=hab.kever.lastEst.s),
+                         Diger(qb64=hab.kever.lastEst.d),
+                         sigers))
+        else:
+            # Non-transferable senders authenticate with cigars.
+            cigars.extend(hab.sign(ser=serder.raw, indexed=False))
 
     # Add each requested non-sender signature endorsement.
     for endorser in endorsers:
@@ -461,7 +478,8 @@ class IpexHandler:
     # Receive route-filtered non-sender evidence from Exchanger.
     acceptsEvidence = True
 
-    def __init__(self, resource, hby, notifier, rgy=None):
+    def __init__(self, resource, hby, notifier, rgy=None, *, graphPolicy=None,
+                 sections=None, verification=None):
         """Create a handler for one IPEX route.
 
         Parameters:
@@ -470,21 +488,42 @@ class IpexHandler:
             notifier: Notifier-like object with an ``add`` method.
             rgy (Regery | None): Optional local registry manager used when a
                 disclosed node's ``rd`` requires verifier-side issuer-auth checks.
+            graphPolicy: Optional application policy. ``validity(serder)`` may
+                return bool or None. AVG/WAVG require ``value(near, edge, far)``
+                selecting a finite numeric property and ``accept(near, group,
+                average)`` interpreting the computed mean as bool or None.
+                Methods receive the named arguments shown. No policy is inferred.
+            sections (SectionBaser | None): Independently received schema evidence
+                shared with the application's parser. Lookup never expands the
+                retained credential's disclosed fields.
+            verification (AcdcV2IpexVerification | None): Concrete shared context.
+                When supplied, its policy and section store take precedence.
 
         Returns:
             None
+
+        Raises:
+            ConfigurationError: A supplied concrete context belongs to another
+                Habery/Regery or is not an AcdcV2IpexVerification instance.
         """
+        if verification is not None and (type(verification) is not AcdcV2IpexVerification
+                or verification.hby is not hby or verification.rgy is not rgy):
+            raise ConfigurationError('ACDC v2 IPEX verifier context must belong to this Habery and Regery')
         self.resource = resource
         self.hby = hby
         self.notifier = notifier
         self.rgy = rgy
+        self.verification = verification if verification is not None else AcdcV2IpexVerification(
+            hby, rgy, graphPolicy=graphPolicy, sections=sections)
+        self.graphPolicy = self.verification.graphPolicy
+        self.sections = self.verification.sections
         # Only Grant treats unresolved non-sender evidence as optional. Other
         # IPEX verbs continue rejecting foreign evidence before persistence.
         # Store this policy per route-specific handler instance.
         self.acceptsMissingEvidence = resource == "/ipex/grant"
 
     def verify(self, serder, attachments=None, nests=None, sscs=None,
-               evidence=None):
+               evidence=None, *, historical=False):
         """Validate the verb, prior link, and single-response rule.
 
         Parameters:
@@ -495,8 +534,10 @@ class IpexHandler:
                 single-DAG workflow ``offer`` may carry an ACDC DAG subset and
                 ``grant`` may carry the final disclosed DAG.
             sscs (list | None): Sender source-seal couples retained after KRAM.
-            evidence (tuple | None): Post-KRAM non-sender signature groups,
-                cigars, and source-seal triples accepted by ``verifyEvidence``.
+            evidence (tuple | None): Post-KRAM signature groups, cigars, and
+                source-seal triples accepted for route validation.
+            historical (bool): Select exact retained-opening TEL prefixes instead
+                of current heads. Reserved for explicit retained-proof inspection.
 
         Returns:
             bool: True when the message is valid for the linear IPEX workflow,
@@ -537,17 +578,20 @@ class IpexHandler:
         if "ax" in attrs and not _validSingleDagList(attrs["ax"], bool):
             return False
 
-        # Stage 2: disclosure messages carry one disclose-path list per DAG.
-        # An empty plan inherits from a prior message and means no disclosure
-        # when the message opens a thread.
+        # Stage 2: disclosure messages carry the maintained flat disclose-path
+        # list.  Empty is a ditto only on a reply; an opener cannot inherit.
         if verb in (Ipex.apply, Ipex.offer, Ipex.agree, Ipex.grant):
-            if ("dp" not in q
-                    or not _validSingleDagList(q["dp"], list)
-                    or not _validDisclosurePath(q["dp"][0])):
+            if "dp" not in q:
+                return False
+            if error := _disclosurePathError(q["dp"]):
+                logger.error("rejected IPEX %s disclosure profile: %s",
+                             verb, error)
+                return False
+            if not q["dp"] and not dig:
                 return False
 
         # Agree changes no disclosure terms; its empty plan always means ditto.
-        if verb == Ipex.agree and q["dp"][0]:
+        if verb == Ipex.agree and q["dp"]:
             return False
 
         if verb == Ipex.offer:
@@ -588,6 +632,12 @@ class IpexHandler:
             pserder = self._verifyReplyChain(verb=verb, serder=serder, dig=dig)
             if pserder is None:
                 return False
+
+        if (verb == Ipex.offer and not q["dp"]
+                and self._resolveDisclosurePlan(pserder) is None):
+            logger.error("rejected IPEX offer: empty q.dp cannot inherit a "
+                         "supported flat plan from its prior")
+            return False
 
         # Stage 4: enforce the anchoring negotiation and verify direct sender
         # KEL anchors on the messages that make the binding commitments.
@@ -705,25 +755,16 @@ class IpexHandler:
                                                     grantNodes=grantNodes):
                     return False
 
-                # Stage 6: authenticate each disclosed node's issuer.
-                if not self._verifyIssuerAuthGraph(nodes=grantNodes, order=grantOrder):
+                # Authenticate the exact disclosure, independently of edge truth.
+                if not self._authenticateGraph(grantNodes, grantOrder, historical=historical):
                     return False
 
-                # Validate each authenticated node against its own schema.
-                if not self._verifyNodeSchemas(nodes=grantNodes, order=grantOrder):
-                    return False
-
-                # Apply edge operators and edge schemas after authentication.
-                if not self._verifyGraphSemantics(nodes=grantNodes, order=grantOrder):
-                    return False
-
-                # Require Exchanger's fixed three-part evidence result.
                 try:
                     _, _, extraSeals = evidence
                 except (TypeError, ValueError):
                     return False
 
-                # Verify every presentation registry declared across the DAG.
+                # Verify every presentation registry declared for this disclosure.
                 tethered = self._verifyPresentationAuthGraph(
                     serder=serder,
                     nodes=grantNodes,
@@ -758,18 +799,8 @@ class IpexHandler:
         return True
 
     def _verifySourceAnchor(self, serder, aid, number, diger):
-        """Verify one source reference against the anchorer's accepted KEL."""
-        prefixer = Prefixer(qb64=aid)
-        _, _, seals, invalid, missing = verifyAttachments(
-            hby=self.hby,
-            serder=serder,
-            sourceSeals=[(prefixer, number, diger)],
-        )
-        if missing:
-            raise MissingSenderKeyStateError(
-                f"missing KEL event at sn={number.sn} for {aid}")
-
-        return not invalid and bool(seals)
+        """Delegate existing IPEX source checks to the shared evidence owner."""
+        return PresentedEvidence(self.hby, self.rgy).verifySourceAnchor(serder, aid, number, diger)
 
     def _validNodeNest(self, origin, nests):
         """Validate disclosed node nests and index them by ACDC SAID.
@@ -875,7 +906,8 @@ class IpexHandler:
         if serder.ked.get("x", "") != pserder.ked.get("x", ""):
             return None
 
-        if self.response(pserder) is not None:
+        response = self.response(pserder)
+        if response is not None and response.said != serder.said:
             return None
 
         return pserder
@@ -898,65 +930,105 @@ class IpexHandler:
 
             # Retrieve the current message's dp and validate it
             plan = current.ked.get("q", {}).get("dp")
-            if (not _validSingleDagList(plan, list)
-                    or not _validDisclosurePath(plan[0])):
+            if not _validDisclosurePath(plan):
                 return None
 
             # If dp is non-empty, return it
-            if plan[0]:
-                return plan[0]
+            if plan:
+                return plan
 
             # Otherwise continue the chain
             prior = current.ked.get("p", "")
             if not prior:
-                return []
+                return None
             current, _ = cloneMessage(self.hby, said=prior)
 
         return None
 
     def _verifyDisclosurePlan(self, plan, origin, nodes, order):
-        """Verify a disclosed Grant DAG against its negotiated disclose paths.
+        """Check exact disclosed nodes against the negotiated local path contract.
 
-        Each plan entry must select the corresponding node in breadth-first
-        graph order and match that node's schema. An empty field list ([]) permits
-        any valid compaction level, a sole empty-string path ([""]) requires the whole
-        ACDC, and other paths require their canonical ``Compactor`` disclosure
-        closure.
+        Args:
+            plan (list): Ordered (schema SAID, graph prefix, field-path list)
+                entries, one per node in the disclosed breadth-first traversal.
+            origin (str): Root credential SAID from the Grant.
+            nodes (dict): Exact received parsed node views indexed by SAID.
+            order (list[str]): Reachable node order already checked by _walkGraph.
+
+        Returns:
+            bool: Whether every selected node/schema and requested disclosure
+                closure matches, without resolving or expanding received views.
+
+        An empty path list requires node presence at any valid compaction level.
+        Whole-node paths require schema-proven recursive closure for field-map
+        sections and visible aggregate members. An open or otherwise ambiguous
+        schema cannot distinguish ordinary string data from a compacted nested
+        block's SAID, so this bounded profile refuses that whole-node claim.
+        Ordinary node-schema validation still runs separately afterward.
+
+        Other paths require their canonical Compactor disclosure closure. Cached
+        fuller sections never satisfy an omitted path or enlarge these bytes.
         """
+        if not plan or not order or order[0] != origin:
+            return False
+
         selected = []
-        for schema, prefix, fields in plan:
-            said = origin
+        selectedIndexes = []
+        hasPositional = False
+        for position, (schema, prefix, fields) in enumerate(plan):
+            if prefix == "":
+                # Empty prefixes use the tuple's BFS position as the node id.
+                if position >= len(order):
+                    return False
+                said = order[position]
+                hasPositional = hasPositional or position > 0
+            else:
+                said = origin
+
             nest = nodes.get(said)
             if nest is None:
                 return False
             nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
             value = nserder.sad
+            edgePath = []
 
             # Follow each virtual `_` hop from a near edge to its far ACDC.
-            if prefix != "/":
+            if prefix not in ("", "/"):
                 for part in prefix.strip("/").split("/"):
                     if part == "_":
-                        if not isinstance(value, Mapping):
+                        try:
+                            said = edgeTarget(nserder, tuple(edgePath), value,
+                                evidence=PresentedEvidence(self.hby, self.rgy), sections=self.sections)
+                        except (ValueError, TypeError):
                             return False
-                        said = value.get("n")
                         nest = nodes.get(said)
                         if nest is None:
                             return False
                         nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
                         value = nserder.sad
+                        edgePath = []
                     elif isinstance(value, Mapping):
                         if part not in value:
                             return False
                         value = value[part]
+                        edgePath.append(part)
                     elif isinstance(value, list) and part.isdigit():
                         index = int(part)
                         if index >= len(value):
                             return False
                         value = value[index]
+                        edgePath.append(part)
                     else:
                         return False
 
+            try:
+                selectedIndex = order.index(said)
+            except ValueError:
+                return False
+            if selectedIndexes and selectedIndex <= selectedIndexes[-1]:
+                return False
             selected.append(said)
+            selectedIndexes.append(selectedIndex)
 
             # The tuple's schema must identify the selected disclosed node.
             nodeSchema = nserder.schema
@@ -965,21 +1037,32 @@ class IpexHandler:
             if nodeSchema != schema:
                 return False
 
-            # The empty path selects the whole ACDC. Every present compactable
-            # section must therefore be carried instead of its bare SAID/AGID.
-            if fields == [""]:
+            # A non-empty prefix plus an empty tuple path names the whole ACDC.
+            # With an empty prefix, d/ is the shortest relative whole-ACDC path;
+            # an empty path names nothing because it has no node terminator.
+            whole = ((prefix != "" and "" in fields) or "d/" in fields)
+            if whole:
                 for label in ("a", "e", "r"):
                     section = nserder.sad.get(label)
                     if section and not isinstance(section, Mapping):
                         return False
                 aggregate = nserder.sad.get("A")
-                if aggregate and not isinstance(aggregate, list):
+                if aggregate and (not isinstance(aggregate, list)
+                        or any(not isinstance(member, Mapping)
+                               for member in aggregate[1:])):
+                    # Aggregate positions are structurally blocks, unlike an
+                    # arbitrary attribute scalar. A bare member digest is known
+                    # selective withholding and cannot fulfill this request.
+                    return False
+                if not self._verifyWholeDisclosure(nserder, paths=("d/",)):
                     return False
                 continue
 
             # Group paths by top-level section for canonical partial checks.
             sections = {}
             for field in fields:
+                if not field:
+                    continue
                 try:
                     pather = Pather(path=field, relative=True)
                     pather.resolve(nserder.sad)
@@ -1011,8 +1094,249 @@ class IpexHandler:
                 if expected != section:
                     return False
 
-        # The plan must account for every disclosed node in canonical BFS order.
-        return selected == order
+            # Compactor verifies the canonical visible partial, but cannot tell
+            # whether a digest-valued child is data or a hidden field-map block.
+            # A trailing separator asks for that subtree whole, so require the
+            # negotiated node schema to prove its recursive closure as well.
+            wholePaths = tuple(field for field in fields if field.endswith("/"))
+            if wholePaths and not self._verifyWholeDisclosure(nserder,
+                                                               paths=wholePaths):
+                return False
+
+        # A nonorigin positional selector requires schema-proven fixed shape
+        # and a gapless BFS list. Explicit far prefixes may omit unrequested nodes,
+        # but the selected nodes must remain in BFS order and start at origin.
+        return (selected[0] == origin
+                and (not hasPositional or (selected == order and all(
+                    fixedEdgeOrder(nodes[said]["serder"] if isinstance(nodes[said], dict)
+                                   else nodes[said].serder,
+                        evidence=PresentedEvidence(self.hby, self.rgy), sections=self.sections)
+                    for said in order))))
+
+    def _verifyWholeDisclosure(self, serder, *, paths):
+        """Verify whole-path closure under the bounded explicit acm profile.
+
+        The received bytes alone cannot distinguish a legitimate SAID-valued
+        string from a compacted nested field-map. This check therefore follows
+        the authenticated JSON Schema instead of inspecting string spelling.
+        Only explicit object schemas with closed or schema-valued additional
+        properties are supported. Ambiguous combinators and open objects refuse
+        the whole-node claim.
+        """
+        if serder.ilk != Ilks.acm:
+            return False
+
+        source = serder.schema
+        try:
+            if isinstance(source, Mapping):
+                schemer = scheming._verifySchemer(source, kind=serder.kind)
+            elif isinstance(source, str):
+                schemer = scheming._cachedSchema(self.hby.db, source,
+                                                 sections=self.sections)
+                if schemer is None:
+                    raise MissingSchemaError(source)
+            else:
+                return False
+            registry = scheming._registry(schemer, self.hby.db,
+                                          sections=self.sections)
+            resolver = registry.resolver(base_uri=schemer.said)
+        except MissingSchemaError:
+            raise
+        except (KeriError, TypeError, ValueError):
+            return False
+
+        for path in paths:
+            parts = list(Pather(path=path, relative=True).rparts)
+            if parts and not parts[-1]:
+                parts.pop()
+
+            # d/ is the normative whole-ACDC selector. The schema and aggregate
+            # sections have their own evidence rules; field-map closure applies
+            # to the compactable a/e/r sections present in this acm node.
+            if parts == ["d"]:
+                # Aggregate members can contain nested field maps, but the
+                # bounded acm profile below does not yet interpret array item
+                # schemas. Refuse rather than mistake visible members for
+                # recursively complete members.
+                if "A" in serder.sad:
+                    return False
+                for label in ("a", "e", "r"):
+                    if label not in serder.sad:
+                        continue
+                    located = self._disclosureSubschema(
+                        schemer.sed, serder.sad, (label,), resolver)
+                    if located is None:
+                        return False
+                    value, subschema, subresolver = located
+                    if not self._closedBySchema(value, subschema, subresolver):
+                        return False
+                continue
+
+            located = self._disclosureSubschema(
+                schemer.sed, serder.sad, tuple(parts), resolver)
+            if located is None:
+                return False
+            value, subschema, subresolver = located
+            if not self._closedBySchema(value, subschema, subresolver):
+                return False
+
+        return True
+
+    def _disclosureSubschema(self, schema, value, parts, resolver):
+        """Locate the schema and instance selected by one disclosure path."""
+        for part in parts:
+            selected = self._selectDisclosureSchema(schema, value, resolver)
+            if selected is None or not isinstance(value, Mapping):
+                return None
+            schema, resolver = selected
+            properties = schema.get("properties")
+            if isinstance(properties, Mapping) and part in properties:
+                schema = properties[part]
+            else:
+                additional = schema.get("additionalProperties")
+                if not isinstance(additional, Mapping) and not isinstance(additional, bool):
+                    return None
+                if additional is False:
+                    return None
+                schema = additional
+            if part not in value:
+                return None
+            value = value[part]
+        return value, schema, resolver
+
+    def _selectDisclosureSchema(self, schema, value, resolver, depth=64):
+        """Select one unambiguous schema branch for an already received value."""
+        if depth <= 0:
+            return None
+        if isinstance(schema, bool):
+            return (schema, resolver) if schema is False else None
+        if not isinstance(schema, Mapping):
+            return None
+
+        if "$ref" in schema:
+            # Draft 2020-12 permits siblings beside $ref. Supporting their
+            # intersection needs a general schema evaluator, so keep this
+            # security boundary explicit instead of silently ignoring them.
+            annotations = {"$ref", "$id", "$schema", "title", "description",
+                           "$comment", "deprecated", "readOnly", "writeOnly",
+                           "examples", "default"}
+            if set(schema) - annotations:
+                return None
+            try:
+                resolved = resolver.lookup(schema["$ref"])
+            except Exception:
+                return None
+            return self._selectDisclosureSchema(resolved.contents, value,
+                                                resolved.resolver, depth - 1)
+
+        # Bounded profile: select a single declared oneOf branch. Other
+        # applicators need intersection/conditional reasoning and are refused.
+        if any(keyword in schema for keyword in
+               ("anyOf", "allOf", "not", "if", "then", "else",
+                "dependentSchemas", "patternProperties")):
+            return None
+        if "oneOf" in schema:
+            branches = schema["oneOf"]
+            if not isinstance(branches, list) or len(branches) > 16:
+                return None
+            matches = [branch for branch in branches
+                       if self._schemaTypeMatches(branch, value)]
+            if len(matches) != 1:
+                return None
+            return self._selectDisclosureSchema(matches[0], value, resolver,
+                                                depth - 1)
+
+        return schema, resolver
+
+    @staticmethod
+    def _schemaTypeMatches(schema, value):
+        """Return whether a bounded schema branch declares value's JSON type."""
+        if schema is True:
+            return True
+        if schema is False or not isinstance(schema, Mapping):
+            return False
+        typ = schema.get("type")
+        if isinstance(value, Mapping):
+            return typ == "object"
+        if isinstance(value, list):
+            return typ == "array"
+        if isinstance(value, str):
+            return typ == "string"
+        if isinstance(value, bool):
+            return typ == "boolean"
+        if value is None:
+            return typ == "null"
+        if isinstance(value, int):
+            return typ in ("integer", "number")
+        if isinstance(value, float):
+            return typ == "number"
+        return False
+
+    def _closedBySchema(self, value, schema, resolver, depth=64):
+        """Prove that every schema-declared field-map below value is expanded."""
+        if depth <= 0:
+            return False
+
+        # A string at a location which also admits an object is the explicit
+        # compact-or-expanded shape used for field-map blocks. Whole disclosure
+        # requires the object branch. A string-only location remains ordinary
+        # scalar data even when its value happens to be a valid SAID.
+        if (isinstance(value, str)
+                and self._schemaMayMap(schema, resolver, depth=depth)):
+            return False
+        selected = self._selectDisclosureSchema(schema, value, resolver,
+                                                depth=depth)
+        if selected is None:
+            return False
+        schema, resolver = selected
+
+        # Scalars are safe only when explicitly typed as scalars. This accepts
+        # legitimate SAID-valued data without treating its characters as proof
+        # that the value is a hidden block.
+        if not isinstance(value, Mapping):
+            return self._schemaTypeMatches(schema, value)
+
+        if schema.get("type") != "object":
+            return False
+        properties = schema.get("properties")
+        if not isinstance(properties, Mapping):
+            return False
+        additional = schema.get("additionalProperties")
+        if additional is not False and not isinstance(additional, Mapping):
+            return False
+
+        for label, child in value.items():
+            childSchema = properties.get(label)
+            if childSchema is None:
+                if additional is False:
+                    return False
+                childSchema = additional
+            if not self._closedBySchema(child, childSchema, resolver, depth - 1):
+                return False
+        return True
+
+    def _schemaMayMap(self, schema, resolver, depth=64):
+        """Return whether the bounded schema explicitly admits an object."""
+        if depth <= 0 or schema is True:
+            return True
+        if schema is False or not isinstance(schema, Mapping):
+            return False
+        if schema.get("type") == "object":
+            return True
+        if "$ref" in schema:
+            try:
+                resolved = resolver.lookup(schema["$ref"])
+            except Exception:
+                return True
+            return self._schemaMayMap(resolved.contents, resolved.resolver,
+                                      depth - 1)
+        branches = schema.get("oneOf")
+        if branches is None:
+            return False
+        if not isinstance(branches, list) or len(branches) > 16:
+            return True
+        return any(self._schemaMayMap(branch, resolver, depth - 1)
+                   for branch in branches)
 
     @staticmethod
     def _canonicalSectionCommitment(label, section, *, kind):
@@ -1213,36 +1537,36 @@ class IpexHandler:
                     return None
 
                 # Expanded edge sections may contain nested edge groups
-                for edge in blocks:
-                    groups = deque([(edge, False)])
+                for index, edge in enumerate(blocks):
+                    path = ("e",) if isinstance(edges, Mapping) else ("e", str(index))
+                    groups = deque([(edge, False, path)])
                     while groups:
-                        group, nested = groups.popleft()
-                        labels = EdgeGroupLabels if nested else EdgeSectionLabels   # Leaf vs group labels
-                        if "n" in group:
-                            for label in group:
-                                if label not in EdgeNodeLabels:
-                                    return None
-                            edgeSaid = group.get("n")
-                            if not isinstance(edgeSaid, str):
-                                return None
-                            try:
-                                Saider(qb64=edgeSaid)
-                            except Exception:
-                                return None
+                        group, nested, path = groups.popleft()
+                        labels = EdgeGroupLabels if nested else EdgeSectionLabels
+                        try:
+                            edgeSaid = edgeTarget(nserder, path, group,
+                                evidence=PresentedEvidence(self.hby, self.rgy), sections=self.sections)
+                        except (ValueError, TypeError):
+                            return None
+                        if edgeSaid is not None:
                             if edgeSaid not in nodes:
                                 if closed:
+                                    # Nested Grant bytes are immutable.  Retrying
+                                    # cannot add a missing far node to this EXN, so
+                                    # reject the incomplete graph permanently rather
+                                    # than misclassifying it as external evidence.
                                     return None
                                 continue
                             if edgeSaid not in seen:
                                 queue.append(edgeSaid)
                             continue
 
+                        if not isinstance(group, Mapping):
+                            return None
                         for label, node in group.items():
                             if label in labels:
                                 continue
-                            if not isinstance(node, Mapping):
-                                return None
-                            groups.append((node, True))
+                            groups.append((node, True, (*path, label)))
 
         # Even when offer omits farther nodes, every carried nest must still be
         # part of the root-reachable disclosed graph.
@@ -1251,163 +1575,30 @@ class IpexHandler:
 
         return nodes, order
 
-    def _evaluateLeafEdge(self, group, *, nodes, nserder, inheritedSchema):
-        """Evaluate one disclosed leaf edge against its referenced far node.
 
-        Parameters:
-            group (Mapping): Leaf edge mapping that must carry an ``n`` field
-                naming the far-node SAID, and may carry a string or non-empty
-                list of strings in ``o`` plus a schema pin in ``s``.
-            nodes (dict): Mapping of disclosed node SAIDs to parsed nests built
-                during the origin-graph walk.
-            nserder (Serder): Serder for the current near node whose edge block
-                is being evaluated.
-            inheritedSchema (str | Mapping | None): Optional schema pin passed
-                down from a parent edge group.
+    def _graphRegistry(self, serder, nest):
+        """Transitional delegate retained for Dolly's pending caller migration."""
+        return PresentedEvidence(self.hby, self.rgy).graphRegistry(serder, nest)
 
-        Returns:
-            bool | None: ``True`` when the leaf edge semantics are satisfied,
-                ``False`` when the leaf is well-formed but its relation or
-                schema constraints do not match, including recognized operators
-                that this verifier cannot yet evaluate, or ``None`` when the
-                leaf shape itself is malformed and verification must fail
-                closed.
-        """
-        # Reject unknown leaf labels before we inspect the reference.
-        for label in group:
-            if label not in EdgeNodeLabels:
-                return None
-
-        # Resolve the far node that this edge claims to reference.
-        edgeSaid = group.get("n")
-        if edgeSaid not in nodes:
-            return None
-        far = nodes[edgeSaid]
-        fserder = far["serder"] if isinstance(far, dict) else far.serder
-
-        # Normalize one operator or a list of operators.
-        op = group.get("o")
-        if op is None:
-            recognizedOps = ()
-        elif isinstance(op, str):
-            recognizedOps = (op,)
-        elif (isinstance(op, list) and op
-              and all(isinstance(operator, str) for operator in op)):
-            recognizedOps = tuple(op)
-        else:
-            return None
-
-        # Every declared unary operator must be recognized.
-        if any(operator not in UnaryEdgeOps for operator in recognizedOps):
-            return None
-
-        # Recognized but unevaluated leaf operators fail as unsatisfied
-        # relations instead of malformed input.
-        if "NOT" in recognizedOps or "DI2I" in recognizedOps:
-            return False
-
-        # Start from a passing state, then knock the edge down to False if
-        # any required relation check fails.
-        matched = True
-        if "E1E" in recognizedOps:
-            if (not nserder.iseaid
-                    or not fserder.iseaid
-                    or nserder.iseaid != fserder.iseaid):
-                matched = False
-
-        # I2I compares the near issuer to the far Issuee. NI2I is explicitly
-        # non-delegative and therefore adds no issuer-to-Issuee equality.
-        if matched and "I2I" in recognizedOps:
-            if not fserder.iseaid:
-                matched = False
-            elif nserder.israid != fserder.iseaid:
-                matched = False
-
-        # A leaf may pin the far node's schema directly, otherwise it
-        # inherits the schema pin from its parent group.
-        edgeSchema = group["s"] if "s" in group else inheritedSchema
-        if matched and edgeSchema is not None:
-            try:
-                scheming.validateSchema(acdc=fserder, db=self.hby.db,
-                                        schema=edgeSchema)
-            except MissingSchemaError:
-                raise
-            except (FailedSchemaValidationError, ValidationError, ValueError):
-                matched = False
-
-        return matched
-
-    def _evaluateGroupEdge(self, group, *, nodes, nserder, nested, inheritedSchema):
-        """Evaluate one disclosed edge group and reduce its child results.
-
-        Parameters:
-            group (Mapping): Edge-section or nested edge-group mapping whose
-                child entries are either more groups or leaf edges.
-            nodes (dict): Mapping of disclosed node SAIDs to parsed nests built
-                during the origin-graph walk.
-            nserder (Serder): Serder for the current near node whose edge block
-                is being evaluated.
-            nested (bool): ``True`` when ``group`` is a nested edge group and
-                therefore allows group-only labels like ``s``; ``False`` for a
-                top-level edge section.
-            inheritedSchema (str | Mapping | None): Optional schema pin passed
-                down from the parent edge group.
-
-        Returns:
-            bool | None: ``True`` when the group is well-formed and its child
-                results satisfy the group's ``AND`` or ``OR`` semantics,
-                ``False`` when the group is well-formed but the reduced child
-                result fails, or ``None`` when the group shape is malformed and
-                verification must fail closed.
-        """
-        # Top-level edge sections and nested edge groups allow slightly
-        # different reserved labels, so choose the right set up front.
-        labels = EdgeGroupLabels if nested else EdgeSectionLabels
-
-        # Nested groups may contribute an m-ary operator and a shared schema
-        # pin for every child below them.
-        groupOp = group.get("o", "AND")
-        if not isinstance(groupOp, str) or groupOp not in EdgeGroupOps:
-            return None
-
-        # Nested groups can pin one schema for every child below them.
-        nextSchema = group.get("s", inheritedSchema) if nested else inheritedSchema
-        results = []
-        for label, node in group.items():
-            if label in labels:
-                continue
-            if not isinstance(node, Mapping):
-                return None
-
-            # Recurse into each child and fail closed if any child is malformed.
-            if "n" in node:
-                matched = self._evaluateLeafEdge(node,
-                                                 nodes=nodes,
-                                                 nserder=nserder,
-                                                 inheritedSchema=nextSchema)
-            else:
-                matched = self._evaluateGroupEdge(node,
-                                                  nodes=nodes,
-                                                  nserder=nserder,
-                                                  nested=True,
-                                                  inheritedSchema=nextSchema)
-            if matched is None:
-                return None
-            results.append(matched)
-
-        if not results:
-            return None
-
-        # Reduce the child booleans according to the group's operator.
-        return any(results) if groupOp == "OR" else all(results)
 
     def _verifyNodeSchemas(self, nodes, order):
-        """Validate each disclosed ACDC against its embedded or cached schema."""
+        """Validate disclosed nodes without expanding their retained views.
+
+        Args:
+            nodes (dict): Authenticated disclosed nodes indexed by SAID.
+            order (list): Reachable node SAIDs to validate in graph order.
+
+        Returns:
+            bool: Whether every node satisfies its embedded or cached own schema.
+
+        Raises:
+            MissingSchemaError: Required schema evidence is not yet available.
+        """
         for said in order:
             nest = nodes[said]
             nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
             try:
-                scheming.validateSchema(acdc=nserder, db=self.hby.db)
+                scheming.validateSchema(acdc=nserder, db=self.hby.db, sections=self.sections)
             except MissingSchemaError:
                 raise
             except (FailedSchemaValidationError, ValidationError, ValueError):
@@ -1415,59 +1606,12 @@ class IpexHandler:
 
         return True
 
-    def _verifyGraphSemantics(self, nodes, order):
-        """Verify grant edge operators and edge-schema pins across walked nodes.
+    def _authenticateGraph(self, nodes, order, *, historical=False):
+        """Share issuer and own-schema proof checks with explicit graph use."""
+        return (self._verifyIssuerAuthGraph(nodes, order, historical=historical)
+                and self._verifyNodeSchemas(nodes, order))
 
-        Parameters:
-            nodes (dict): Mapping of disclosed node SAID to parsed nest.
-            order (list): Breadth-first walk order returned by ``_walkGraph``.
-
-        Returns:
-            bool: True when every walked edge block is well-formed and its
-                leaf-level and group-level operator/schema constraints are
-                satisfied; False on any malformed or violated edge semantics.
-        """
-        for said in order:
-            # Current near node from the walked grant DAG
-            near = nodes[said]
-
-            # Retrieve node serder
-            nserder = near["serder"] if isinstance(near, dict) else near.serder
-
-            # No edges means nothing more to validate for this node
-            edges = nserder.sad.get("e")
-            if not edges:
-                continue
-
-            # Normalize a single edge block or a list of edge blocks
-            if isinstance(edges, Mapping):
-                blocks = [edges]
-            elif isinstance(edges, list) and all(isinstance(edge, Mapping) for edge in edges):
-                blocks = edges
-            else:
-                return False
-
-            for edge in blocks:
-                # Evaluate the whole edge tree from the root down. Each leaf
-                # returns one boolean and each group reduces its child booleans
-                # with AND/OR using any inherited schema pin.
-                if "n" in edge:
-                    matched = self._evaluateLeafEdge(edge,
-                                                     nodes=nodes,
-                                                     nserder=nserder,
-                                                     inheritedSchema=None)
-                else:
-                    matched = self._evaluateGroupEdge(edge,
-                                                      nodes=nodes,
-                                                      nserder=nserder,
-                                                      nested=False,
-                                                      inheritedSchema=None)
-                if matched is not True:
-                    return False
-
-        return True
-
-    def _verifyIssuerAuthGraph(self, nodes, order):
+    def _verifyIssuerAuthGraph(self, nodes, order, *, historical=False):
         """Verify issuer-auth proof groups for each walked disclosed DAG node.
 
         Parameters:
@@ -1493,15 +1637,28 @@ class IpexHandler:
             nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
 
             # Require one valid issuer authentication factor per node.
-            if not self._verifyIssuerAuthNode(serder=nserder, nest=nest):
+            if not self._verifyIssuerAuthNode(serder=nserder, nest=nest, historical=historical):
                 return False
 
         # Every disclosed node passed issuer authentication.
         return True
 
-    def _verifyIssuerAuthNode(self, serder, nest):
-        """Verify one ACDC using its declared issuer authentication factor."""
+    def _verifyIssuerAuthNode(self, serder, nest, *, historical=False):
+        """Verify one disclosed ACDC's selected issuer authentication factor.
 
+        Args:
+            serder (SerderACDC): Exact disclosed credential view.
+            nest: Parsed object or dictionary carrying that view's attachments.
+
+        Returns:
+            bool: Whether the selected registry, anchor, or signature authenticates
+                the issuer. Invalid selected evidence never falls back to another
+                factor.
+
+        Raises:
+            MissingChainError: Required authenticated KEL/TEL evidence is absent.
+            KeriError: Invalid registry opening or binding evidence.
+        """
         # Authentication Factor 1: Registry
         # First check if a registry was declared, if so verify it
         regk = serder.sad.get("rd")
@@ -1509,7 +1666,7 @@ class IpexHandler:
             record = self._vetRegistry(regk=regk,
                                        proofs=self._blindProofs(nest),
                                        target=serder.said,
-                                       acdc=serder)
+                                       acdc=serder, historical=historical)
             if record is None:
                 return False
             return True
@@ -1567,8 +1724,10 @@ class IpexHandler:
         # Fall back to signature verification when no registry or anchor is supplied
         tsgs = []
 
-        # Resolve the issuer's current key state.
-        kever = self.hby.db.kevers.get(issuer)
+        # Membership performs the existing statedict read-through from verified
+        # persisted state. Its get() only sees warmed in-memory entries, so it
+        # would incorrectly require replay of an already retained KEL on restart.
+        kever = self.hby.kevers[issuer] if issuer in self.hby.kevers else None
 
         # Read bare indexed signatures from the node stream.
         sigers = parsed.get("sigers", [])
@@ -1627,64 +1786,47 @@ class IpexHandler:
 
     @staticmethod
     def _blindProofs(nest):
-        """Rebuild all parsed node-local blind disclosures as Blinders."""
-        # Read sequenced blind disclosures from the parsed node.
-        bsqs = nest.get("bsqs", []) if isinstance(nest, dict) else nest.bsqs
+        """Transitional delegate retained for current Dolly and CLI callers."""
+        return PresentedEvidence.blindProofs(nest)
 
-        # Read bound blind disclosures from the parsed node.
-        bsss = nest.get("bsss", []) if isinstance(nest, dict) else nest.bsss
-
-        # Rebuild each sequenced disclosure as a BlindState proof.
-        proofs = []
-        for proof in bsqs:
-            stream = b''.join(item.qb64b for item in proof)
-            proofs.append(Blinder(clan=BlindState, qb64=stream))
-
-        # Rebuild each bound disclosure as a BoundState proof.
-        for proof in bsss:
-            stream = b''.join(item.qb64b for item in proof)
-            proofs.append(Blinder(clan=BoundState, qb64=stream))
-
-        # Return every proof attached to this one ACDC node.
-        return proofs
-
-    def _registryEvidence(self, regk):
-        """Load one complete accepted TEL chain from the injected store."""
-        # Registry verification requires an injected local Regery.
-        if self.rgy is None:
-            return None
-
-        # Load the registry inception and current accepted head.
-        rip = self.rgy.store.seqEvent(regk, 0)
-        head = self.rgy.store.headEvent(regk)
-
-        # Missing either of them mean the local TEL chain is incomplete.
-        if rip is None or head is None:
-            raise MissingChainError(f"missing local TEL evidence for registry {regk}")
-
-        # Rebuild the contiguous accepted update chain in sequence order.
-        updates = []
-        for sn in range(1, Number(numh=head.sad["n"]).num + 1):
-
-            # Load the accepted event at this sequence number.
-            update = self.rgy.store.seqEvent(regk, sn)
-
-            # A sequence gap must be retrieved before retrying.
-            if update is None:
-                raise MissingChainError(f"missing local TEL update {sn} for registry {regk}")
-
-            # Preserve this contiguous update for TEL verification.
-            updates.append(update)
-
-        # Return the complete local chain.
-        return rip, updates
+    def _registryEvidence(self, regk, *, proofs=None, target=None, acdc=None):
+        """Transitional shared-history delegate for IPEX and current Dolly callers."""
+        return PresentedEvidence(self.hby, self.rgy).registryEvidence(
+            regk, proofs=proofs, target=target, acdc=acdc)
 
     def _vetRegistry(self, regk, proofs, target, controller=None, acdc=None,
-                     cutoff=None, sourceSeals=None, requireSource=False):
-        """Vet one issuer or presentation registry using matching BLIDs."""
+                     cutoff=None, sourceSeals=None, requireSource=False, historical=False):
+        """Vet one issuer or presentation registry using matching BLIDs.
+
+        Args:
+            regk (str): Selected issuer or presentation registry identifier.
+            proofs (Iterable[Blinder]): Node-local disclosures, matched to TEL BLIDs.
+            target (str): Credential/exchange SAID the selected binding must commit to.
+            controller (str | None): Required registry-controlling AID.
+            acdc (SerderACDC | None): Credential for issuer-registry mutual binding.
+            cutoff: Legacy timestamp selector; common verification rejects it.
+            sourceSeals (Iterable | None): Explicit Issuee KEL source triples.
+            requireSource (bool): Require an authenticated historical binding source.
+            historical (bool): Select the unique accepted prefix identified by
+                retained openings. Generic node source locators do not select it.
+
+        Returns:
+            RegStateRecord | None: Verified selected binding, or None for permanent
+            structural/binding failure or no injected registry owner.
+
+        Raises:
+            MissingChainError: The accepted chain, selected KEL anchor, or TEL event
+                for a self-verified target opening is unavailable. An unmatched
+                opening proves no newer ordinal, state, or freshness; even a
+                self-valid foreign opening may remain unresolved without acceptance.
+
+        The common verifier authenticates the TEL and openings. Neither a cache hit nor
+        an unsigned source locator is an independent claim of acceptance."""
 
         # Require disclosed proofs and a locally available TEL chain.
-        if not proofs or (evidence := self._registryEvidence(regk)) is None:
+        proofs = list(proofs)
+        if (evidence := self._registryEvidence(regk, proofs=proofs if historical else None,
+                                              target=target, acdc=acdc)) is None:
             return None
 
         # Import lazily to avoid the ACDC module cycle.
@@ -1731,6 +1873,14 @@ class IpexHandler:
                     raise MissingChainError(
                         f"missing presentation anchor source for registry {regk}")
 
+            # A presentation proof names its historical KEL source. Resolve
+            # that source to an exact TEL prefix; request timeliness does not
+            # select registry history. Current issuer standing uses the head.
+            at = evidence[1][-1].said if historical else None
+            if requireSource and sources:
+                at = max((update for update in evidence[1] if update.said in sources),
+                         key=lambda update: Number(numh=update.sad['n']).num).said
+
             # Verify the TEL and its latest disclosed target binding.
             record = regeventing.vetBinds(rip=evidence[0],
                                           updates=evidence[1],
@@ -1740,6 +1890,7 @@ class IpexHandler:
                                           controller=controller,
                                           acdc=acdc,
                                           cutoff=cutoff,
+                                          at=at,
                                           sources=sources,
                                           requireSource=requireSource)
 
@@ -1762,99 +1913,105 @@ class IpexHandler:
                     f"missing presentation anchor source for registry {regk}") from ex
             return None
 
+        except UnverifiedBlindError as ex:
+            # A resolved historical source selects an exact accepted event;
+            # another opening cannot replace that event's required commitment.
+            if requireSource:
+                return None
+            known = {update.sad['b'] for update in evidence[1]
+                     if update.ilk == Ilks.bup}
+            unresolved = None
+            try:
+                if acdc is not None:
+                    regeventing.vetBindings(acdc, regid=regk,
+                        issuer=evidence[0].sad['i'], td=target)
+                checked = []
+                for proof in proofs:
+                    disclosed, _ = regeventing.vetBlind(proof, blid=proof.said)
+                    if proof.said in known and sum(item.said == proof.said for item in proofs) != 1:
+                        return None  # Known commitments still require one opening.
+                    checked.append((proof, disclosed))
+                missingBound = None
+                for proof, disclosed in checked:
+                    if disclosed != target:
+                        continue
+                    try:
+                        regeventing.vetBound(proof, acdc=acdc, db=self.hby.db)
+                    except MissingAnchorError as error:
+                        # Scan all target proofs before returning a dependency:
+                        # a known contradiction wins regardless of proof order.
+                        missingBound = error
+                    if proof.said not in known:
+                        unresolved = proof.said
+            except (UnverifiedBlindError, MisbindingError, MisanchorError):
+                return None
+            if unresolved is not None:
+                if missingBound is not None:
+                    raise MissingChainError(
+                        f"registry {regk} opening is missing bound KEL evidence") from missingBound
+                # This is only an authenticated disclosure with no matching
+                # accepted TEL event. Fetch/retry through normal EXN escrow;
+                # do not infer its ordinal, issuer publication time, or validity.
+                raise MissingChainError(
+                    f"registry {regk} is missing TEL evidence for disclosed blid={unresolved}") from ex
+            return None
+
         # Structurally invalid or misbound TEL evidence fails permanently.
         except (MisdigestError, MissequenceError, MisregistryError,
-                RootSealError, MisbindingError, DuplicitousRegistryError,
-                UnverifiedBlindError):
+                RootSealError, MisbindingError, DuplicitousRegistryError):
             return None
 
     @staticmethod
     def _presentationRegistries(serder):
-        """Extract disclosed issuee/presentation-registry declarations.
+        """Extract the disclosed Issuee presentation-registry declaration.
 
         Return ``None`` for an unsupported hidden issuer registry or when a
-        registry-backed ACDC hides an attribute or aggregate element that could
-        contain a presentation requirement. A verifier cannot distinguish an
-        omitted requirement from an undisclosed one using only its digest.
+        registry-backed ACDC hides the top-level attribute block that carries
+        the presentation requirement.
         """
+        attribute = serder.sad.get("a")
+
         if not serder.sad.get("rd"):
             # A disclosed inner rd without top-level rd is an unsupported
             # hidden issuer registry, not a presentation registry.
-            attribute = serder.sad.get("a")
             if isinstance(attribute, Mapping) and attribute.get("rd"):
-                return None
-
-            # Apply the same rule to disclosed aggregate entries.
-            aggregate = serder.sad.get("A")
-            sections = aggregate[1:] if isinstance(aggregate, list) else [aggregate]
-            if any(isinstance(section, Mapping) and section.get("rd")
-                   for section in sections):
                 return None
 
             # A genuinely registry-less ACDC has no presentation declaration.
             return []
 
-        # Collect disclosed sections that may declare Issuee registry pairs.
-        sections = []
-
-        # Inspect the attribute section first.
-        attribute = serder.sad.get("a")
-
-        # A blinded attribute section may hide a required declaration.
+        # The presentation signal lives at the top level of the attribute
+        # block, so that block must be disclosed for IPEX to enforce it.
         if isinstance(attribute, str):
             return None
 
-        # Keep a disclosed attribute mapping for declaration scanning.
-        if isinstance(attribute, Mapping):
-            sections.append(attribute)
+        if not isinstance(attribute, Mapping):
+            return []
 
-        # Inspect aggregate sections for additional Issuees.
-        aggregate = serder.sad.get("A")
+        # Both fields are required to select a presentation registry.
+        regk = attribute.get("rd")
+        issuee = attribute.get("i")
+        if not regk or not issuee:
+            return []
 
-        # A blinded aggregate may hide a required declaration.
-        if isinstance(aggregate, str):
+        # Validate both identifiers before trusting the declaration.
+        try:
+            Saider(qb64=regk)
+            Prefixer(qb64=issuee)
+        except Exception:
             return None
 
-        # Skip the aggregate root and inspect its disclosed entries.
-        if isinstance(aggregate, list):
-
-            # Every inspected aggregate entry must be a mapping.
-            if any(not isinstance(section, Mapping) for section in aggregate[1:]):
-                return None
-            sections.extend(aggregate[1:])
-
-        # Support the single disclosed aggregate mapping form.
-        elif isinstance(aggregate, Mapping):
-            sections.append(aggregate)
-
-        # Preserve unique Issuee and registry declarations in wire order.
-        declarations = []
-        for section in sections:
-
-            # Read the presentation registry and its controlling Issuee.
-            regk = section.get("rd")
-            issuee = section.get("i")
-
-            # Ignore sections that do not declare the complete pair.
-            if not regk or not issuee:
-                continue
-
-            # Validate both identifiers before trusting the declaration.
-            try:
-                Saider(qb64=regk)
-                Prefixer(qb64=issuee)
-            except Exception:
-                return None
-
-            # Deduplicate declarations repeated across disclosed sections.
-            if (issuee, regk) not in declarations:
-                declarations.append((issuee, regk))
-
-        # Return every explicit presentation requirement.
-        return declarations
+        return [(issuee, regk)]
 
     def _verifyPresentationAuthGraph(self, serder, nodes, order):
-        """Verify every presentation registry in the DAG."""
+        """Verify presentation registries declared by the disclosed DAG."""
+
+        originSaid = order[0]
+        origin = nodes[originSaid]
+        origin = origin["serder"] if isinstance(origin, dict) else origin.serder
+
+        issuance = (serder.pre == origin.israid
+                    and serder.ked.get("ri", "") == origin.iseaid)
 
         required = []
 
@@ -1874,13 +2031,16 @@ class IpexHandler:
             if declarations is None:
                 return None
 
-            # Bind each declaration to this node's local proofs.
-            for issuee, regk in declarations:
-                # The declaration is the issuer's signal that this Issuee must
-                # authenticate the grant through this node-local registry.
-                required.append((said, issuee, regk, nest))
+            # Only the origin being issued is exempt. Linked credentials are
+            # existing disclosures whose presentation requirements still apply.
+            if issuance and said == originSaid:
+                continue
 
-        # Load the receiver timestamp that freezes registry history.
+            # Keep each declaration with its node-local proof stream.
+            for issuee, regk in declarations:
+                required.append((issuee, regk, nest))
+
+        # KRAM receipt time is not an ordering proof for KEL-anchored state.
         cache = self.hby.db.kramTMSC.get(
             keys=(serder.pre, serder.ked.get("x", ""), serder.said))
 
@@ -1892,18 +2052,17 @@ class IpexHandler:
         tethered = set()
 
         # Vet every declared registry independently.
-        for said, issuee, regk, nest in required:
-            # Resolve the latest disclosed binding as of KRAM acceptance.
+        for issuee, regk, nest in required:
+            # Resolve the binding through its verified KEL source reference.
             sourceSeals = nest.get("ssts", []) if isinstance(nest, dict) else nest.ssts
             record = self._vetRegistry(regk=regk,
                                        proofs=self._blindProofs(nest),
                                        target=serder.said,
                                        controller=issuee,
-                                       cutoff=cache.rdt,
                                        sourceSeals=sourceSeals,
                                        requireSource=True)
 
-            # Require a valid binding anchored before the KRAM-accepted send.
+            # This proves anchored authorization, not publication before receipt.
             if record is None:
                 return None
 
@@ -1923,7 +2082,18 @@ class IpexHandler:
         signatures from the same AID.
         Grants drop unresolved optional evidence after Exchanger requests the
         missing KEL. Other verbs reject foreign, invalid, or unresolved evidence.
-        """
+
+        Args:
+            serder (Serder): Sender-authenticated exchange under this handler's route.
+            tsgs (Iterable | None): Verified non-sender transferable signature groups.
+            cigars (Iterable | None): Verified non-sender nontransferable signatures.
+            sourceSeals (Iterable | None): Verified non-sender KEL source triples.
+            invalid (bool): Whether cryptographic attachment validation found bad evidence.
+            missing (Iterable | None): Attachment dependencies not yet resolved by KRAM.
+
+        Returns:
+            tuple | None: Accepted (tsgs, cigars, sourceSeals), or None for inadmissible
+            supplemental evidence. This filters evidence; it does not validate a Grant DAG."""
         # Normalize optional evidence collections for filtering.
         tsgs = tsgs if tsgs is not None else []
         cigars = cigars if cigars is not None else []
@@ -1941,7 +2111,8 @@ class IpexHandler:
             freshTsgs = []
             for prefixer, number, diger, sigers in tsgs:
                 # Resolve the endorser's current verified state.
-                kever = self.hby.db.kevers.get(prefixer.qb64)
+                kever = (self.hby.kevers[prefixer.qb64]
+                         if prefixer.qb64 in self.hby.kevers else None)
                 # Require exact current establishment coordinates.
                 if (kever is not None
                         and number.sn == kever.lastEst.s
@@ -1970,6 +2141,46 @@ class IpexHandler:
 
         # Accept an evidence-free non-Grant message.
         return [], [], []
+
+    def verifyAccepted(self, said, *, historical=False):
+        """Revalidate retained IPEX authentication and protocol without graph policy.
+
+        An EXN body in Baser proves neither route registration nor credential
+        acceptance: generic Exchangers may retain authenticated unknown routes.
+        Reuse the same proof and transition checks, allowing only an identical
+        already recorded response. By default use current registry heads;
+        historical=True selects unique accepted prefixes from the retained
+        openings. Neither mode proves a past policy decision or publication time.
+
+        Args:
+            said (str): SAID of the retained ACDC v2 IPEX exchange to revalidate.
+            historical (bool): Verify retained proof prefixes without claiming
+                current registry standing. Live intake retains the default False.
+
+        Returns:
+            bool: Whether retained sender authentication, exact nests, and current
+            protocol checks all verify. Unknown/wrong-route bodies return False.
+            Edge truth is assessed separately by evaluateGrant.
+
+        Raises:
+            KeriError: Retained authentication or dependent evidence is missing/invalid,
+            including MissingChainError and MissingSchemaError for retryable dependencies."""
+        from ..peer.exchanging import verify
+        serder = self.hby.db.exns.get((said,))
+        if serder is None or serder.route != self.resource or serder.pvrsn.major != 2:
+            return False
+        tsgs, cigars = verify(self.hby, serder)
+        seals = [(Prefixer(qb64=keys[1]), number, diger)
+                 for keys, (number, diger) in self.hby.db.ests.getTopItemIter((said, ''))]
+        evidence = self.verifyEvidence(serder,
+            tsgs=[item for item in tsgs if item[0].qb64 != serder.pre],
+            cigars=[item for item in cigars if item.verfer.qb64 != serder.pre],
+            sourceSeals=[item for item in seals if item[0].qb64 != serder.pre])
+        if evidence is None:
+            return False
+        return self.verify(serder, nests=loadParsedNestedSubstreams(self.hby, said),
+            sscs=[(number, diger) for prefixer, number, diger in seals
+                  if prefixer.qb64 == serder.pre], evidence=evidence, historical=historical)
 
     def response(self, serder):
         """Look up the recorded response to a prior IPEX exchange.
@@ -2009,6 +2220,129 @@ class IpexHandler:
             m=attrs["m"],
         ))
 
+
+@dataclass(frozen=True)
+class AcdcV2IpexVerification:
+    """Concrete ACDC v2 IPEX semantic context shared by intake and fresh admission.
+
+    This context carries evidence and policy, never a caller assertion of
+    acceptance. Retained inspection may outlive it; fresh acceptance may not.
+
+    Parameters:
+        hby (Habery): Owner of authenticated KEL and retained EXN evidence.
+        rgy (Regery | None): Registry evidence used for issuer authentication.
+        graphPolicy: Explicit local graph validity/averaging policy, or None.
+        sections (SectionBaser | None): Parser-owned independent schema store.
+    """
+    hby: object
+    rgy: object = None
+    graphPolicy: object = None
+    sections: object = None
+
+    def handler(self, resource, notifier=None):
+        """Return a route handler using this context's evidence and policy.
+
+        Args:
+            resource (str): ACDC v2 IPEX route to validate.
+            notifier: Optional receiver of accepted-message notifications.
+
+        Returns:
+            IpexHandler: Concrete route processor with no independent defaults.
+        """
+        return IpexHandler(resource, self.hby, notifier, rgy=self.rgy,
+                           verification=self)
+
+    def verifyAccepted(self, said, route, *, historical=False):
+        """Re-run retained authentication and protocol checks, without edge policy.
+
+        Args:
+            said (str): Retained exchange identifier.
+            route (str): Expected ACDC v2 IPEX route.
+            historical (bool): Select retained opening prefixes; False preserves
+                current-head verification.
+
+        Returns:
+            bool: Whether retained authentication and protocol checks pass.
+
+        Raises:
+            MissingSchemaError: A required independently supplied schema is absent.
+            KeriError: Retained authentication or dependent evidence is invalid.
+        """
+        return self.handler(route).verifyAccepted(said, historical=historical)
+
+    def _evaluateGraph(self, nodes, order, *, historical):
+        """Invoke the single evaluator with this action's concrete policy/evidence."""
+        return EdgeEvaluator(PresentedEvidence(self.hby, self.rgy),
+            graphPolicy=self.graphPolicy, sections=self.sections).evaluate(
+                nodes, order, historical=historical)
+
+    def evaluateGrant(self, said, *, historical=False):
+        """Evaluate a retained, protocol-authenticated nonempty Grant's root.
+
+        Revalidate sender, disclosure, issuer, own schema, presentation and AX
+        checks first. Invalid authentication/structure raises ValidationError;
+        existing dependency exceptions propagate. Return bool or unresolved None.
+        historical selects retained proof prefixes, never current standing or a
+        remembered policy decision. Empty protocol grants are not graph uses.
+        """
+        if not self.verifyAccepted(said, '/ipex/grant', historical=historical):
+            raise ValidationError('authenticated ACDC v2 Grant is required for graph use')
+        exn = self.hby.db.exns.get((said,))
+        origins = exn.sad['a'].get('o')
+        if not _validSingleDagList(origins, str):
+            raise ValidationError('graph use requires one disclosed origin')
+        # Authentication above already checked these immutable retained nests.
+        walked = self.handler('/ipex/grant')._walkGraph(origins[0],
+            loadParsedNestedSubstreams(self.hby, said), closed=True)
+        if walked is None:
+            raise ValidationError('invalid retained disclosure graph')
+        return self._evaluateGraph(*walked, historical=historical)
+
+    def evaluateDisclosure(self, origin, nests, *, historical=False):
+        """Authenticate exact parsed node views, then return complete root truth.
+
+        nests are ordinary Parser MsgParseDom objects (or their dictionaries),
+        not an assertion of accepted EXN state. No outer Grant/presentation/AX
+        authentication is claimed. Malformed structure, invalid issuer proofs
+        and own-schema failures raise ValidationError. Missing KEL/TEL/schema
+        dependencies retain their existing exceptions; semantic unknown is None.
+        """
+        if (not isinstance(origin, str) or not isinstance(nests, list)
+                or any(not isinstance(nest.get('serder') if isinstance(nest, Mapping)
+                                      else getattr(nest, 'serder', None), SerderACDC)
+                       for nest in nests)):
+            raise ValidationError('graph use requires parsed ACDC node streams')
+        handler = self.handler('/ipex/grant')
+        walked = handler._walkGraph(origin, nests, closed=True)
+        if walked is None:
+            raise ValidationError('invalid disclosed graph')
+        if not handler._authenticateGraph(*walked, historical=historical):
+            raise ValidationError('disclosed graph authentication failed')
+        return self._evaluateGraph(*walked, historical=historical)
+
+    def evaluateSelected(self, origin, artifacts=None, *, historical=False):
+        """Check selected credential streams before a caller signs its Grant.
+
+        Use the builder's existing nesting normalization and parse-only Parser;
+        require exactly one fully consumed node per input. This creates no EXN,
+        signatures, anchors, accepted rows or cached fuller disclosure. A bare
+        body without a selected issuer proof is not authenticated by local custody.
+        """
+        if origin is None or (artifacts is not None and not isinstance(artifacts, list)):
+            raise ValidationError('graph use requires an origin and a list of artifacts')
+        nests = []
+        for stream in [origin, *(artifacts or [])]:
+            try:
+                ims = _normalizeNodeStream(stream)
+                node = Parser(version=Vrsn_2_0).parseOne(ims=ims, framed=True, processive=False)
+                if node is None or ims:
+                    raise ValueError('expected one fully consumed node stream')
+            except (KeriError, ValueError, TypeError) as ex:
+                raise ValidationError('invalid selected credential stream') from ex
+            nests.append(node)
+        return self.evaluateDisclosure(nests[0].serder.said, nests, historical=historical)
+
+
 def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gvrsn=None, *, ax=None):
     """Create a signed V2 IPEX ``apply`` exchange.
 
@@ -2021,7 +2355,7 @@ def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gv
         kind (str | None): Optional serialization kind override.
         gvrsn (Versionage | None): Optional CESR genus version override.
         modifiers (dict | None): Query-section fields for ``q``. ``apply``
-            requires an explicit single-DAG disclosure plan at
+            requires an explicit flat disclosure-path plan at
             ``modifiers["dp"]``.
         ax (list[bool] | None): Single-DAG anchoring requirement. None omits
             the field; otherwise exactly one boolean is required.
@@ -2044,10 +2378,12 @@ def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gv
     data["m"] = message
     mods = dict(modifiers) if modifiers else {}
 
-    if ("dp" not in mods
-            or not _validSingleDagList(mods["dp"], list)
-            or not _validDisclosurePath(mods["dp"][0])):
-        raise ValueError("modifiers['dp'] is required and must carry one disclose-path list per DAG")
+    if "dp" not in mods:
+        raise ValueError("modifiers['dp'] is required")
+    if error := _disclosurePathError(mods["dp"]):
+        raise ValueError(error)
+    if not mods["dp"]:
+        raise ValueError("an apply opener must carry a non-empty q.dp plan")
 
     # Validate ax and add it to the body
     if ax is not None:
@@ -2091,7 +2427,8 @@ def offer(hab, message, origin, artifacts=None, apply=None, recp=None, dt=None,
             plan.
         artifacts (list[Serder | bytes | bytearray] | None): Optional
             additional ACDC DAG nodes carried after ``origin``. Passing a list,
-            including ``[]``, means the offer carries a nested DAG.
+            including ``[]``, means the offer carries ``origin`` as a nested
+            ACDC, so an expanded origin provides full disclosure in the Offer.
         apply (Serder | None): Optional prior ``apply`` exchange.
         recp (str | None): Recipient AID. Defaults to the prior ``apply``
             sender; must be supplied directly for an offer-first exchange
@@ -2136,22 +2473,30 @@ def offer(hab, message, origin, artifacts=None, apply=None, recp=None, dt=None,
         raise ValueError("use the ax parameter instead of attrs['ax']")
     data["m"] = message
 
-    # Retrieve dp from modifiers if present. When the offer answers an apply,
-    # inherit the requested disclose-path plan unless the caller overrides it.
-    # Offer-first flows have no earlier disclosure request to inherit, so an
-    # explicitly empty plan requests no disclosure.
+    # A solicited Offer may use the normative empty-list ditto. An unsolicited
+    # Offer has no predecessor to inherit from and must state its plan.
     mods = dict(modifiers) if modifiers else {}
     if "dp" not in mods:
         if apply is not None:
-            aq = apply.ked.get("q")
-            if isinstance(aq, dict) and "dp" in aq:
-                mods["dp"] = aq["dp"]
+            inherited = apply.ked.get("q", {}).get("dp")
+            if error := _disclosurePathError(inherited):
+                raise ValueError(f"cannot inherit prior disclosure plan: {error}")
+            if not inherited:
+                raise ValueError("cannot inherit an empty prior disclosure plan")
+            mods["dp"] = []
         else:
             raise ValueError("modifiers['dp'] is required when no prior apply is provided")
 
-    # Offer uses the same canonical q.dp builder contract as apply.
-    if not _validSingleDagList(mods["dp"], list) or not _validDisclosurePath(mods["dp"][0]):
-        raise ValueError("modifiers['dp'] must carry one disclose-path list per DAG")
+    if error := _disclosurePathError(mods["dp"]):
+        raise ValueError(error)
+    if not mods["dp"] and apply is None:
+        raise ValueError("an unsolicited offer must carry a non-empty q.dp plan")
+    if not mods["dp"]:
+        inherited = apply.ked.get("q", {}).get("dp")
+        if error := _disclosurePathError(inherited):
+            raise ValueError(f"cannot inherit prior disclosure plan: {error}")
+        if not inherited:
+            raise ValueError("cannot inherit an empty prior disclosure plan")
 
     # Validate ax if present
     if ax is not None:
@@ -2260,7 +2605,7 @@ def agree(hab, message, offer, recp=None, dt=None, kind=None, gvrsn=None):
         xid=xid,
         prior=offer.said,
         route="/ipex/agree",
-        modifiers=dict(dp=[[]]),
+        modifiers=dict(dp=[]),
         stamp=dt,
         attributes=data,
         pvrsn=Vrsn_2_0,
@@ -2283,8 +2628,8 @@ def grant(hab, recp, message, origin=None, artifacts=None, agree=None,
         recp (str): Recipient AID for the disclosure.
         message (str): Human-readable disclosure message.
         origin (Serder | bytes | bytearray | None): Origin ACDC node identified
-            in ``a.o[0]`` and carried as the first nested artifact. None creates
-            a vacuous Grant when the effective disclosure plan is empty.
+            in ``a.o[0]`` and carried as the first nested artifact. A Grant that
+            fulfills a disclosure plan requires this origin.
         artifacts (list[Serder | bytes | bytearray] | None): Optional
             additional disclosed ACDC nodes carried after ``origin``.
         agree (Serder | None): Optional prior ``agree`` exchange.
@@ -2299,8 +2644,8 @@ def grant(hab, recp, message, origin=None, artifacts=None, agree=None,
         modifiers (dict | None): Query-section fields. A prior-linked Grant
             defaults to an empty ``dp`` ditto. A bare one-node Grant derives a
             root-presence plan; a multi-node Grant requires an explicit plan.
-        endorsers (list[Hab] | None): Additional local grantors that sign the
-            grant. The sender remains the KRAM-authenticated outer sender.
+        endorsers (list[Hab] | None): Additional local AIDs that sign the Grant.
+            The sender remains the Discloser and KRAM-authenticated outer sender.
         anchorers (list[Hab] | None): Explicit local AIDs that KEL-anchor the
             grant. None preserves the truthy-``ax`` sender-anchor default; an
             empty list leaves anchoring to a presentation registry.
@@ -2356,23 +2701,22 @@ def grant(hab, recp, message, origin=None, artifacts=None, agree=None,
     mods = dict(modifiers) if modifiers else {}
     if "dp" not in mods:
         if previous is not None or origin is None:
-            mods["dp"] = [[]]   # ditto the prior's dp or empty for a vacuous Grant
+            mods["dp"] = []   # ditto the prior's disclosure plan
         elif not artifacts:
             schema = originSerder.schema
             if isinstance(schema, Mapping):
                 schema = schema.get("$id")
-            mods["dp"] = [[[schema, "/", []]]]
+            mods["dp"] = [[schema, "/", []]]
         else:
             raise ValueError("a bare multi-node Grant requires an explicit disclosure plan")
-    if (not _validSingleDagList(mods["dp"], list)
-            or not _validDisclosurePath(mods["dp"][0])):
-        raise ValueError("modifiers['dp'] must carry one disclose-path list per DAG")
+    if error := _disclosurePathError(mods["dp"]):
+        raise ValueError(error)
 
     if previous is None:
-        if mods["dp"][0] and origin is None:
+        if mods["dp"] and origin is None:
             raise ValueError("a non-empty disclosure plan requires an origin")
-        if not mods["dp"][0] and (origin is not None or artifacts):
-            raise ValueError("a bare Grant with an empty disclosure plan must be vacuous")
+        if not mods["dp"]:
+            raise ValueError("a bare Grant may not use empty q.dp without a prior")
 
     if ax is not None:
         if not _validSingleDagList(ax, bool):
@@ -2543,22 +2887,23 @@ def spurn(hab, message, spurned, recp=None, dt=None, kind=None, gvrsn=None):
     return serder, atc
 
 
-def loadHandlers(hby, exc, notifier, rgy=None):
-    """Register handlers for the six V2 IPEX verb routes.
+def loadHandlers(hby, exc, notifier, rgy=None, *, graphPolicy=None, sections=None):
+    """Register ACDC v2 IPEX routes with one explicit semantic context.
 
-    Parameters:
-        hby (Habery): Habitat environment and backing database.
-        exc (Exchanger): Exchange router to register handlers on.
-        notifier: Notifier-like object passed through to each handler.
-        rgy (Regery | None): Optional local registry manager reused by every
-            IPEX handler for verifier-side registry proof checks.
+    Schema lookup uses the same section store as the application's parser.
+
+    Args:
+        hby (Habery): Owner of KEL and EXN evidence.
+        exc (Exchanger): Router receiving the six ACDC v2 IPEX handlers.
+        notifier: Receiver of accepted-message notifications.
+        rgy (Regery | None): Issuer registry evidence owner.
+        graphPolicy: Explicit local graph policy, or None for default semantics.
+        sections (SectionBaser | None): Independent schema store used by parsing.
 
     Returns:
-        None
+        AcdcV2IpexVerification: Shared semantic context for explicit wallet injection.
     """
-    exc.addHandler(IpexHandler(resource="/ipex/apply", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/offer", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/agree", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/grant", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/admit", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/spurn", hby=hby, notifier=notifier, rgy=rgy))
+    verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=graphPolicy, sections=sections)
+    for verb in Ipex:
+        exc.addHandler(verification.handler(f"/ipex/{verb}", notifier))
+    return verification

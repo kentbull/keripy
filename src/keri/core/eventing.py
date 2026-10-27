@@ -2705,8 +2705,7 @@ class Kever:
                                 wigers, toader, wits, *,
                                 delsner=None, delsger=None, eager=False,
                                 local=True):
-        """
-        Returns triple (sigers, wigers, delegator) where:
+        """Returns triple (sigers, wigers, delegator) where:
 
         sigers is unique validated signature verified members of inputed sigers
         wigers is unique validated signature verified members of inputed wigers
@@ -2744,7 +2743,18 @@ class Kever:
             local (bool): event source for validation logic
                 True means event source is local (protected).
                 False means event source is remote (unprotected).
-                Event validation logic is a function of local or remote"""
+                Event validation logic is a function of local or remote
+
+        Returns:
+            tuple: Deduplicated verified controller signatures, verified witness
+            signatures, and delegator AID (or None). Witness quorum counts distinct
+            verified witness indexes, so repeat signatures from one witness cannot vote
+            twice even when their encodings differ.
+
+        Raises:
+            ValidationError: Event, signature, threshold, or delegation requirements fail.
+            MissingSignatureError, MissingWitnessSignatureError, MissingDelegableApprovalError:
+            Required evidence is escrowed by the existing event-processing boundary."""
         if len(verfers) < tholder.size:
             raise ValidationError("Invalid sith = {} for keys = {} for evt = {}."
                                   "".format(tholder.sith,
@@ -2856,7 +2866,7 @@ class Kever:
                     if toader.num != 0:  # invalid toad
                         raise ValidationError(f"Invalid toad = {toader.num} for wits = {wits}")
 
-                if len(windices) < toader.num:  # not fully witnessed yet
+                if len(set(windices)) < toader.num:  # distinct witnesses, not encodings
                     if self.escrowPWEvent(serder=serder, wigers=wigers, sigers=sigers,
                                           delsner=delsner, delsger=delsger,
                                           local=local):
@@ -5492,7 +5502,22 @@ class Kevery:
             serder (SerderKERI) is query message serder
             source (Prefixer) identifier prefix of querier
             sigers (list) of Siger instances of attached controller indexed sigs
-            cigars (list) of Cigar instance of attached non-trans sigs"""
+            cigars (list) of Cigar instance of attached non-trans sigs
+
+        Additional parameter:
+            **kwa: Dispatch metadata accepted for compatibility, unused by this query path.
+
+        Returns:
+            None. Queues replay/reply cues for satisfied requests; missing target/KEL or
+            verified distinct-witness quorum remains in query-not-found escrow.
+
+        Raises:
+            QueryNotFoundError: Required local evidence is unavailable.
+            ValidationError: Unsupported query resource or invalid query data.
+
+        The historical event's authenticated witness set governs readiness. This legacy
+        query path retains its existing promiscuous requester policy; it does not claim
+        new query-signature authentication."""
         ked = serder.ked
 
         ilk = ked["t"]
@@ -5564,11 +5589,7 @@ class Kevery:
 
             kever = self.kevers[pre]
 
-            # get list of witness signatures to ensure we are presenting a fully witnessed event
-            wigers = self.db.wigs.get(keys=(pre, kever.serder.saidb))
-
-
-            if len(wigers) < kever.toader.num:
+            if not self.db.fullyWitnessed(kever.serder):
                 self.escrowQueryNotFoundEvent(serder=serder, prefixer=source, sigers=sigers, cigars=cigars)
                 msg = f"Query not found error on event route={route} SAID={serder.said}"
                 logger.debug(msg)

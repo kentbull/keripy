@@ -73,7 +73,7 @@ setup(
                         'lmdb==2.3.0',
                         'pysodium==0.7.18',
                         'blake3==1.0.9',
-                        'msgpack==1.2.2',
+                        'msgpack==1.2.3',
                         'cbor2==6.1.4',
                         'multidict==6.9.1',
                         'ordered-set==4.1.0',
@@ -91,7 +91,7 @@ setup(
                         'semver==3.0.4',
                         'qrcode==8.2',
                         'sortedcontainers==2.4.0',
-                        'setuptools==84.0.0',
+                        'setuptools==84.1.0',
                         'wheel==0.48.0',
     ],
     extras_require={

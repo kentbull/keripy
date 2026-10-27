@@ -183,6 +183,59 @@ def test_receiptor_propagates_only_verified_receipts(monkeypatch, version):
             assert indices == expected[wit]
 
 
+
+@pytest.mark.parametrize("version", [Vrsn_1_0, Vrsn_2_0])
+def test_receiptor_collects_past_offline_first_witness(monkeypatch, version):
+    """Later valid receipts reach verification; cancellation removes all clients."""
+    from contextlib import ExitStack
+
+    kwa = dict(version=version, kind=Kinds.json)
+    sent, client_doers = [], []
+    with ExitStack() as stack:
+        hbys = [stack.enter_context(openHby(name=f"quorum-{i}", version=version))
+                for i in range(4)]
+        witnesses = [hby.makeHab(name=f"witness-{i}", transferable=False, **kwa)
+                     for i, hby in enumerate(hbys[:3])]
+        hab = hbys[3].makeHab(name="controller", transferable=True, toad=2,
+                              wits=[wit.pre for wit in witnesses], **kwa)
+        serder = hab.kever.serder
+        clients = {}
+        for index, witness in enumerate(witnesses):
+            # No response ever arrives from the first endpoint. The other two
+            # responses contain authentic signatures, not pre-populated DB rows.
+            responses = [] if index == 0 else [SimpleNamespace(
+                status=200, body=witness.receipt(serder=serder, framed=True,
+                                                gvrsn=version, **kwa))]
+            clients[witness.pre] = SimpleNamespace(responses=responses,
+                                                    respond=lambda r=responses: r.pop(0))
+
+        def client_for(hab, wit):
+            """Return a transport double whose lifecycle the collector owns."""
+            doer = doing.Doer()
+            client_doers.append(doer)
+            return clients[wit], doer
+
+        def dispatch(client, ims, dest, path=None, headers=None):
+            """Record requests while the real habitat parser verifies replies."""
+            sent.append(dest)
+            return 1
+
+        monkeypatch.setattr(agenting, "httpClient", client_for)
+        monkeypatch.setattr(agenting, "streamCESRRequests", dispatch)
+        receiptor = Receiptor(hby=hbys[3])
+        original_doers = list(receiptor.doers)
+        collection = receiptor.receipt(hab.pre)
+        try:
+            next(collection)
+            assert sent == [wit.pre for wit in witnesses]
+            assert {wig.index for wig in hab.db.wigs.get(
+                keys=(serder.preb, serder.saidb))} == {1, 2}
+            assert all(doer in receiptor.doers for doer in client_doers)
+        finally:
+            collection.close()
+        assert receiptor.doers == original_doers
+
+
 def test_witness_receiptor(seeder, witnessPorter):
     with openHby(name="wan1", salt=Salter(raw=b'wann-the-witness').qb64) as wanHby, \
             openHby(name="wil1", salt=Salter(raw=b'will-the-witness').qb64) as wilHby, \
@@ -618,3 +671,27 @@ def test_telquery_uses_pre_not_wits():
         assert msg["src"] == hab.pre
         assert msg["target"] == acdc_said
         assert msg["q"]["ri"] == ri
+
+
+def test_witness_inquisitor_introduction_uses_query_genus(monkeypatch):
+    """Keep the introduction and query attachment framing on the same genus."""
+    introduced = []
+    messenger = SimpleNamespace(wit="target", msgs=[], sent=[])
+    hab = SimpleNamespace(query=lambda *args, **kwa: b"query")
+    hby = SimpleNamespace(version=Vrsn_2_0)
+    witq = WitnessInquisitor(hby=hby)
+    witq.extend = lambda doers: None
+
+    monkeypatch.setattr(agenting, "messenger", lambda *args, **kwa: messenger)
+    from keri.app import forwarding
+    monkeypatch.setattr(forwarding, "introduce",
+                        lambda *args, **kwa: introduced.append(kwa["gvrsn"]) or b"intro")
+
+    witq.telquery(ri="registry", src="sender", i="credential", hab=hab,
+                  wits=["target"], gvrsn=Vrsn_1_0)
+    doer = witq.msgDo()
+    next(doer)
+    next(doer)
+
+    assert introduced == [Vrsn_1_0]
+    assert messenger.msgs == [bytearray(b"intro"), bytearray(b"query")]

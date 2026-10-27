@@ -35,12 +35,12 @@ parser.add_argument("--authenticate", '-z', help="Prompt the controller for auth
 
 
 def handler(args):
-    """
-    Submit KERI identifier prefix to its witnesses for receipts.
+    """Return the existing identity's witness-receipt submission worker.
 
-    Parameters:
-        args(Namespace): arguments object from command line
-    """
+    args selects name/base/passcode, alias, force/authentication, and synchronous
+    receipt-endpoint mode. Return one lifecycle Doer; this command submits the
+    current event and does not create a new identifier. Authentication, witness,
+    and transport failures propagate through the scheduled worker."""
 
     name = args.name
     base = args.base
@@ -56,34 +56,45 @@ def handler(args):
 
 
 class SubmitDoer(doing.DoDoer):
-    """ DoDoer for creating a new identifier prefix and Hab with an alias.
-    """
+    """Own receipt acquisition for an existing identifier's current KEL event.
+
+    Endpoint mode uses synchronous receipt work and avoids a mailbox listener.
+    The ordinary path retains mailbox processing and queued witness receipt work;
+    identifier details are printed only after that selected receipt loop finishes."""
 
     def __init__(self, name, base, alias, bran, force, endpoint=False, authenticate=False):
 
+        """Open the requested identity and compose its receipt acquisition owners.
+
+        name/base/bran select an existing identity and alias its habitat. force keeps
+        the legacy witness retry policy; endpoint chooses synchronous receipt queries;
+        authenticate prompts for witness codes during work. Schedule HaberyDoer and,
+        only outside endpoint mode, MailboxDirector. Store authentication failures
+        propagate here; scheduled children own normal resource teardown."""
         hby = setupHby(name=name, base=base, bran=bran)
         self.hbyDoer = HaberyDoer(habery=hby)  # setup doer
-        self.mbx = MailboxDirector(hby=hby, topics=['/receipt', "/replay", "/reply"])
+        self.mbx = (None if endpoint else
+                    MailboxDirector(hby=hby, topics=['/receipt', "/replay", "/reply"]))
         self.alias = alias
         self.hby = hby
         self.force = force
         self.endpoint = endpoint
         self.authenticate = authenticate
 
-        doers = [self.hbyDoer, self.mbx, doing.doify(self.submitDo)]
+        doers = [self.hbyDoer, doing.doify(self.submitDo)]
+        if self.mbx is not None:
+            doers.append(self.mbx)
 
         super(SubmitDoer, self).__init__(doers=doers)
 
     def submitDo(self, tymth, tock=0.0, **kwa):
-        """
-        Parameters:
-            tymth (function): injected function wrapper closure returned by .tymen() of
-                Tymist instance. Calling tymth() returns associated Tymist .tyme.
-            tock (float): injected initial tock value
+        """Yield while the chosen receipt path works, then print identifier details.
 
-        Returns:
-            doifiable Doist compatible generator method
-        """
+        tymth/tock/kwa follow hio scheduling. Resolve the existing alias, optionally
+        prompt for per-witness authentication codes, and run synchronous Receiptor or
+        the existing queued WitnessReceiptor. Return None after removing receipt and
+        identity/mailbox workers. No new identifier, credential, or registry is authored;
+        receipt/authentication failures propagate to the enclosing scheduler."""
         # enter context
         self.wind(tymth)
         self.tock = tock
@@ -117,7 +128,9 @@ class SubmitDoer(doing.DoDoer):
 
         printIdentifier(self.hby, hab.pre)
 
-        toRemove = [self.hbyDoer, self.mbx]
+        toRemove = [self.hbyDoer]
+        if self.mbx is not None:
+            toRemove.append(self.mbx)
         self.remove(toRemove)
 
         return

@@ -121,10 +121,10 @@ class statedict(dict):
             kever: converted from underlying dict or database
 
         """
-        if not super(statedict, self).__contains__(k):
-            return default
-        else:
+        try:
             return self.__getitem__(k)
+        except KeyError:
+            return default
 
 
 def openDB(*, cls=None, name="test", **kwa):
@@ -2043,22 +2043,49 @@ class Baser(LMDBer):
         return habord.rmids
 
     def fullyWitnessed(self, serder):
-        """ Verify the witness threshold on the event
+        """Verify distinct witness receipts under the event's historical quorum.
 
         Parameters:
             serder (Serder): event serder to validate witness threshold
 
         Returns:
-
+            bool: True when this accepted event has enough valid receipts from
+                its own witness set. Later rotations cannot alter that quorum.
         """
-        # Verify fully receipted, because this witness may have persisted before all receipts
-        # have been gathered if this ius a witness for serder.pre
-        # get unique verified wigers and windices lists from wigers list
-        wigers = self.wigs.get(keys=(serder.preb, serder.saidb))
-        kever = self.kevers[serder.pre]
-        toad = kever.toader.num
+        from ..core.coring import Verfer
 
-        return not len(wigers) < toad
+        # Event bodies may also be present for pending events. Only an accepted
+        # ordinal supplies authority for this lookup, including a zero quorum.
+        if self.kels.getLast(keys=serder.pre, on=serder.sn) != serder.said:
+            return False
+
+        # The latest establishment event at or before this event governs both
+        # its witness list and bt. Read accepted history without constructing a
+        # Kevery or consulting the controller's current mutable key state.
+        for dig in self.kels.getBackIter(keys=serder.pre, on=serder.sn):
+            est = self.evts.get(keys=(serder.pre, dig))
+            if est is None:
+                return False
+            if est.estive:
+                break
+        else:
+            return False
+
+        wits = self.wits.get(keys=(serder.pre, est.said))
+        toad = est.bner.num
+        if toad == 0:
+            return not wits
+        if not 0 < toad <= len(wits):
+            return False
+
+        indices = set()
+        for wiger in self.wigs.get(keys=(serder.preb, serder.saidb)):
+            index = wiger.index
+            if index in indices or not 0 <= index < len(wits):
+                continue
+            if Verfer(qb64=wits[index].qb64).verify(wiger.raw, serder.raw):
+                indices.add(index)
+        return len(indices) >= toad
 
     def resolveVerifiers(self, pre=None, sn=0, dig=None):
         """

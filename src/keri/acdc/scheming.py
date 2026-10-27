@@ -8,6 +8,7 @@ ACDC Schema support
 
 from collections.abc import Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 import jsonschema
@@ -15,7 +16,8 @@ import referencing
 import semver
 from referencing.jsonschema import DRAFT202012
 
-from ..core import Diger, Saider, Schemer, dumps
+from .. import Kinds
+from ..core import Compactor, Diger, Mapper, Saider, Schemer, dumps
 from ..kering import (FailedSchemaValidationError, MissingSchemaError,
                       ValidationError)
 
@@ -163,10 +165,18 @@ def _verifyResource(schema, kind=None):
     saider = Saider(qb64=said)
     sad = dict(schema)
     sad["$id"] = declared.replace(said, "#" * len(said))
-    raw = dumps(sad) if kind is None else dumps(sad, kind=kind)
+    if kind == Kinds.cesr and declared == said:
+        # Native CESR saidive fields use raw dummy material, not a CESR
+        # text primitive encoding the placeholder characters.
+        actual = Mapper(mad=schema, makify=True, saidive=True, strict=False,
+                        saids={'$id': saider.code}).said
+    else:
+        raw = (Mapper(mad=sad, strict=False).raw if kind == Kinds.cesr
+               else dumps(sad, kind=kind or Kinds.json))
+        actual = Diger(ser=raw, code=saider.code).qb64
 
     # Confirm the content produces the declared SAID
-    if Diger(ser=raw, code=saider.code).qb64 != said:
+    if actual != said:
         raise FailedSchemaValidationError(
             f"bundled schema {declared} content does not match its SAID")
 
@@ -235,10 +245,19 @@ def _inspectSchema(schema, *, root=True, kind=None, base=None):
     return references
 
 
-def _verifySchemer(schema, *, expected=None):
+@dataclass(frozen=True)
+class _VerifiedSchema:
+    """Schema content authenticated in its actual section serialization kind."""
+    sed: dict
+    said: str
+    kind: str
+
+
+def _verifySchemer(schema, *, expected=None, kind=None):
     """Verify that a schema's content matches its claimed SAID.
 
-    The schema is rebuilt so its SAID is calculated again. When ``expected``
+    The schema is rebuilt in its actual encoding so its SAID is calculated
+    again. When ``expected``
     is supplied, the calculated SAID must also match that cache key or external
     reference.
 
@@ -247,12 +266,15 @@ def _verifySchemer(schema, *, expected=None):
         expected (str | None): SAID the schema is expected to have.
 
     Returns:
-        Schemer: A rebuilt schema whose content and SAID agree.
+        Schemer | _VerifiedSchema: Authenticated schema content and actual kind.
 
     Raises:
         FailedSchemaValidationError: If the schema has an invalid ``$id`` or
             its content does not match the declared or expected SAID.
-    """
+
+    Encoding parameter:
+        kind (str | None): Mapping's actual serialization kind; defaults to JSON.
+        Schemer inputs retain their own raw encoding rather than adopting this hint."""
     # Rebuild an existing Schemer from its bytes
     if isinstance(schema, Schemer):
         schemer = Schemer(raw=schema.raw, verify=False)
@@ -270,7 +292,10 @@ def _verifySchemer(schema, *, expected=None):
                 "schema has an invalid or non-SAID $id")
         # Rebuild a copy to calculate its SAID
         try:
-            schemer = Schemer(sed=deepcopy(schema), verify=False)
+            encoding = kind or Kinds.json
+            section = Compactor(mad=deepcopy(schema), makify=True, strict=False,
+                                saids={'$id': saider.code}, kind=encoding)
+            schemer = _VerifiedSchema(section.mad, section.said, encoding)
         except (TypeError, ValidationError, ValueError) as ex:
             raise FailedSchemaValidationError("schema has an invalid SAID") from ex
 
@@ -335,7 +360,34 @@ def _checkProfile(schemer):
     return _inspectSchema(schema, kind=schemer.kind)
 
 
-def _registry(schemer, db):
+def _cachedSchema(db, said, sections=None):
+    """Authenticate one schema from the concrete KEL or section evidence store.
+
+    Args:
+        db (Baser): Conventional local schema cache, checked first.
+        said (str): Exact normative schema commitment to authenticate.
+        sections (SectionBaser | None): Independent ACDC v2 sch evidence store.
+
+    Returns:
+        Schemer | _VerifiedSchema | None: Authenticated schema in its received
+        encoding, or None when no candidate is available.
+
+    Raises:
+        FailedSchemaValidationError: A candidate's content does not match its key.
+
+    Schema evidence enables validation only; no credential disclosure is merged."""
+    cached = db.schema.get(said)
+    if cached is not None:
+        return _verifySchemer(cached, expected=said)
+    if sections is not None:
+        for _, message in sections.parts.getTopItemIter(('s', said, '')):
+            section = sections.messages.get(message)
+            if section is not None and section.ilk == 'sch':
+                return _verifySchemer(section.sad['s'], expected=said, kind=section.kind)
+    return None
+
+
+def _registry(schemer, db, sections=None):
     """Build the local schema collection used during validation.
 
     The collection contains the root schema, bundled schemas, and referenced
@@ -352,13 +404,29 @@ def _registry(schemer, db):
     Raises:
         MissingSchemaError: If a referenced schema is not in the local cache.
         FailedSchemaValidationError: If a referenced schema is invalid.
-    """
+
+    Additional parameter:
+        sections (SectionBaser | None): Independent sch messages available to resolve
+        exact schema commitments; never used to expand credential attributes."""
     # Start an empty local registry
     registry = referencing.Registry()
     resources = {}
     references = []
 
     def add(current, aliases=()):
+        """Add one verified local schema and its bundled resources to this collection.
+
+        Args:
+            current (Schemer | _VerifiedSchema): SAID-verified schema in its actual kind.
+            aliases (Iterable[str]): Reference spellings for this same schema resource.
+
+        Returns:
+            None. Mutates the enclosing registry/resources/reference work lists, reusing
+            previously added SAIDs to terminate recursive references.
+
+        Raises:
+            FailedSchemaValidationError: Unsupported schema profile or bundled resource.
+            Missing remote references remain work for the outer local-only resolver."""
         nonlocal registry
         said = current.said
 
@@ -400,11 +468,10 @@ def _registry(schemer, db):
                 continue
 
             # Load the schema from the local cache
-            cached = db.schema.get(dependency)
+            cached = _cachedSchema(db, dependency, sections=sections)
             if cached is None:
                 raise MissingSchemaError(dependency)
-            # Verify and add the cached schema
-            add(_verifySchemer(cached, expected=dependency), aliases=(uri,))
+            add(cached, aliases=(uri,))
 
     # Add the root schema and its dependencies
     add(schemer)
@@ -423,7 +490,7 @@ def _registry(schemer, db):
     return registry
 
 
-def validateSchema(acdc, db, schema=None):
+def validateSchema(acdc, db, schema=None, *, sections=None, schemaKind=None):
     """Validate an ACDC against a verified local schema.
 
     The function normally uses the schema in the ACDC's ``s`` field. A caller
@@ -436,6 +503,10 @@ def validateSchema(acdc, db, schema=None):
         db (Baser): Local database containing cached schemas.
         schema (Mapping | str | None): Optional schema content or schema SAID
             to use instead of the ACDC's own schema.
+        sections (SectionBaser | None): Optional concrete ACDC v2 section store
+            containing independently received schema dependencies.
+        schemaKind (str | None): Actual encoding of an explicitly supplied
+            schema mapping, such as a schema carried by a different near node.
 
     Returns:
         bool: ``True`` when the ACDC satisfies the selected schema.
@@ -450,7 +521,8 @@ def validateSchema(acdc, db, schema=None):
     try:
         # Verify an embedded schema
         if isinstance(source, Mapping):
-            schemer = _verifySchemer(source)
+            schemer = _verifySchemer(source, kind=(schemaKind or (
+                acdc.kind if acdc.pvrsn.major >= 2 else None)))
 
         # Load a schema by its SAID
         elif isinstance(source, str):
@@ -463,18 +535,15 @@ def validateSchema(acdc, db, schema=None):
                     f"credential {acdc.said} has invalid schema SAID {source}")
 
             # Get the schema from the local cache
-            cached = db.schema.get(source)
-            if cached is None:
+            schemer = _cachedSchema(db, source, sections=sections)
+            if schemer is None:
                 raise MissingSchemaError(source)
-
-            # Verify the cached schema
-            schemer = _verifySchemer(cached, expected=source)
         else:
             raise FailedSchemaValidationError(
                 f"credential {acdc.said} has an invalid schema field")
 
         # Build the local schema registry
-        registry = _registry(schemer, db)
+        registry = _registry(schemer, db, sections=sections)
 
         # Create the Draft 2020-12 validator
         validator = jsonschema.Draft202012Validator(schema=schemer.sed,

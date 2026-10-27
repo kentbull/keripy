@@ -6,6 +6,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ...common import existing
+from ...common import acdc_v2
 from ...common.parsing import Parsery
 
 from ....kering import ConfigurationError, Vrsn_1_0
@@ -49,9 +50,21 @@ parser.add_argument("--private-credential-nonce", help="nonce for vc",
 parser.add_argument("--private-subject-nonce", help="nonce for subject",
                     action="store")
 parser.add_argument("--time", help="timestamp for the credential creation", required=False, default=None)
+acdc_v2.options(parser, author=True)
+parser.add_argument('--public', action='store_true',
+                    help='publish the explicit opening for an ACDC v2 bup issuance')
 
 
 def issueCredential(args):
+    """Route credential creation to explicit ACDC v2 authoring or legacy issuance.
+
+    args carries identity/registry, credential data, schema, edges/rules and CLI
+    controls. Return lifecycle Doers. --acdc-v2 selects AcdcV2Author, including its
+    explicit public/blinded policy; otherwise retain legacy JSON/data validation
+    and issuance. Invalid input or core/authentication failures propagate without
+    being interpreted as accepted issuance."""
+    if getattr(args, 'acdc_v2', False):
+        return [acdc_v2.AcdcV2Author(args, 'create')]
     name = args.name
     data = None
     rules = None
@@ -127,21 +140,15 @@ class CredentialIssuer(doing.DoDoer):
     def __init__(self, name, alias, base, bran, registryName=None, schema=None, edges=None, recipient=None, data=None,
                  rules=None, credential=None, timestamp=None, private:bool=False, private_credential_nonce:Optional[str]=None,
                  private_subject_nonce:Optional[str]=None,):
-        """ Create DoDoer for issuing a credential and managing the processes needed to complete issuance
+        """Open legacy issuance owners and validate the selected credential input.
 
-        Parameters:
-            name:
-             registryName:
-             schema:
-             edges:
-             recipient:
-             data: (dict) credential data dict
-             credential: (dict) full credential to issue when joining a multisig issuance
-             out (str): Filename for credential output
-             private (bool): apply nonce used for privacy preserving ACDC
-             private_credential_nonce (Optional[str]): nonce used for privacy vc
-             private_subject_nonce (Optional[str]): nonce used for subject
-
+        name/base/alias and bran select/authenticate the existing issuer.
+        registryName/schema/recipient/data/edges/rules or credential select the
+        ordinary issuance input. timestamp, private and credential/subject nonces
+        control its authored disclosure. Return None with scheduled owners on
+        valid input. Invalid alias/schema or core authentication fails; the
+        existing ConfigurationError path reports credential input errors. Local
+        and receipt/mailbox parsing follows the established alias protocol.
         """
         if schema is not None and schema == "":
             raise ConfigurationError("--schema value must not be empty.  Provide a valid qb64 SAID.")
@@ -151,6 +158,10 @@ class CredentialIssuer(doing.DoDoer):
         self.timestamp = timestamp
         self.hby = existing.setupHby(name=name, base=base, bran=bran)
         self.hab = self.hby.habByName(alias)
+        # Receipt and mailbox parsing follow the established habitat version.
+        if self.hab is not None:
+            self.hby.version = self.hab.kever.serder.pvrsn
+            self.hby.psr.version = self.hby.version
         if self.hab is None:
             raise ValueError(f"invalid alias {alias}")
 
@@ -212,13 +223,15 @@ class CredentialIssuer(doing.DoDoer):
         super(CredentialIssuer, self).__init__(doers=doers)
 
     def createDo(self, tymth, tock=0.0, **kwa):
-        """  Issue Credential doer method
+        """Issue and witness a credential using its registry protocol version.
 
-
-        Parameters:
-            tymth (function): injected function wrapper closure returned by .tymen() of
-                 Tymist instance. Calling tymth() returns associated Tymist .tyme.
-             tock (float): injected initial tock value
+        tymth/tock are HIO clock/delay inputs; additional scheduler arguments
+        are unused. Yield cooperative scheduling delays while the ordinary
+        registrar and witness receipt processors complete accepted work.
+        Return None after completion. Core validation, authentication and
+        transport errors propagate. Anchors and receipt parsing explicitly
+        follow the selected registry/habitat version and serialization kind;
+        no library-wide version default changes.
         """
         self.wind(tymth)
         self.tock = tock
@@ -234,10 +247,12 @@ class CredentialIssuer(doing.DoDoer):
         rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
 
         if registry.estOnly:
-            anc = hab.rotate(data=[rseal], framed=True)
+            anc = hab.rotate(data=[rseal], framed=True,
+                             version=registry.versionSerder.pvrsn, kind=registry.versionSerder.kind)
 
         else:
-            anc = hab.interact(data=[rseal], framed=True)
+            anc = hab.interact(data=[rseal], framed=True,
+                               version=registry.versionSerder.pvrsn, kind=registry.versionSerder.kind)
 
         aserder = SerderKERI(raw=anc)
         self.credentialer.issue(self.creder, iserder)

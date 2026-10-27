@@ -4,6 +4,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ....common import Parsery, setupHby
+from ....common import acdc_v2
 
 from .....app import MailboxDirector, HaberyDoer, Counselor
 from .....core import SerderKERI
@@ -18,9 +19,18 @@ parser.set_defaults(handler=lambda args: registryStatus(args))
 parser.add_argument('--registry-name', '-r', help='Human readable name for registry, defaults to name of Habitat',
                     default=None, required=True)
 parser.add_argument("--verbose", "-V", help="print JSON of all current events", action="store_true")
+acdc_v2.options(parser)
 
 
 def registryStatus(args):
+    """Return ACDC v2 accepted-head status work or the legacy status worker.
+
+    args supplies identity, registry name and verbosity. ACDC v2 status includes
+    pending anchor/prior dependencies without deriving private openings. Return
+    lifecycle Doers; unknown registry and authentication failures are reported by
+    the selected worker, not converted into accepted state."""
+    if getattr(args, 'acdc_v2', False):
+        return acdc_v2.read(args, 'status')
     name = args.name
     bran = args.bran
     base = args.base

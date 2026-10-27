@@ -1,0 +1,300 @@
+"""ACDC v2 IPEX grants distinguish unavailable registry openings from known contradictions.
+
+Fixture construction follows test_ipexing's real anchored registry examples;
+independent Haberies and normal processors replace any accepted-table injection.
+"""
+import pytest
+
+from keri import Vrsn_2_0
+from keri.acdc import Regery, acdcmap, blindate, grant, loadHandlers
+from keri.app import openHby
+from keri.app.evidencing import EvidenceContext as Evidence
+from keri.core import Blinder, Counter, Codens, Diger, Noncer, Number, Parser
+from keri.peer import Exchanger
+from keri.kering import (MisanchorError, MissingBlindError, MissingChainError,
+                         UnverifiedBlindError, ValidationError)
+from tests.acdc.test_registraring import _persistent_registry_owners
+
+
+class Notices:
+    """Receive core notifications without opening an unrelated application store."""
+
+    def add(self, attrs):
+        """Ignore transient notifications while testing concrete accepted/escrow evidence.
+
+        Args:
+            attrs (dict): Core accepted-notification payload, unused by this test.
+
+        Returns:
+            None. Opens no unrelated application store or alternate acceptance path."""
+        pass
+
+
+def anchor(hab, registry, event):
+    """Commit the exact staged TEL event with a real controller key-event seal.
+
+    Args:
+        hab (Hab): Registry controller creating its next signed interaction.
+        registry (Registry): Concrete engine holding the staged TEL event.
+        event (SerderACDC): Exact registry event to seal and accept.
+
+    Returns:
+        SerderKERI: Accepted sealing key event.
+
+    Raises:
+        AssertionError: The real anchor cannot advance registry acceptance."""
+    hab.interact(data=[dict(i=registry.regk, s=event.sad['n'], d=event.said)])
+    assert registry.anchorMsg(event.said)
+    return hab.kever.serder
+
+
+def public(*events):
+    """Frame public ACDC v2 registry TEL bodies for ordinary parser intake.
+
+    Args:
+        *events: Ordered TEL events whose exact raw bytes to concatenate.
+
+    Returns:
+        bytes: Each body followed by a complete v2 zero-count attachment-group foot.
+        The helper neither signs nor injects acceptance for those events."""
+    foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+    return b''.join(event.raw + foot for event in events)
+
+
+def test_retained_grant_history_survives_opaque_head_and_refuses_reused_blid(tmp_path):
+    """Inspect the retained proof prefix without granting current standing or guessing repeated BLIDs."""
+    from keri.acdc.regeventing import Rever, vetBinds
+    from keri.core import Kevery, SealEvent, messagize
+
+    retained = None
+    for phase in range(2):
+        source, srgy = _persistent_registry_owners(tmp_path, 'history-source')
+        verifier, vrgy = _persistent_registry_owners(tmp_path, 'history-verifier')
+        try:
+            issuer = source.habByName('issuer') or source.makeHab(name='issuer')
+            recipient = verifier.habByName('recipient') or verifier.makeHab(name='recipient')
+            exc = Exchanger(verifier, handlers=[])
+            loadHandlers(verifier, exc, Notices(), rgy=vrgy)
+            handler = exc.routes['/ipex/grant']
+            parser = Parser(kvy=Kevery(db=verifier.db, local=False),
+                            rgy=Rever(db=verifier.db, reger=vrgy.baser),
+                            exc=exc, local=False, version=Vrsn_2_0)
+            if phase == 0:
+                registry = srgy.makeRegistry('authority', issuer.pre)
+                rip = srgy.store.event(registry.regk)
+                anchor(issuer, registry, rip)
+                credential = acdcmap(israid=issuer.pre, iseaid=recipient.pre,
+                    regid=registry.regk, attribute=dict(d='', status='authorized'))
+                first = Blinder.blind(acdc=credential.said, state='issued')
+                event1 = blindate(registry.regk, rip.said, first.said)
+                registry.processEvent(event1)
+                firstAnchor = anchor(issuer, registry, event1)
+                parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(rip, event1)))
+                # A generic node source is not an issuer-TEL historical selector.
+                node = messagize(credential, bonds=[first.data, SealEvent(
+                    i=issuer.pre, s=firstAnchor.snh, d=firstAnchor.said)], gvrsn=Vrsn_2_0)
+                exn, attachment = grant(issuer, recipient.pre, 'retained first proof', origin=node)
+                parser.parse(ims=bytearray(exn.raw + attachment))
+                assert exc.complete(exn.said)
+                retained = tuple(verifier.db.enst.get((exn.said,)))
+                assert handler.verifyAccepted(exn.said)
+                opaque = Blinder.blind(acdc=credential.said, state='revoked', sn=2)
+                mixed = messagize(credential, bonds=[first.data, opaque.data], gvrsn=Vrsn_2_0)
+                mixedExn, mixedAtc = grant(issuer, recipient.pre, 'unresolved second target proof',
+                                           origin=mixed)
+                parser.parse(ims=bytearray(mixedExn.raw + mixedAtc))
+                assert exc.complete(mixedExn.said)  # current bup1 proof suffices for live intake
+                with pytest.raises(MissingChainError):
+                    handler.verifyAccepted(mixedExn.said, historical=True)
+                badBound = Blinder.blind(acdc=credential.said, state='issued', bound=True,
+                    bsn=0, bd=Diger(ser=b'conflicting accepted recipient inception').qb64)
+                missingBound = Blinder.blind(acdc=credential.said, state='issued', bound=True,
+                    bsn=5, bd=Diger(ser=b'not yet available recipient event').qb64)
+                for extras in ([opaque, badBound], [badBound, opaque],
+                               [missingBound, badBound], [badBound, missingBound]):
+                    node = messagize(credential, bonds=[first.data, *(p.data for p in extras)],
+                                     gvrsn=Vrsn_2_0)
+                    badExn, badAtc = grant(issuer, recipient.pre, 'known bound contradiction', origin=node)
+                    parser.parse(ims=bytearray(badExn.raw + badAtc))
+                    assert exc.complete(badExn.said)
+                    with pytest.raises(MisanchorError, match='conflicts'):
+                        handler.verifyAccepted(badExn.said, historical=True)
+                event2 = blindate(registry.regk, event1.said, opaque.said, sn=2)
+                registry.processEvent(event2)
+                anchor(issuer, registry, event2)
+                parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(event2)))
+            else:
+                registry = srgy.registryByName('authority')
+            assert vrgy.store.headEvent(registry.regk).said == event2.said
+            assert not handler.verifyAccepted(exn.said)  # live/current defaults stay strict
+            assert handler.verifyAccepted(exn.said, historical=True)
+            assert handler.verifyAccepted(mixedExn.said, historical=True)
+            assert tuple(verifier.db.enst.get((exn.said,))) == retained
+            with pytest.raises(MissingBlindError):
+                vetBinds(*handler._registryEvidence(registry.regk), db=verifier.db,
+                         blinders=[first], target=credential.said, acdc=credential)
+            corrupted = Blinder(crew=opaque.crew._replace(u=Noncer().qb64), verify=False)
+            corruptedOld = Blinder(crew=first.crew._replace(u=Noncer().qb64), verify=False)
+            for invalid in ([opaque, opaque], [corrupted], [first, first], [corruptedOld]):
+                with pytest.raises(UnverifiedBlindError) as error:
+                    vetBinds(*handler._registryEvidence(registry.regk), db=verifier.db,
+                             blinders=invalid, target=credential.said, acdc=credential)
+                assert type(error.value) is UnverifiedBlindError
+            with pytest.raises(UnverifiedBlindError, match='empty'):
+                handler._registryEvidence(registry.regk, proofs=[], target=credential.said, acdc=credential)
+            with pytest.raises(UnverifiedBlindError, match='duplicate'):
+                handler._registryEvidence(registry.regk, proofs=[first, first],
+                                          target=credential.said, acdc=credential)
+            if phase == 1:
+                vacuousProof = Blinder.blind(acdc='', state='', sn=3)
+                for known in (False, True):
+                    if known:
+                        vacuous = blindate(registry.regk, event2.said, vacuousProof.said, sn=3)
+                        registry.processEvent(vacuous)
+                        anchor(issuer, registry, vacuous)
+                        parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(vacuous)))
+                    _, selected = handler._registryEvidence(registry.regk,
+                        proofs=[first, vacuousProof], target=credential.said, acdc=credential)
+                    assert selected[-1].said == event1.said
+                repeated = blindate(registry.regk, vacuous.said, first.said, sn=4)
+                registry.processEvent(repeated)
+                anchor(issuer, registry, repeated)
+                parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(repeated)))
+                with pytest.raises(ValidationError, match='ambiguous'):
+                    handler.verifyAccepted(exn.said, historical=True)
+        finally:
+            vrgy.close()
+            verifier.close()
+            srgy.close()
+            source.close()
+
+
+@pytest.mark.parametrize('bound', [False, True])
+def test_unknown_target_opening_escrows_then_accepts_without_grant_replay(bound):
+    """Recover a signed Grant carrying a valid opening outside the accepted TEL prefix.
+
+    Args:
+        bound (bool): Whether openings additionally bind exact recipient KEL coordinates.
+
+    Returns:
+        None. Assertions require ordinary EXN escrow at stale event 1 and acceptance
+        after real event-2 KEL/TEL arrival without Grant replay. Malformed/wrong-target,
+        duplicate/stale-known, resolved-source, and conflicting-bound proofs remain
+        permanent refusals; a self-valid opening never published remains unresolved.
+
+    All Haberies/registry/evidence owners close in finally/context-manager paths.
+    Neither the fixture nor dependency classification writes synthetic accepted rows,
+    infers an unmatched opening's ordinal, or asserts publication time/freshness."""
+    with (openHby(name='opening-source', version=Vrsn_2_0) as source,
+          openHby(name='opening-verifier', version=Vrsn_2_0) as verifier):
+        issuer = source.makeHab(name='issuer')
+        recipient = verifier.makeHab(name='recipient')
+        sourceRegistry = Regery(source, name=source.name, temp=True)
+        evidence = Evidence(verifier)
+        verifierRegistry = Regery(verifier, name=verifier.name, baser=evidence.reger, temp=True)
+        try:
+            registry = sourceRegistry.makeRegistry('authority', issuer.pre)
+            rip = sourceRegistry.store.event(registry.regk)
+            anchor(issuer, registry, rip)
+            credential = acdcmap(israid=issuer.pre, iseaid=recipient.pre,
+                regid=registry.regk, attribute=dict(d='', status='authorized'))
+            coordinates = dict(bound=True, bsn=0, bd=recipient.kever.serder.said) if bound else {}
+            first = Blinder.blind(acdc=credential.said, state='issued', **coordinates)
+            event1 = blindate(registry.regk, rip.said, first.said)
+            registry.processEvent(event1)
+            firstAnchor = anchor(issuer, registry, event1)
+            oldKel = bytes(issuer.replay(gvrsn=Vrsn_2_0))
+
+            second = Blinder.blind(acdc=credential.said, state='issued', **coordinates)
+            event2 = blindate(registry.regk, event1.said, second.said, sn=2)
+            registry.processEvent(event2)
+            anchor(issuer, registry, event2)
+
+            exc = Exchanger(verifier, handlers=[])
+            loadHandlers(verifier, exc, Notices(), rgy=verifierRegistry)
+            parser = Parser(kvy=evidence.kvy, rgy=evidence.rever, exc=exc,
+                            local=False, version=Vrsn_2_0)
+            parser.parse(ims=bytearray(oldKel + public(rip, event1)))
+            assert verifierRegistry.store.headEvent(registry.regk).said == event1.said
+
+            def submission(message, proofs):
+                """Build and ingest one signed Grant with exactly the selected node-local proofs.
+
+                Args:
+                    message (str): Human payload distinguishing independent test Grants.
+                    proofs (Iterable[Blinder]): Supplied openings, including deliberate hostile sets.
+
+                Returns:
+                    SerderKERI: Authored exchange after ordinary parser dispatch. Returning it
+                    proves no acceptance; callers inspect concrete EXN/escrow state separately."""
+                from keri.core import messagize
+                origin = messagize(credential, bonds=[proof.data for proof in proofs],
+                                   gvrsn=Vrsn_2_0)
+                exn, attachment = grant(issuer, recipient.pre, message, origin=origin)
+                parser.parse(ims=bytearray(exn.raw + attachment))
+                return exn
+
+            unknown = submission('event 2 opening while verifier has event 1', [second])
+            assert not exc.complete(unknown.said)
+            assert verifier.db.epse.get((unknown.said,)) is not None
+
+            # Only normal public evidence acquisition follows; never replay grant.
+            parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(event2)))
+            evidence.kvy.processEscrows()
+            evidence.rever.processEscrows()
+            exc.processEscrow()
+            assert verifierRegistry.store.headEvent(registry.regk).said == event2.said
+            assert exc.complete(unknown.said)
+            assert verifier.db.epse.get((unknown.said,)) is None
+            assert exc.routes['/ipex/grant'].verifyAccepted(unknown.said)
+
+            wrongTarget = Blinder.blind(acdc=Diger(ser=b'another credential').qb64,
+                                        state='issued', **coordinates)
+            corrupted = Blinder(crew=second.crew._replace(u=Noncer().qb64), verify=False)
+            for label, proofs in [('wrong target', [wrongTarget]),
+                                  ('corrupted opening', [corrupted]),
+                                  ('stale known opening', [first]),
+                                  ('duplicate known opening', [second, second])]:
+                refused = submission(label, proofs)
+                assert not exc.complete(refused.said), label
+                assert verifier.db.epse.get((refused.said,)) is None, label
+
+            handler = exc.routes['/ipex/grant']
+            unknownThird = Blinder.blind(acdc=credential.said, state='issued', **coordinates)
+            # A resolved explicit historical source selects event 1 exactly.
+            # An unknown proof cannot turn its contradictory opening into retry.
+            assert handler._vetRegistry(registry.regk, [unknownThird], credential.said,
+                controller=issuer.pre,
+                sourceSeals=[(issuer.kever.prefixer, Number(num=firstAnchor.sn),
+                              Diger(qb64=firstAnchor.said))], requireSource=True) is None
+            # A self-valid opening is not proof that any TEL ever committed it.
+            # Without that acquisition it remains unresolved, never accepted.
+            unanchored = submission('no matching TEL event exists locally', [unknownThird])
+            exc.processEscrow()
+            assert not exc.complete(unanchored.said)
+            assert verifier.db.epse.get((unanchored.said,)) is not None
+            if bound:
+                wrongBound = Blinder.blind(acdc=credential.said, state='issued', bound=True,
+                    bsn=0, bd=Diger(ser=b'conflicts with accepted Issuee inception').qb64)
+                refused = submission('conflicting bound digest', [wrongBound])
+                assert not exc.complete(refused.said)
+                assert verifier.db.epse.get((refused.said,)) is None
+                # An opaque accepted ancestor can commit an invalid bound claim.
+                # A separate unknown proof must not hide that known contradiction.
+                bad3 = blindate(registry.regk, event2.said, wrongBound.said, sn=3)
+                registry.processEvent(bad3)
+                anchor(issuer, registry, bad3)
+                fourth = Blinder.blind(acdc=credential.said, state='issued', **coordinates)
+                event4 = blindate(registry.regk, bad3.said, fourth.said, sn=4)
+                registry.processEvent(event4)
+                anchor(issuer, registry, event4)
+                parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(bad3, event4)))
+                assert verifierRegistry.store.headEvent(registry.regk).said == event4.said
+                for proofs in ([wrongBound, unknownThird], [unknownThird, wrongBound]):
+                    refused = submission('known bound contradiction must win ' + proofs[0].said, proofs)
+                    assert not exc.complete(refused.said)
+                    assert verifier.db.epse.get((refused.said,)) is None
+        finally:
+            verifierRegistry.close()
+            evidence.close()
+            sourceRegistry.close()

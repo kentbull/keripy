@@ -1117,6 +1117,7 @@ class Kramer:
                     return None
 
                 # All remaining paths need sender's key state
+                # Consult persisted verified state when the process cache is cold.
                 kever = self.db.kevers.get(senderId)
                 if kever is None:
                     # Append the cue for the keystate retrieval notification including the senderID
@@ -1226,6 +1227,7 @@ class Kramer:
             else:  # New cache logic when no existing cache is found for (AID.MID)
                 cacheTypeRecord = self._fetchCacheType(msgType, route)
 
+                # Consult persisted verified state when the process cache is cold.
                 kever = self.db.kevers.get(senderId)
                 if kever is None:
                     # Append the cue for the keystate retrieval notification including the senderID
@@ -1364,6 +1366,7 @@ class Kramer:
                     return None
 
                 # All remaining paths need sender's key state
+                # Consult persisted verified state when the process cache is cold.
                 kever = self.db.kevers.get(senderId)
                 if kever is None:
                     # Append the cue for the keystate retrieval notification including the senderID
@@ -1476,6 +1479,7 @@ class Kramer:
             else:  # New cache logic when no existing cache is found for (AID.XID.MID)
                 cacheTypeRecord = self._fetchCacheType(msgType, route)
 
+                # Consult persisted verified state when the process cache is cold.
                 kever = self.db.kevers.get(senderId)
                 if kever is None:
                     # Append the cue for the keystate retrieval notification including the senderID

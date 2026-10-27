@@ -9,6 +9,8 @@ import errno
 import os
 import shutil
 import socket
+import tempfile
+from pathlib import Path
 import multicommand
 import datetime
 
@@ -127,43 +129,32 @@ def seeder():
 
 @pytest.fixture(scope="session", autouse=True)
 def isolate_keri_store_roots(tmp_path_factory):
-    """Give each pytest-xdist worker its own on-disk root for non-temp stores.
+    """Share one owned persistent-store root with this session's CLI children.
 
-    CI runs ``pytest -n auto``. Several tests open persistent (``temp=False``)
-    stores with a fixed name/base (e.g. ``name="test"``), which all resolve to
-    the same on-disk path under the store classes' ``HeadDirPath`` -- or
-    ``AltHeadDirPath`` when the head dir is not writable, as on CI. Under
-    parallel workers those paths collide, so one worker can observe another's
-    half-migrated database ("DB version None; migrations must be run") or a
-    half-written KEL ("Attempt to replay nonexistent pre=..."). Point each
-    worker's store root at its own per-worker temp directory so the paths can
-    never overlap.
-
-    Only active under xdist (where ``PYTEST_XDIST_WORKER`` is set); serial runs
-    are unchanged. ``temp=True`` stores are unaffected -- they already use
-    isolated ``/tmp`` directories. ``LMDBer`` is the base of the db (``Baser``),
-    keystore (``Keeper``) and registry (``Reger``) stores, so patching it covers
-    all three; ``Configer`` covers the config store.
+    Each serial session or xdist worker owns a separate temporary subtree.
+    LMDBer supplies the roots inherited by Keeper, Baser, RegBaser, WalletBaser
+    and SectionBaser; Configer supplies the config root. Child Python processes
+    apply the same defaults through test-only sitecustomize before running the
+    genuine CLI. Existing PYTHONPATH entries and temp=True stores are unchanged.
+    Session teardown restores the defaults/environment and removes only the
+    owned subtree, after the tests have closed their stores and child processes.
     """
-    if not os.environ.get("PYTEST_XDIST_WORKER"):
-        yield
-        return
-
     from keri.db.dbing import LMDBer
     from keri.app.configing import Configer
 
-    root = str(tmp_path_factory.getbasetemp())  # unique per xdist worker
-    saved = [(cls, cls.HeadDirPath, cls.AltHeadDirPath)
-             for cls in (LMDBer, Configer)]
-    for cls in (LMDBer, Configer):
-        cls.HeadDirPath = root
-        cls.AltHeadDirPath = root
-    try:
-        yield
-    finally:
-        for cls, head, alt in saved:
-            cls.HeadDirPath = head
-            cls.AltHeadDirPath = alt
+    startup = str(Path(__file__).resolve().parent / "cli_support")
+    pythonpath = os.environ.get("PYTHONPATH")
+    if pythonpath is not None:
+        startup += os.pathsep + pythonpath
+    with tempfile.TemporaryDirectory(prefix="keripy-stores-",
+                                     dir=tmp_path_factory.getbasetemp()) as root:
+        with pytest.MonkeyPatch.context() as patch:
+            for cls in (LMDBer, Configer):
+                patch.setattr(cls, "HeadDirPath", root)
+                patch.setattr(cls, "AltHeadDirPath", root)
+            patch.setenv("KERIPY_TEST_STORE_ROOT", root)
+            patch.setenv("PYTHONPATH", startup)
+            yield
 
 
 @pytest.fixture(scope="session")

@@ -183,7 +183,7 @@ def test_essr_wrapper_preserves_explicit_and_default_attachment_version(hab_vers
 
 
 @pytest.mark.parametrize("kind", [Kinds.json, Kinds.cbor, Kinds.mgpk])
-def test_stream_poster_forwards_native_grant_with_registry_proof(monkeypatch, kind):
+def test_stream_poster_forwards_acdc_v2_grant_with_registry_proof(monkeypatch, kind):
     with openHab(name="issuer", temp=True, version=Vrsn_2_0) as (hby, hab), \
             openHab(name="holder", temp=True, version=Vrsn_2_0) as (rhby, recp), \
             openHab(name="witness", transferable=False, temp=True, version=Vrsn_2_0) as (whby, wit), \
