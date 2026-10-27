@@ -528,7 +528,7 @@ class IpexHandler:
         self.acceptsMissingEvidence = resource == "/ipex/grant"
 
     def verify(self, serder, attachments=None, nests=None, sscs=None,
-               evidence=None):
+               evidence=None, *, historical=False):
         """Validate the verb, prior link, and single-response rule.
 
         Parameters:
@@ -541,6 +541,8 @@ class IpexHandler:
             sscs (list | None): Sender source-seal couples retained after KRAM.
             evidence (tuple | None): Post-KRAM signature groups, cigars, and
                 source-seal triples accepted for route validation.
+            historical (bool): Select exact retained-opening TEL prefixes instead
+                of current heads. Reserved for explicit retained-proof inspection.
 
         Returns:
             bool: True when the message is valid for the linear IPEX workflow,
@@ -759,7 +761,8 @@ class IpexHandler:
                     return False
 
                 # Stage 6: authenticate each disclosed node's issuer.
-                if not self._verifyIssuerAuthGraph(nodes=grantNodes, order=grantOrder):
+                if not self._verifyIssuerAuthGraph(nodes=grantNodes, order=grantOrder,
+                                                   historical=historical):
                     return False
 
                 # Validate each authenticated node against its own schema.
@@ -767,7 +770,8 @@ class IpexHandler:
                     return False
 
                 # Apply edge operators and edge schemas after authentication.
-                if not self._verifyGraphSemantics(nodes=grantNodes, order=grantOrder):
+                if not self._verifyGraphSemantics(nodes=grantNodes, order=grantOrder,
+                                                  historical=historical):
                     return False
 
                 try:
@@ -1624,7 +1628,7 @@ class IpexHandler:
             issuer = delegator
         return False
 
-    def _evaluateGraphNode(self, said, *, nodes, memo, active, averages):
+    def _evaluateGraphNode(self, said, *, nodes, memo, active, averages, historical=False):
         """Evaluate authenticated node validity once, retaining unknown as None.
 
         Issuer authentication and own-schema validation precede this evaluator
@@ -1670,7 +1674,7 @@ class IpexHandler:
                         return None  # the edge section is always a group
                     result = self._evaluateGroupEdge(edge, nodes=nodes, nserder=serder,
                         nested=False, inheritedSchema=None, memo=memo,
-                        active=active, averages=averages)
+                        active=active, averages=averages, historical=historical)
                     if result is None:
                         return None
                     results.append(result)
@@ -1721,7 +1725,7 @@ class IpexHandler:
                       if prefixer.qb64 != serder.israid and prefixer.qb64 not in self.hby.kevers}
         return next(iter(references)) if len(references) == 1 else None
 
-    def _boundEdgeValidity(self, near, far, *, nodes):
+    def _boundEdgeValidity(self, near, far, *, nodes, historical=False):
         """Evaluate supplied bound authority using authenticated local histories.
 
         ACDC's current-event assertion supplies the temporal premise; this does
@@ -1748,7 +1752,8 @@ class IpexHandler:
         if not any(proof.clan == BoundState for proof in proofs):
             return True  # ordinary relationships make no bound-time assertion
         regk = self._graphRegistry(far, farNest)
-        if not regk or (evidence := self._registryEvidence(regk)) is None:
+        if not regk or (evidence := self._registryEvidence(
+                regk, proofs=proofs if historical else None, target=far.said, acdc=far)) is None:
             return None
         try:
             record = regeventing.vet(*evidence, db=self.hby.db)
@@ -1778,12 +1783,14 @@ class IpexHandler:
             nearRegk = self._graphRegistry(near, nearNest)
             anchors = []
             if nearRegk:
-                if (nearEvidence := self._registryEvidence(nearRegk)) is None:
+                nearProofs = self._blindProofs(nearNest)
+                if (nearEvidence := self._registryEvidence(
+                        nearRegk, proofs=nearProofs if historical else None,
+                        target=near.said, acdc=near)) is None:
                     return None
                 nearRecord = regeventing.vet(*nearEvidence, db=self.hby.db)
                 if nearRecord.issuer != near.israid:
                     return None
-                nearProofs = self._blindProofs(nearNest)
                 for event in sorted(nearEvidence[1], key=lambda e: Number(numh=e.sad['n']).num):
                     regeventing.requireSupportedEvent(event)
                     matches = [proof for proof in nearProofs if proof.said == event.sad['b']]
@@ -1820,7 +1827,7 @@ class IpexHandler:
             return None
 
     def _evaluateLeafEdge(self, group, *, nodes, nserder, inheritedSchema=None,
-                          memo=None, active=None, averages=None):
+                          memo=None, active=None, averages=None, historical=False):
         """Apply relation, all schema constraints, and optionally NOT of far truth.
 
         ACDC f0bd097d lines 1186-1211: latest conflicting relation wins;
@@ -1918,11 +1925,11 @@ class IpexHandler:
             except (FailedSchemaValidationError, ValidationError, ValueError):
                 matched = False
         truth = self._evaluateGraphNode(said, nodes=nodes, memo=memo,
-                                        active=active, averages=averages)
+                                        active=active, averages=averages, historical=historical)
         if truth is None:
             return None
         if relation != 'NI2I' and matched:
-            temporal = self._boundEdgeValidity(nserder, far, nodes=nodes)
+            temporal = self._boundEdgeValidity(nserder, far, nodes=nodes, historical=historical)
             if temporal is None:
                 return None
             truth = truth and temporal
@@ -1948,7 +1955,8 @@ class IpexHandler:
             return False
 
     def _evaluateGroupEdge(self, group, *, nodes, nserder, nested,
-                           inheritedSchema=None, memo=None, active=None, averages=None):
+                           inheritedSchema=None, memo=None, active=None, averages=None,
+                           historical=False):
         """Reduce all members; uncertainty cannot be laundered by OR/NAND/NOR.
 
         AVG/WAVG require explicit graphPolicy.value(near, edge, far) and
@@ -1995,10 +2003,12 @@ class IpexHandler:
                 return None
             if "n" in member:
                 result = self._evaluateLeafEdge(member, nodes=nodes, nserder=nserder,
-                    inheritedSchema=pins, memo=memo, active=active, averages=averages)
+                    inheritedSchema=pins, memo=memo, active=active, averages=averages,
+                    historical=historical)
             else:
                 result = self._evaluateGroupEdge(member, nodes=nodes, nserder=nserder,
-                    nested=True, inheritedSchema=pins, memo=memo, active=active, averages=averages)
+                    nested=True, inheritedSchema=pins, memo=memo, active=active, averages=averages,
+                    historical=historical)
             if result is None:
                 return None
             members.append(member)
@@ -2072,7 +2082,7 @@ class IpexHandler:
 
         return True
 
-    def _verifyGraphSemantics(self, nodes, order):
+    def _verifyGraphSemantics(self, nodes, order, *, historical=False):
         """Use the same recursive evaluator for the presented origin and far nodes.
 
         Authenticate and schema-check all disclosed nodes before calling this
@@ -2093,10 +2103,10 @@ class IpexHandler:
             return False
         memo, active, averages = {}, set(), {}
         result = self._evaluateGraphNode(order[0], nodes=nodes, memo=memo,
-                                         active=active, averages=averages)
+                                         active=active, averages=averages, historical=historical)
         return result is True and set(memo) == set(nodes)
 
-    def _verifyIssuerAuthGraph(self, nodes, order):
+    def _verifyIssuerAuthGraph(self, nodes, order, *, historical=False):
         """Verify issuer-auth proof groups for each walked disclosed DAG node.
 
         Parameters:
@@ -2122,13 +2132,13 @@ class IpexHandler:
             nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
 
             # Require one valid issuer authentication factor per node.
-            if not self._verifyIssuerAuthNode(serder=nserder, nest=nest):
+            if not self._verifyIssuerAuthNode(serder=nserder, nest=nest, historical=historical):
                 return False
 
         # Every disclosed node passed issuer authentication.
         return True
 
-    def _verifyIssuerAuthNode(self, serder, nest):
+    def _verifyIssuerAuthNode(self, serder, nest, *, historical=False):
         """Verify one disclosed ACDC's selected issuer authentication factor.
 
         Args:
@@ -2151,7 +2161,7 @@ class IpexHandler:
             record = self._vetRegistry(regk=regk,
                                        proofs=self._blindProofs(nest),
                                        target=serder.said,
-                                       acdc=serder)
+                                       acdc=serder, historical=historical)
             if record is None:
                 return False
             return True
@@ -2292,8 +2302,17 @@ class IpexHandler:
         # Return every proof attached to this one ACDC node.
         return proofs
 
-    def _registryEvidence(self, regk):
-        """Load one complete accepted TEL chain from the injected store."""
+    def _registryEvidence(self, regk, *, proofs=None, target=None, acdc=None):
+        """Load accepted history, optionally selecting its unique retained-proof prefix.
+
+        Only None selects current/full history. Every retained opening binding
+        target must identify one accepted BUP; the highest selects the prefix.
+        Vacuous openings can authenticate its interior but do not select a head.
+        Other-target presentation proofs and generic node source locators do not
+        select issuer history. Historical selection requires the exact disclosed
+        ACDC matching target, including for bound-coordinate checks. The caller
+        still authenticates the selected prefix.
+        """
         # Registry verification requires an injected local Regery.
         if self.rgy is None:
             return None
@@ -2320,11 +2339,54 @@ class IpexHandler:
             # Preserve this contiguous update for TEL verification.
             updates.append(update)
 
+        if proofs is not None:
+            from .regeventing import vetBlind, vetBound
+            proofs = list(proofs)
+            if not proofs:
+                raise UnverifiedBlindError('historical registry proof is empty')
+            if acdc is None or target != acdc.said:
+                raise ConfigurationError('historical registry selection requires its target ACDC')
+            # Invalid/duplicate evidence wins over a missing target dependency,
+            # regardless of the sender's attachment ordering.
+            for proof in proofs:
+                vetBlind(proof, blid=proof.said)
+            if len({proof.said for proof in proofs}) != len(proofs):
+                raise UnverifiedBlindError('duplicate historical registry opening')
+            missingBound = None
+            for proof in proofs:
+                if proof.acdc not in (target, ''):
+                    continue
+                try:
+                    vetBound(proof, acdc=acdc, db=self.hby.db)
+                except MissingAnchorError as error:
+                    missingBound = error
+            selected = []
+            missing = False
+            for proof in proofs:
+                if proof.acdc != target:
+                    continue
+                matches = [event for event in updates
+                           if event.ilk == Ilks.bup and event.sad['b'] == proof.said]
+                if len(matches) > 1:
+                    raise UnverifiedBlindError('ambiguous historical TEL event for retained BLID')
+                if matches:
+                    selected.append(matches[0])
+                else:
+                    missing = True
+            if missingBound is not None:
+                raise MissingChainError('retained registry proof is missing bound KEL evidence') from missingBound
+            if missing:
+                raise MissingChainError(f'missing accepted TEL event for retained registry {regk} proof')
+            if not selected:
+                raise MisbindingError('historical registry proof has no target-binding opening')
+            ordinal = max(Number(numh=event.sad['n']).num for event in selected)
+            updates = [event for event in updates if Number(numh=event.sad['n']).num <= ordinal]
+
         # Return the complete local chain.
         return rip, updates
 
     def _vetRegistry(self, regk, proofs, target, controller=None, acdc=None,
-                     cutoff=None, sourceSeals=None, requireSource=False):
+                     cutoff=None, sourceSeals=None, requireSource=False, historical=False):
         """Vet one issuer or presentation registry using matching BLIDs.
 
         Args:
@@ -2336,6 +2398,8 @@ class IpexHandler:
             cutoff: Legacy timestamp selector; common verification rejects it.
             sourceSeals (Iterable | None): Explicit Issuee KEL source triples.
             requireSource (bool): Require an authenticated historical binding source.
+            historical (bool): Select the unique accepted prefix identified by
+                retained openings. Generic node source locators do not select it.
 
         Returns:
             RegStateRecord | None: Verified selected binding, or None for permanent
@@ -2351,12 +2415,11 @@ class IpexHandler:
         an unsigned source locator is an independent claim of acceptance."""
 
         # Require disclosed proofs and a locally available TEL chain.
-        if (evidence := self._registryEvidence(regk)) is None:
+        proofs = list(proofs)
+        if (evidence := self._registryEvidence(regk, proofs=proofs if historical else None,
+                                              target=target, acdc=acdc)) is None:
             return None
 
-        # Preserve the exact disclosed set for dependency classification if the
-        # accepted prefix cannot yet consume it. Callers may supply an iterator.
-        proofs = list(proofs)
         # Import lazily to avoid the ACDC module cycle.
         from . import regeventing
         try:
@@ -2404,7 +2467,7 @@ class IpexHandler:
             # A presentation proof names its historical KEL source. Resolve
             # that source to an exact TEL prefix; request timeliness does not
             # select registry history. Current issuer standing uses the head.
-            at = None
+            at = evidence[1][-1].said if historical else None
             if requireSource and sources:
                 at = max((update for update in evidence[1] if update.said in sources),
                          key=lambda update: Number(numh=update.sad['n']).num).said
@@ -2670,17 +2733,20 @@ class IpexHandler:
         # Accept an evidence-free non-Grant message.
         return [], [], []
 
-    def verifyAccepted(self, said):
+    def verifyAccepted(self, said, *, historical=False):
         """Revalidate retained IPEX semantics without logging or notifications.
 
         An EXN body in Baser proves neither route registration nor credential
         acceptance: generic Exchangers may retain authenticated unknown routes.
         Reuse the same proof and transition checks, allowing only an identical
-        already recorded response. This is a current-evidence check, not an
-        assertion about a past application's policy decision.
+        already recorded response. By default use current registry heads;
+        historical=True selects unique accepted prefixes from the retained
+        openings. Neither mode proves a past policy decision or publication time.
 
         Args:
             said (str): SAID of the retained ACDC v2 IPEX exchange to revalidate.
+            historical (bool): Verify retained proof prefixes without claiming
+                current registry standing. Live intake retains the default False.
 
         Returns:
             bool: Whether retained sender authentication, exact nests, and current
@@ -2704,7 +2770,7 @@ class IpexHandler:
             return False
         return self.verify(serder, nests=loadParsedNestedSubstreams(self.hby, said),
             sscs=[(number, diger) for prefixer, number, diger in seals
-                  if prefixer.qb64 == serder.pre], evidence=evidence)
+                  if prefixer.qb64 == serder.pre], evidence=evidence, historical=historical)
 
     def response(self, serder):
         """Look up the recorded response to a prior IPEX exchange.
@@ -2776,12 +2842,14 @@ class AcdcV2IpexVerification:
         return IpexHandler(resource, self.hby, notifier, rgy=self.rgy,
                            verification=self)
 
-    def verifyAccepted(self, said, route):
+    def verifyAccepted(self, said, route, *, historical=False):
         """Re-run authenticated retained semantics under this exact context.
 
         Args:
             said (str): Retained exchange identifier.
             route (str): Expected ACDC v2 IPEX route.
+            historical (bool): Select retained opening prefixes; False preserves
+                current-head verification.
 
         Returns:
             bool: Whether authenticated evidence satisfies current semantics.
@@ -2790,7 +2858,7 @@ class AcdcV2IpexVerification:
             MissingSchemaError: A required independently supplied schema is absent.
             KeriError: Retained authentication or dependent evidence is invalid.
         """
-        return self.handler(route).verifyAccepted(said)
+        return self.handler(route).verifyAccepted(said, historical=historical)
 
 
 def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gvrsn=None, *, ax=None):

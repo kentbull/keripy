@@ -918,6 +918,14 @@ class UnverifiedBlindError(ValidationError):
     """
 
 
+class MissingBlindError(UnverifiedBlindError):
+    """An authenticated accepted BUP has no matching disclosed opening.
+
+    Invalid or duplicate disclosures remain UnverifiedBlindError. Callers may
+    distinguish an undisclosed current state without weakening existing refusals.
+    """
+
+
 # Stream Parsing and Extraction Errors
 class ExtractionError(KeriError):
     """
