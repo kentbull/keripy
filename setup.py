@@ -91,7 +91,7 @@ setup(
                         'semver==3.0.4',
                         'qrcode==8.2',
                         'sortedcontainers==2.4.0',
-                        'setuptools==84.0.0',
+                        'setuptools==84.1.0',
                         'wheel==0.48.0',
     ],
     extras_require={

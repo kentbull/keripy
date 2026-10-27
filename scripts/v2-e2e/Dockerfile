@@ -3,7 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends libsodium23=1.0
 WORKDIR /workspace
 COPY setup.py /build/setup.py
 COPY scripts/v2-e2e/requirements.lock /build/requirements.lock
-RUN python -m pip install -c /build/requirements.lock pip==26.2.1 setuptools==84.0.0 wheel==0.48.0
+RUN python -m pip install -c /build/requirements.lock pip==26.2.1 setuptools==84.1.0 wheel==0.48.0
 RUN python -m pip install --no-build-isolation -r /build/requirements.lock
 RUN mkdir -p /build/src && cd /build && python -m pip install --no-deps --no-build-isolation '.[test]'
 COPY setup.py README.md LICENSE /workspace/
