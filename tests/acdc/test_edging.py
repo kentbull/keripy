@@ -6,13 +6,13 @@ the shared semantic owner and accepted KEL delegation without fixture tables.
 import pytest
 
 from keri import Vrsn_2_0
-from keri.acdc import acdcmap, grant, loadHandlers
+from keri.acdc import acdcmap, grant, admit, loadHandlers
 from keri.acdc.edging import EdgeEvaluator
 from keri.acdc.proving import PresentedEvidence
 from keri.app import openHby
 from keri.core import (Compactor, Diger, Kevery, Noncer, Number, Parser, Schemer, SealSource, Signer,
                        delcept, messagize)
-from keri.kering import MissingChainError, MissingSchemaError
+from keri.kering import MissingChainError, MissingSchemaError, ValidationError
 from keri.peer import Exchanger
 from keri.peer.exchanging import loadParsedNestedSubstreams
 
@@ -605,3 +605,62 @@ def test_schema_authorized_edges_through_signed_grant(graph, shape, accepted):
         # The semantic owner independently applies the same edge classification.
         if shape != 'missing-far':
             assert evaluate(evaluator, near, far) is (accepted or shape == 'leaf-property-hop')
+
+
+@pytest.mark.parametrize('farTruth,operator,verdict', [
+    (False, 'NI2I', False), (None, 'NOT', None), (False, 'NOT', True),
+])
+def test_authenticated_graph_retention_is_separate_from_wallet_use(graph, farTruth, operator, verdict):
+    """Retain signed false/unknown graphs, but only explicit root True admits."""
+    from keri.app.credentialing import Wallet
+    _, issuer, _, _ = graph
+    with openHby(name='graph-use-receiver', version=Vrsn_2_0) as receiver:
+        holder = receiver.makeHab(name='holder')
+        exc = Exchanger(hby=receiver, handlers=[])
+        policy = DeclaredScorePolicy()
+        verification = loadHandlers(receiver, exc, Notices(), graphPolicy=policy)
+        parser = Parser(kvy=Kevery(db=receiver.db, lax=False, local=False),
+                        exc=exc, version=Vrsn_2_0)
+        parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0)))
+        far = credential(issuer.pre, eligible=farTruth)
+        near = credential(issuer.pre, issuee=holder.pre,
+                          edge=dict(d='', proof=dict(n=far.said, o=operator)))
+        exn, atc = grant(issuer, holder.pre, 'authenticated graph is evidence',
+            origin=signed(near, issuer), artifacts=[signed(far, issuer)],
+            modifiers=dict(dp=[[near.schema['$id'], '/', []],
+                               [far.schema['$id'], '/e/proof/_/', []]]))
+        parser.parse(ims=bytearray(exn.raw + atc))
+        assert exc.complete(exn.said)
+        retained = tuple(receiver.db.enst.get((exn.said,)))
+        assert verification.verifyAccepted(exn.said, '/ipex/grant')
+        assert verification.evaluateGrant(exn.said) is verdict
+        assert verification.evaluateSelected(signed(near, issuer), [signed(far, issuer)]) is verdict
+        with pytest.raises(ValidationError):
+            verification.evaluateSelected(signed(near, issuer) + signed(far, issuer))
+        with pytest.raises(ValidationError):
+            verification.evaluateSelected(signed(near, issuer), [signed(far, holder)])
+        issuer.interact(data=[dict(d=far.said)], version=Vrsn_2_0)
+        anchor = issuer.kever.serder
+        anchoredFar = messagize(far, bonds=[SealSource(s=Number(num=anchor.sn),
+            d=Diger(qb64=anchor.said))], gvrsn=Vrsn_2_0)
+        with pytest.raises(MissingChainError):
+            verification.evaluateSelected(signed(near, issuer), [anchoredFar])
+        parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0)))
+        assert verification.evaluateSelected(signed(near, issuer), [anchoredFar]) is verdict
+        reply, ratc = admit(holder, 'explicit local consent', exn)
+        parser.parse(ims=bytearray(reply.raw + ratc))
+        assert exc.complete(reply.said)
+        wallet = Wallet(receiver, None, exc=exc, verification=verification)
+        try:
+            if verdict is not True:
+                with pytest.raises(ValidationError, match='semantic acceptance'):
+                    wallet.recordAdmission(exn.said, reply.said, consent=True)
+                assert wallet.db.admitted.get((exn.said,)) is None
+                policy.validity = lambda node: node.said == near.said or operator == 'NI2I'
+            row = wallet.recordAdmission(exn.said, reply.said, consent=True)
+            policy.validity = lambda node: None
+            assert verification.evaluateGrant(exn.said) is None
+            assert wallet.recordAdmission(exn.said, reply.said, consent=True) == row
+            assert tuple(receiver.db.enst.get((exn.said,))) == retained
+        finally:
+            wallet.close()

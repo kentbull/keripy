@@ -2612,24 +2612,29 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
         incompatSchemer = Schemer(sed=incompatSchema)
         hby.db.schema.pin(incompatSchemer.said, incompatSchemer)
 
-        def assert_rejected(message, origin, artifacts=None):
+        def assert_rejected(message, origin, artifacts=None, *, paths=None, verdict=False):
             before = len(recorder.items)
             plan = [[origin.sad["s"]["$id"], "/", []]]
             for idx, artifact in enumerate(artifacts or []):
                 plan.append([artifact.sad["s"]["$id"],
-                             f"/e/rejected{idx}/_/", []])
+                             paths[idx] if paths else f"/e/rejected{idx}/_/", []])
             exn, atc = ipexGrant(hab=issuer,
                                  recp=subject.pre,
                                  message=message,
-                                 origin=origin,
-                                 artifacts=artifacts,
+                                 origin=_signed(origin, issuer),
+                                 artifacts=[_signed(item, issuer) for item in artifacts] if artifacts else None,
                                      modifiers=dict(dp=plan))
             ims = bytearray(exn.raw)
             ims.extend(atc)
             Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
             assert ims == bytearray()
-            assert hby.db.exns.get(keys=(exn.said,)) is None
-            assert len(recorder.items) == before
+            if paths is None:
+                assert hby.db.exns.get(keys=(exn.said,)) is None
+                assert len(recorder.items) == before
+            else:
+                assert exc.complete(exn.said)
+                assert handler.verification.evaluateGrant(exn.said) is verdict
+                assert len(recorder.items) == before + 1
             return exn
 
         # Missing referenced node: the walk is not closed.
@@ -2690,7 +2695,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                                  iseaid=subject.pre)
         assert_rejected("Here is the I2I-violating DAG",
                         wrongI2IOrigin,
-                        [wrongI2IChild])
+                        [wrongI2IChild], paths=["/e/holder/_/"])
 
         # E1E requires the near and far credentials to identify the same issuee.
         wrongE1EChild = acdcmap(israid=issuer.pre,
@@ -2702,7 +2707,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                                  iseaid=subject.pre)
         assert_rejected("Here is the E1E-violating DAG",
                         wrongE1EOrigin,
-                        [wrongE1EChild])
+                        [wrongE1EChild], paths=["/e/holder/_/"])
 
         # NOT of an otherwise valid authenticated far-node claim is false.
         notChild = acdcmap(israid=issuer.pre,
@@ -2714,7 +2719,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                             iseaid=subject.pre)
         assert_rejected("Here is the NOT-operator DAG",
                         notOrigin,
-                        [notChild])
+                        [notChild], paths=["/e/holder/_/"])
         evaluator = EdgeEvaluator(PresentedEvidence(handler.hby, handler.rgy),
             graphPolicy=handler.graphPolicy, sections=handler.sections)
         assert evaluator._evaluateLeafEdge(notOrigin.sad["e"]["holder"],
@@ -2732,7 +2737,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                            iseaid=subject.pre)
         assert_rejected("Here is the DI2I-operator DAG",
                         diOrigin,
-                        [diChild])
+                        [diChild], paths=["/e/holder/_/"])
         assert evaluator._evaluateLeafEdge(diOrigin.sad["e"]["holder"],
                                          nodes={diChild.said: {"serder": diChild}},
                                          nserder=diOrigin,
@@ -2749,7 +2754,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                                iseaid=subject.pre)
         assert_rejected("Here is the invalid list-valued leaf-operator DAG",
                         listOpOrigin,
-                        [listOpChild])
+                        [listOpChild], paths=["/e/holder/_/"], verdict=None)
 
         # Unknown edge operators are not supported
         bogusChild = acdcmap(israid=issuer.pre,
@@ -2761,7 +2766,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                               iseaid=subject.pre)
         assert_rejected("Here is the unknown-operator DAG",
                         bogusOrigin,
-                        [bogusChild])
+                        [bogusChild], paths=["/e/holder/_/"], verdict=None)
 
         # An OR group fails when none of its children satisfy the
         # disclosed relation constraints.
@@ -2782,7 +2787,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                               iseaid=subject.pre)
         assert_rejected("Here is the unsatisfied grouped-OR DAG",
                         badOrOrigin,
-                        [orLeft, orRight])
+                        [orLeft, orRight], paths=["/e/either/member/_/", "/e/either/staff/_/"])
 
         # A pinned edge schema must either match the far node's own schema or
         # be a different compatible schema that the far node still satisfies.
@@ -2794,12 +2799,12 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                                   edge=dict(d="",
                                             holder=dict(d="",
                                                         n=badSchemaChild.said,
-                                                        o="I2I",
-                                                        s=incompatSchemer.said)),
+                                                        s=incompatSchemer.said,
+                                                        o="I2I")),
                                   iseaid=subject.pre)
         assert_rejected("Here is the incompatible-schema DAG",
                         badSchemaOrigin,
-                        [badSchemaChild])
+                        [badSchemaChild], paths=["/e/holder/_/"])
 
 
 def _grant_with_false_commitment(hab, credential, correct, false):
@@ -3468,8 +3473,8 @@ def test_ipex_v2_offer_fulfillment_allows_compatible_acdc_message_types():
         assert hby.db.epse.get(keys=(grantExn.said,)) is None
 
 
-def test_ipex_v2_edge_schema_uses_missing_schema_escrow(fakeHelpingClock):
-    """A missing edge schema is queried and succeeds after it is cached."""
+def test_ipex_v2_edge_schema_arrival_reevaluates_retained_grant(fakeHelpingClock):
+    """A missing semantic pin leaves the Grant retained and evaluation retryable."""
     # Configure KRAM for the Grant
     kramConfig = {
         "kram": {
@@ -3490,7 +3495,7 @@ def test_ipex_v2_edge_schema_uses_missing_schema_escrow(fakeHelpingClock):
         # Set up the IPEX receiver
         recorder = Recorder()
         exc = Exchanger(hby=hby, handlers=[])
-        loadHandlers(hby=hby, exc=exc, notifier=recorder)
+        verification = loadHandlers(hby=hby, exc=exc, notifier=recorder)
 
         # Create a child and an uncached edge schema
         child = acdcmap(israid=issuer.pre,
@@ -3534,22 +3539,22 @@ def test_ipex_v2_edge_schema_uses_missing_schema_escrow(fakeHelpingClock):
             escrowKey = (grant.said, edgeSchemer.said)
             kramKey = (issuer.pre, grant.ked["x"], grant.said)
             assert ims == bytearray()
-            assert hby.db.exns.get(keys=(grant.said,)) is None
+            assert exc.complete(grant.said)
+            retained = tuple(hby.db.enst.get((grant.said,)))
+            with pytest.raises(MissingSchemaError):
+                verification.evaluateGrant(grant.said)
             assert hby.db.kramTMSC.get(keys=kramKey) is not None
             assert hby.db.kramXDT.get(keys=(grant.ked["x"],)) is not None
 
-            # Missing Schema escrow entry is created and a query cue is generated
-            assert hby.db.emse.get(keys=escrowKey) is not None
-            assert hby.db.emsd.get(keys=(grant.said,)) is not None
-            assert dict(r="schema", said=edgeSchemer.said) in [
-                cue.get("q") for cue in exc.cues if cue.get("kin") == "query"
-            ]
+            assert hby.db.emse.get(keys=escrowKey) is None
+            assert hby.db.emsd.get(keys=(grant.said,)) is None
 
             # Cache the schema and replay the Grant
             hby.db.schema.pin(edgeSchemer.said, edgeSchemer)
-            exc.processEscrow()
+            assert verification.evaluateGrant(grant.said) is True
+            assert tuple(hby.db.enst.get((grant.said,))) == retained
 
-            # Assert Grant was stored and escrow was cleared
+            # Semantic arrival did not require replay or another notification.
             assert hby.db.exns.get(keys=(grant.said,)) is not None
             assert hby.db.emse.get(keys=escrowKey) is None
             assert hby.db.emsd.get(keys=(grant.said,)) is None
@@ -3559,9 +3564,9 @@ def test_ipex_v2_edge_schema_uses_missing_schema_escrow(fakeHelpingClock):
             ]
 
 
-def test_ipex_v2_edge_schema_escrow_expires_after_kram_timeout(
+def test_ipex_v2_own_schema_escrow_expires_after_kram_timeout(
         fakeHelpingClock):
-    """An unresolved edge schema is discarded after its KRAM flow expires."""
+    """An unresolved own schema is discarded after its KRAM flow expires."""
     # Configure the KRAM deadline
     kramConfig = {
         "kram": {
@@ -3596,7 +3601,8 @@ def test_ipex_v2_edge_schema_escrow_expires_after_kram_timeout(
         # Create a Grant that requires the missing schema
         origin = acdcmap(israid=issuer.pre,
                          attribute=dict(d="", purpose="schema timeout"),
-                         edge=_edge("member", child, schema=edgeSchemer.said),
+                         schema=edgeSchemer.said,
+                         edge=_edge("member", child),
                          iseaid=recipient.pre)
         grant, atc = ipexGrant(hab=issuer,
                                recp=recipient.pre,
@@ -3605,7 +3611,7 @@ def test_ipex_v2_edge_schema_escrow_expires_after_kram_timeout(
                                artifacts=[_signed(child, issuer)],
                                dt=helping.nowIso8601(),
                                modifiers=dict(dp=[
-                                   [origin.sad["s"]["$id"], "/", []],
+                                   [edgeSchemer.said, "/", []],
                                    [child.sad["s"]["$id"], "/e/member/_/", []],
                                ]))
 

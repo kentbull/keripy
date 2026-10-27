@@ -293,6 +293,8 @@ class ExchangeDoer(doing.DoDoer):
                         if prior.route not in ('/ipex/apply', '/ipex/agree'):
                             raise ConfigurationError('grant prior must be apply or agree')
                         kwargs[prior.route.rsplit('/', 1)[1]] = prior
+                    if wallet.verification.evaluateSelected(origin, artifacts) is not True:
+                        raise ConfigurationError('credential graph is false or unresolved')
                     exn, attachment = ipexing.grant(hab, args.recipient, args.message,
                         origin=origin, artifacts=artifacts, dt=args.time, **kwargs)
             elif self.verb == 'apply':
@@ -308,6 +310,8 @@ class ExchangeDoer(doing.DoDoer):
                 grant = hby.db.exns.get((args.said,))
                 if grant is None or not peer.exc.routes['/ipex/grant'].verifyAccepted(args.said):
                     raise ConfigurationError('grant has not passed ACDC v2 IPEX verification')
+                if wallet.verification.evaluateGrant(args.said) is not True:
+                    raise ConfigurationError('credential graph is false or unresolved')
                 exn, attachment = ipexing.admit(hab, args.message, grant, dt=args.time)
             else:
                 raise ConfigurationError('unsupported ACDC v2 IPEX operation')
@@ -335,6 +339,13 @@ class ExchangeDoer(doing.DoDoer):
             if not peer.exc.complete(exn.said):
                 raise ConfigurationError('locally authored IPEX message is pending verification')
             policy.recheck(peer.evidence, observations)
+            # Group threshold/receipt waits do not preserve an earlier use verdict.
+            if self.verb == 'grant' and exn.sad['a'].get('o'):
+                if wallet.verification.evaluateGrant(exn.said) is not True:
+                    raise ConfigurationError('credential graph is false or unresolved')
+            elif self.verb == 'admit':
+                if wallet.verification.evaluateGrant(exn.sad['p']) is not True:
+                    raise ConfigurationError('credential graph is false or unresolved')
             if self.verb == 'admit':
                 wallet.recordAdmission(args.said, exn.said, consent=True)
             if args.output:

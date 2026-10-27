@@ -23,7 +23,7 @@ from ..kering import (Colds, ConfigurationError, DuplicitousRegistryError,
                       ValidationError, Vrsn_2_0, sniff)
 from ..core import (Aggor, Compactor, Counter,
                     Codens, Diger, GenDex, Noncer, Number, Pather, Prefixer,
-                    Parser, Saider, SealEvent, SealSource, Serdery, Texter, exchange,
+                    Parser, Saider, SealEvent, SealSource, SerderACDC, Serdery, Texter, exchange,
                     messagize)
 from ..peer.exchanging import (cloneMessage, loadParsedNestedSubstreams,
                                verifyAttachments)
@@ -755,18 +755,8 @@ class IpexHandler:
                                                     grantNodes=grantNodes):
                     return False
 
-                # Stage 6: authenticate each disclosed node's issuer.
-                if not self._verifyIssuerAuthGraph(nodes=grantNodes, order=grantOrder,
-                                                   historical=historical):
-                    return False
-
-                # Validate each authenticated node against its own schema.
-                if not self._verifyNodeSchemas(nodes=grantNodes, order=grantOrder):
-                    return False
-
-                # Apply edge operators and edge schemas after authentication.
-                if not self._verifyGraphSemantics(nodes=grantNodes, order=grantOrder,
-                                                  historical=historical):
+                # Authenticate the exact disclosure, independently of edge truth.
+                if not self._authenticateGraph(grantNodes, grantOrder, historical=historical):
                     return False
 
                 try:
@@ -1616,15 +1606,10 @@ class IpexHandler:
 
         return True
 
-    def _verifyGraphSemantics(self, nodes, order, *, historical=False):
-        """Keep the existing intake gate while callers migrate semantic judgment.
-
-        Read the handler's current policy and sections at this call, preserving
-        their existing mutable bindings until the separate acceptance transition.
-        """
-        evaluator = EdgeEvaluator(PresentedEvidence(self.hby, self.rgy),
-                                  graphPolicy=self.graphPolicy, sections=self.sections)
-        return evaluator.verify(nodes, order, historical=historical)
+    def _authenticateGraph(self, nodes, order, *, historical=False):
+        """Share issuer and own-schema proof checks with explicit graph use."""
+        return (self._verifyIssuerAuthGraph(nodes, order, historical=historical)
+                and self._verifyNodeSchemas(nodes, order))
 
     def _verifyIssuerAuthGraph(self, nodes, order, *, historical=False):
         """Verify issuer-auth proof groups for each walked disclosed DAG node.
@@ -2158,7 +2143,7 @@ class IpexHandler:
         return [], [], []
 
     def verifyAccepted(self, said, *, historical=False):
-        """Revalidate retained IPEX semantics without logging or notifications.
+        """Revalidate retained IPEX authentication and protocol without graph policy.
 
         An EXN body in Baser proves neither route registration nor credential
         acceptance: generic Exchangers may retain authenticated unknown routes.
@@ -2174,7 +2159,8 @@ class IpexHandler:
 
         Returns:
             bool: Whether retained sender authentication, exact nests, and current
-            configured route semantics all verify. Unknown/wrong-route bodies return False.
+            protocol checks all verify. Unknown/wrong-route bodies return False.
+            Edge truth is assessed separately by evaluateGrant.
 
         Raises:
             KeriError: Retained authentication or dependent evidence is missing/invalid,
@@ -2267,7 +2253,7 @@ class AcdcV2IpexVerification:
                            verification=self)
 
     def verifyAccepted(self, said, route, *, historical=False):
-        """Re-run authenticated retained semantics under this exact context.
+        """Re-run retained authentication and protocol checks, without edge policy.
 
         Args:
             said (str): Retained exchange identifier.
@@ -2276,13 +2262,85 @@ class AcdcV2IpexVerification:
                 current-head verification.
 
         Returns:
-            bool: Whether authenticated evidence satisfies current semantics.
+            bool: Whether retained authentication and protocol checks pass.
 
         Raises:
             MissingSchemaError: A required independently supplied schema is absent.
             KeriError: Retained authentication or dependent evidence is invalid.
         """
         return self.handler(route).verifyAccepted(said, historical=historical)
+
+    def _evaluateGraph(self, nodes, order, *, historical):
+        """Invoke the single evaluator with this action's concrete policy/evidence."""
+        return EdgeEvaluator(PresentedEvidence(self.hby, self.rgy),
+            graphPolicy=self.graphPolicy, sections=self.sections).evaluate(
+                nodes, order, historical=historical)
+
+    def evaluateGrant(self, said, *, historical=False):
+        """Evaluate a retained, protocol-authenticated nonempty Grant's root.
+
+        Revalidate sender, disclosure, issuer, own schema, presentation and AX
+        checks first. Invalid authentication/structure raises ValidationError;
+        existing dependency exceptions propagate. Return bool or unresolved None.
+        historical selects retained proof prefixes, never current standing or a
+        remembered policy decision. Empty protocol grants are not graph uses.
+        """
+        if not self.verifyAccepted(said, '/ipex/grant', historical=historical):
+            raise ValidationError('authenticated ACDC v2 Grant is required for graph use')
+        exn = self.hby.db.exns.get((said,))
+        origins = exn.sad['a'].get('o')
+        if not _validSingleDagList(origins, str):
+            raise ValidationError('graph use requires one disclosed origin')
+        # Authentication above already checked these immutable retained nests.
+        walked = self.handler('/ipex/grant')._walkGraph(origins[0],
+            loadParsedNestedSubstreams(self.hby, said), closed=True)
+        if walked is None:
+            raise ValidationError('invalid retained disclosure graph')
+        return self._evaluateGraph(*walked, historical=historical)
+
+    def evaluateDisclosure(self, origin, nests, *, historical=False):
+        """Authenticate exact parsed node views, then return complete root truth.
+
+        nests are ordinary Parser MsgParseDom objects (or their dictionaries),
+        not an assertion of accepted EXN state. No outer Grant/presentation/AX
+        authentication is claimed. Malformed structure, invalid issuer proofs
+        and own-schema failures raise ValidationError. Missing KEL/TEL/schema
+        dependencies retain their existing exceptions; semantic unknown is None.
+        """
+        if (not isinstance(origin, str) or not isinstance(nests, list)
+                or any(not isinstance(nest.get('serder') if isinstance(nest, Mapping)
+                                      else getattr(nest, 'serder', None), SerderACDC)
+                       for nest in nests)):
+            raise ValidationError('graph use requires parsed ACDC node streams')
+        handler = self.handler('/ipex/grant')
+        walked = handler._walkGraph(origin, nests, closed=True)
+        if walked is None:
+            raise ValidationError('invalid disclosed graph')
+        if not handler._authenticateGraph(*walked, historical=historical):
+            raise ValidationError('disclosed graph authentication failed')
+        return self._evaluateGraph(*walked, historical=historical)
+
+    def evaluateSelected(self, origin, artifacts=None, *, historical=False):
+        """Check selected credential streams before a caller signs its Grant.
+
+        Use the builder's existing nesting normalization and parse-only Parser;
+        require exactly one fully consumed node per input. This creates no EXN,
+        signatures, anchors, accepted rows or cached fuller disclosure. A bare
+        body without a selected issuer proof is not authenticated by local custody.
+        """
+        if origin is None or (artifacts is not None and not isinstance(artifacts, list)):
+            raise ValidationError('graph use requires an origin and a list of artifacts')
+        nests = []
+        for stream in [origin, *(artifacts or [])]:
+            try:
+                ims = _normalizeNodeStream(stream)
+                node = Parser(version=Vrsn_2_0).parseOne(ims=ims, framed=True, processive=False)
+                if node is None or ims:
+                    raise ValueError('expected one fully consumed node stream')
+            except (KeriError, ValueError, TypeError) as ex:
+                raise ValidationError('invalid selected credential stream') from ex
+            nests.append(node)
+        return self.evaluateDisclosure(nests[0].serder.said, nests, historical=historical)
 
 
 def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gvrsn=None, *, ax=None):

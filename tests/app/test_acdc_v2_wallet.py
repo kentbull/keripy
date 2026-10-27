@@ -16,7 +16,7 @@ from keri.app.registry_custody import RegistryCustody
 from keri.app.configing import Configer
 from keri.app.habbing import openHby
 from keri.core import Kevery, Parser, Signer, Number, Diger, Compactor, Noncer, Blinder, messagize
-from keri.kering import AuthError, ConfigurationError, ValidationError
+from keri.kering import AuthError, ConfigurationError, ValidationError, MissingSchemaError
 from keri.peer.exchanging import Exchanger, loadParsedNestedSubstreams
 
 
@@ -612,8 +612,14 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
                     peer.ingest(wire(section))
                 peer.ingest(gexn.raw + gatc)
                 if arrival != 'before':
-                    assert not peer.exc.complete(gexn.said)
-                    assert hby.db.emse.get((gexn.said, schema)) is not None
+                    if schemaUse == 'own':
+                        assert not peer.exc.complete(gexn.said)
+                        assert hby.db.emse.get((gexn.said, schema)) is not None
+                    else:
+                        assert peer.exc.complete(gexn.said)
+                        assert hby.db.emse.get((gexn.said, schema)) is None
+                        with pytest.raises(MissingSchemaError):
+                            wallet.verification.evaluateGrant(gexn.said)
                 if arrival == 'after':
                     peer.ingest(wire(section))
                 if arrival != 'restart':
@@ -631,10 +637,16 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
             with openLMDB(**sectionOpts) as sections:
                 peer = Peer(hby, rgy, wallet, sections)
                 if arrival == 'restart':
-                    assert hby.db.emse.get((gexn.said, schema)) is not None
+                    if schemaUse == 'own':
+                        assert hby.db.emse.get((gexn.said, schema)) is not None
+                    else:
+                        assert peer.exc.complete(gexn.said)
+                        with pytest.raises(MissingSchemaError):
+                            wallet.verification.evaluateGrant(gexn.said)
                     peer.ingest(wire(section))
                 assert peer.exc.complete(gexn.said)
                 assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
+                assert wallet.verification.evaluateGrant(gexn.said) is True
                 aexn, aatc = admit(hby.habByName('holder'), 'retain this exact view', gexn)
                 peer.ingest(aexn.raw + aatc)
                 wallet.recordAdmission(gexn.said, aexn.said, consent=True)
@@ -745,7 +757,8 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
             assert wallet.heldCredential(pairs[0][0])['credential'].said == origin.said
             for policy in (None, ScorePolicy(permitted=False)):
                 wallet.verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=policy)
-                assert not wallet.verification.verifyAccepted(pairs[1][0], '/ipex/grant')
+                assert wallet.verification.verifyAccepted(pairs[1][0], '/ipex/grant')
+                assert wallet.verification.evaluateGrant(pairs[1][0]) is (None if policy is None else False)
                 with pytest.raises(ValidationError, match='semantic acceptance'):
                     wallet.recordAdmission(*pairs[1], consent=True)
                 assert len(wallet.inventory()['held']) == 1

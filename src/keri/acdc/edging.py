@@ -652,7 +652,7 @@ class EdgeEvaluator:
         return result
 
 
-    def verify(self, nodes, order, *, historical=False):
+    def evaluate(self, nodes, order, *, historical=False):
         """Use the same recursive evaluator for the presented origin and far nodes.
 
         Authenticate and schema-check all disclosed nodes before calling this
@@ -664,14 +664,18 @@ class EdgeEvaluator:
             order (list[str]): Reachable traversal order, with the origin first.
 
         Returns:
-            bool: Whether the origin evaluates to concrete True; unknown fails closed.
+            bool | None: The complete root verdict, preserving unresolved truth.
 
         Raises:
             MissingChainError, MissingSchemaError: Required edge evidence is unavailable.
             Exceptions from trusted local graph policy propagate."""
         if not order or set(order) != set(nodes):
-            return False
+            return None
         memo, active, averages = {}, set(), {}
         result = self._evaluateGraphNode(order[0], nodes=nodes, memo=memo,
                                          active=active, averages=averages, historical=historical)
-        return result is True and set(memo) == set(nodes)
+        return result if set(memo) == set(nodes) else None
+
+    def verify(self, nodes, order, *, historical=False):
+        """Require explicit root True without collapsing intermediate unknowns."""
+        return self.evaluate(nodes, order, historical=historical) is True

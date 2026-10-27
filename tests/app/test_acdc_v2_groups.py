@@ -9,7 +9,7 @@ from keri.acdc.messaging import blindate, regcept
 from keri.app import openHby
 from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from keri.core import Blinder, Diger, Number, Parser, messagize
-from keri.kering import ValidationError
+from keri.kering import ValidationError, MissingSchemaError
 from keri.peer import Exchanger
 
 
@@ -561,12 +561,12 @@ def test_group_ipex_independent_schema_preserves_approved_disclosure(arrival, in
     """Real group approvals resolve standalone schema evidence through either intake.
 
     Args:
-        arrival (str): Deliver the matching section before the grant or after
-            threshold approval has escrowed the grant for its missing schema.
+        arrival (str): Deliver the matching section before approval or after
+            local approval is deferred for its missing own schema.
         intake (str): Exercise the coordinator or its actual mailbox parser.
 
     Returns:
-        None. Assertions cover independent section lookup, missing-schema escrow,
+        None. Assertions cover independent section lookup, deferred approval,
         real 2-of-3 approval, and exact retained disclosure after fuller caching.
     """
     from copy import deepcopy
@@ -618,9 +618,13 @@ def test_group_ipex_independent_schema_preserves_approved_disclosure(arrival, in
                 owner.process()
 
         assert all(hby.db.schema.get(schema) is None for hby in hbys)
-        if arrival == 'before':
-            for owner in owners:
-                receiveSection(owner, section)
+        if arrival == 'after':
+            for owner in owners[:2]:
+                with pytest.raises(MissingSchemaError):
+                    owner.approveExchange(exn.raw + atc)
+                assert not owner.completeExchange(exn.said)
+        for owner in owners:
+            receiveSection(owner, section)
         first, fatc = owners[0].approveExchange(exn.raw + atc)
         assert not owners[0].completeExchange(exn.said)
         owners[1].receive(first.raw + fatc)
@@ -631,12 +635,6 @@ def test_group_ipex_independent_schema_preserves_approved_disclosure(arrival, in
         owners[2].receive(second.raw + satc)
         # Receiving two approvals does not substitute for this member's consent.
         assert not owners[2].completeExchange(exn.said)
-        if arrival == 'after':
-            for owner in owners[:2]:
-                assert not owner.completeExchange(exn.said)
-                assert owner.hby.db.emse.get((exn.said, schema)) is not None
-            for owner in owners:
-                receiveSection(owner, section)
         assert all(owner.completeExchange(exn.said) for owner in owners[:2])
         owners[2].approveExchange(exact)
         for owner in owners:
@@ -645,6 +643,7 @@ def test_group_ipex_independent_schema_preserves_approved_disclosure(arrival, in
             assert owner.scy.sections.messages.get(section.said).raw == section.raw
             context = owner.exc.routes['/ipex/grant'].verification
             assert context.verifyAccepted(exn.said, '/ipex/grant')
+            assert context.evaluateGrant(exn.said) is True
             before = serializeMessage(owner.hby, exn.said)
             receiveSection(owner, sectattr(full.sad['a']))
             assert serializeMessage(owner.hby, exn.said) == before
@@ -652,3 +651,137 @@ def test_group_ipex_independent_schema_preserves_approved_disclosure(arrival, in
             assert retained.raw == partial.raw
             assert isinstance(retained.sad['a']['private'], str)
             assert owner.hby.db.schema.get(schema) is None
+
+@pytest.mark.parametrize('operator', ['NOR', 'AVG'])
+@pytest.mark.parametrize('boundary', ['proposer', 'approval', 'completion'])
+def test_cli_proposer_and_imported_approval_gate_before_member_signature(members, tmp_path, monkeypatch, operator, boundary):
+    """Run the actual CLI owner with real held evidence before its Grant builder.
+
+    Boot reuses the three real member owners through an owned capability context.
+    Completion supplies an explicit policy and drives ordinary remote approval
+    during the wait. Parser, proof checks, wallet consent and CLI control flow
+    remain real; signature observation wraps the GroupHab signer.
+    """
+    from hio.base import doing
+    from keri.acdc import admit, apply
+    from keri.app.credentialing import Wallet
+    from keri.cli.common import acdc_v2_ipex
+    from keri.cli.commands.ipex.grant import parser as arguments
+    from keri.kering import ConfigurationError
+    hbys, groups, rgys, owners = members
+    hby, group, rgy = hbys[0], groups[0], rgys[0]
+    issuer = group.mhab
+
+    class Policy:
+        permitted = True
+        def validity(self, node):
+            return node.sad['a'].get('eligible', True) if self.permitted else True
+        def value(self, **kwa):
+            return 1
+        def accept(self, **kwa):
+            return self.permitted
+
+    far = acdcmap(israid=issuer.pre, attribute=dict(d='', eligible=operator == 'AVG'))
+    near = acdcmap(israid=issuer.pre, iseaid=group.pre, attribute=dict(d='', held=True),
+        edge=dict(d='', o=operator, proof=dict(n=far.said)))
+    def proof(node):
+        return messagize(node, tsgs=[(issuer.kever.prefixer,
+            Number(num=issuer.kever.lastEst.s), Diger(qb64=issuer.kever.lastEst.d),
+            issuer.sign(node.raw))], gvrsn=Vrsn_2_0)
+    exc = Exchanger(hby, handlers=[])
+    policy = Policy()
+    verification = loadHandlers(hby, exc, Notices(), rgy=rgy, graphPolicy=policy)
+    incoming, atc = grant(issuer, group.pre, 'held with explicit policy', origin=proof(near),
+        artifacts=[proof(far)], modifiers=dict(dp=[[near.schema['$id'], '/', []],
+                                                   [far.schema['$id'], '/e/proof/_/', []]]))
+    parser = Parser(kvy=hby.kvy, exc=exc, version=Vrsn_2_0)
+    parser.parse(ims=bytearray(incoming.raw + atc))
+    assert exc.complete(incoming.said)
+    reply, _ = admit(group, 'explicit prior consent', incoming)
+    parser.parse(ims=messagize(reply, tsgs=[(group.kever.prefixer,
+        Number(num=group.kever.lastEst.s), Diger(qb64=group.kever.lastEst.d),
+        [member.sign(reply.raw)[0] for member in groups[:2]])], gvrsn=Vrsn_2_0))
+    assert exc.complete(reply.said)
+    wallet = Wallet(hby, rgy, exc=exc, verification=verification)
+    try:
+        wallet.recordAdmission(incoming.said, reply.said, consent=True)
+        plan = [[near.schema['$id'], '/', []], [far.schema['$id'], '/e/proof/_/', []]]
+        request, ratc = apply(groups[1].mhab, group.pre, 'exact graph request', modifiers=dict(dp=plan))
+        parser.parse(ims=bytearray(request.raw + ratc))
+        assert exc.complete(request.said)
+        candidate, catc = grant(group, groups[1].mhab.pre, 'imported candidate',
+            origin=proof(near), artifacts=[proof(far)], apply=request)
+        calls = []
+        target = groups[1] if boundary == 'approval' else group
+        sign = target.sign
+        def observed(*args, **kwa):
+            calls.append(True)
+            return sign(*args, **kwa)
+        monkeypatch.setattr(target, 'sign', observed)
+        if boundary == 'approval':
+            error = None
+            try:
+                owners[1].approveExchange(candidate.raw + catc)
+            except ValidationError as ex:
+                error = ex
+            assert calls == []
+            assert error is not None and 'graph' in str(error)
+            return
+        @contextmanager
+        def opened(args, **kwa):
+            yield hby, rgy, wallet
+        monkeypatch.setattr(acdc_v2_ipex.acdc_v2, 'opened', opened)
+        completed = []
+        if boundary == 'completion':
+            # Keep the real Peer, but explicitly select this application's policy.
+            peerType = acdc_v2_ipex.Peer
+            monkeypatch.setattr(acdc_v2_ipex, 'Peer',
+                lambda *args, **kwa: peerType(*args, graphPolicy=policy, **kwa))
+            builder = acdc_v2_ipex.ipexing.grant
+            selected = []
+            def built(*args, **kwa):
+                result = builder(*args, **kwa)
+                selected.append(result)
+                return result
+            monkeypatch.setattr(acdc_v2_ipex.ipexing, 'grant', built)
+            process = AcdcV2GroupCoordinator.process
+            def finish(owner):
+                process(owner)
+                if selected and proposal.exists() and not completed:
+                    exn, atc = selected[0]
+                    completed.append(exn.said)  # guard cooperative receive/process recursion
+                    from keri.acdc.ipexing import AcdcV2IpexVerification
+                    handler = owners[1].exc.routes['/ipex/grant']
+                    handler.graphPolicy = policy
+                    handler.verification = AcdcV2IpexVerification(hbys[1], rgys[1], graphPolicy=policy)
+                    owners[1].receive(request.raw + ratc)
+                    owners[1].receive(proposal.read_bytes())
+                    second, attachments = owners[1].approveExchange(exn.raw + atc)
+                    owner.receive(second.raw + attachments)
+                    from keri.peer.exchanging import serializeMessage
+                    owner.receive(serializeMessage(hbys[1], exn.said))
+                    assert owner.completeExchange(exn.said)
+                    policy.permitted = False
+            monkeypatch.setattr(AcdcV2GroupCoordinator, 'process', finish)
+        proposal, output = tmp_path / 'proposal.cesr', tmp_path / 'usable.cesr'
+        priorInput = tmp_path / 'apply.cesr'
+        priorInput.write_bytes(request.raw + ratc)
+        args = arguments.parse_args(['--acdc-v2', '--name', hby.name, '--base', hby.base,
+            '-a', 'group', '-r', groups[1].mhab.pre, '-s', near.said, '--prior', request.said,
+            '--from-grant', incoming.said, '--input', str(priorInput), '--proposal-output', str(proposal),
+            '--output', str(output), '--timeout', '0.05'])
+        error = None
+        try:
+            doing.Doist(tock=0.01, real=False, limit=0.1).do(
+                doers=[acdc_v2_ipex.ExchangeDoer(args, 'grant')])
+        except (ConfigurationError, ValidationError, TimeoutError) as ex:
+            error = ex
+        if boundary == 'completion':
+            assert completed and calls  # real threshold acceptance precedes changed policy
+        else:
+            assert calls == []
+            assert not proposal.exists()
+        assert error is not None and 'graph' in str(error)
+        assert not output.exists()
+    finally:
+        wallet.close()
