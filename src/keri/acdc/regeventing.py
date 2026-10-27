@@ -33,7 +33,7 @@ from ..kering import (Ilks, KeriError, ValidationError, ConfigurationError,
                       MissingAnchorError, MisdigestError, MissequenceError,
                       MisregistryError, MisanchorError, RootSealError,
                       MisbindingError, DuplicitousRegistryError,
-                      UnverifiedBlindError)
+                      MissingBlindError, UnverifiedBlindError)
 from ..core import Blinder, BlindState, BoundState, Diger, Number, SerderACDC
 from . import messaging, scheming
 
@@ -989,6 +989,16 @@ def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
 
         matches = [blinder for blinder in blinders
                    if blinder.said == update.sad['b']]
+        if not matches:
+            # Missing state must not hide invalid supplied evidence. Keep this
+            # classification check out of otherwise successful current checks.
+            for blinder in blinders:
+                vetBlind(blinder, blid=blinder.said)
+            if len({blinder.said for blinder in blinders}) != len(blinders):
+                raise UnverifiedBlindError('duplicate registry opening')
+            raise MissingBlindError(
+                f"Registry update {update.said} has an undisclosed state "
+                f"for blid={update.sad['b']}.")
         if len(matches) != 1:
             raise UnverifiedBlindError(
                 f"Registry update {update.said} requires exactly one disclosure "

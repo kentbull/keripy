@@ -11,6 +11,9 @@ from keri.app import openHby
 from keri.app.evidencing import EvidenceContext as Evidence
 from keri.core import Blinder, Counter, Codens, Diger, Noncer, Number, Parser
 from keri.peer import Exchanger
+from keri.kering import (MisanchorError, MissingBlindError, MissingChainError,
+                         UnverifiedBlindError, ValidationError)
+from tests.acdc.test_registraring import _persistent_registry_owners
 
 
 class Notices:
@@ -56,6 +59,114 @@ def public(*events):
         The helper neither signs nor injects acceptance for those events."""
     foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
     return b''.join(event.raw + foot for event in events)
+
+
+def test_retained_grant_history_survives_opaque_head_and_refuses_reused_blid(tmp_path):
+    """Inspect the retained proof prefix without granting current standing or guessing repeated BLIDs."""
+    from keri.acdc.regeventing import Rever, vetBinds
+    from keri.core import Kevery, SealEvent, messagize
+
+    retained = None
+    for phase in range(2):
+        source, srgy = _persistent_registry_owners(tmp_path, 'history-source')
+        verifier, vrgy = _persistent_registry_owners(tmp_path, 'history-verifier')
+        try:
+            issuer = source.habByName('issuer') or source.makeHab(name='issuer')
+            recipient = verifier.habByName('recipient') or verifier.makeHab(name='recipient')
+            exc = Exchanger(verifier, handlers=[])
+            loadHandlers(verifier, exc, Notices(), rgy=vrgy)
+            handler = exc.routes['/ipex/grant']
+            parser = Parser(kvy=Kevery(db=verifier.db, local=False),
+                            rgy=Rever(db=verifier.db, reger=vrgy.baser),
+                            exc=exc, local=False, version=Vrsn_2_0)
+            if phase == 0:
+                registry = srgy.makeRegistry('authority', issuer.pre)
+                rip = srgy.store.event(registry.regk)
+                anchor(issuer, registry, rip)
+                credential = acdcmap(israid=issuer.pre, iseaid=recipient.pre,
+                    regid=registry.regk, attribute=dict(d='', status='authorized'))
+                first = Blinder.blind(acdc=credential.said, state='issued')
+                event1 = blindate(registry.regk, rip.said, first.said)
+                registry.processEvent(event1)
+                firstAnchor = anchor(issuer, registry, event1)
+                parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(rip, event1)))
+                # A generic node source is not an issuer-TEL historical selector.
+                node = messagize(credential, bonds=[first.data, SealEvent(
+                    i=issuer.pre, s=firstAnchor.snh, d=firstAnchor.said)], gvrsn=Vrsn_2_0)
+                exn, attachment = grant(issuer, recipient.pre, 'retained first proof', origin=node)
+                parser.parse(ims=bytearray(exn.raw + attachment))
+                assert exc.complete(exn.said)
+                retained = tuple(verifier.db.enst.get((exn.said,)))
+                assert handler.verifyAccepted(exn.said)
+                opaque = Blinder.blind(acdc=credential.said, state='revoked', sn=2)
+                mixed = messagize(credential, bonds=[first.data, opaque.data], gvrsn=Vrsn_2_0)
+                mixedExn, mixedAtc = grant(issuer, recipient.pre, 'unresolved second target proof',
+                                           origin=mixed)
+                parser.parse(ims=bytearray(mixedExn.raw + mixedAtc))
+                assert exc.complete(mixedExn.said)  # current bup1 proof suffices for live intake
+                with pytest.raises(MissingChainError):
+                    handler.verifyAccepted(mixedExn.said, historical=True)
+                badBound = Blinder.blind(acdc=credential.said, state='issued', bound=True,
+                    bsn=0, bd=Diger(ser=b'conflicting accepted recipient inception').qb64)
+                missingBound = Blinder.blind(acdc=credential.said, state='issued', bound=True,
+                    bsn=5, bd=Diger(ser=b'not yet available recipient event').qb64)
+                for extras in ([opaque, badBound], [badBound, opaque],
+                               [missingBound, badBound], [badBound, missingBound]):
+                    node = messagize(credential, bonds=[first.data, *(p.data for p in extras)],
+                                     gvrsn=Vrsn_2_0)
+                    badExn, badAtc = grant(issuer, recipient.pre, 'known bound contradiction', origin=node)
+                    parser.parse(ims=bytearray(badExn.raw + badAtc))
+                    assert exc.complete(badExn.said)
+                    with pytest.raises(MisanchorError, match='conflicts'):
+                        handler.verifyAccepted(badExn.said, historical=True)
+                event2 = blindate(registry.regk, event1.said, opaque.said, sn=2)
+                registry.processEvent(event2)
+                anchor(issuer, registry, event2)
+                parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(event2)))
+            else:
+                registry = srgy.registryByName('authority')
+            assert vrgy.store.headEvent(registry.regk).said == event2.said
+            assert not handler.verifyAccepted(exn.said)  # live/current defaults stay strict
+            assert handler.verifyAccepted(exn.said, historical=True)
+            assert handler.verifyAccepted(mixedExn.said, historical=True)
+            assert tuple(verifier.db.enst.get((exn.said,))) == retained
+            with pytest.raises(MissingBlindError):
+                vetBinds(*handler._registryEvidence(registry.regk), db=verifier.db,
+                         blinders=[first], target=credential.said, acdc=credential)
+            corrupted = Blinder(crew=opaque.crew._replace(u=Noncer().qb64), verify=False)
+            corruptedOld = Blinder(crew=first.crew._replace(u=Noncer().qb64), verify=False)
+            for invalid in ([opaque, opaque], [corrupted], [first, first], [corruptedOld]):
+                with pytest.raises(UnverifiedBlindError) as error:
+                    vetBinds(*handler._registryEvidence(registry.regk), db=verifier.db,
+                             blinders=invalid, target=credential.said, acdc=credential)
+                assert type(error.value) is UnverifiedBlindError
+            with pytest.raises(UnverifiedBlindError, match='empty'):
+                handler._registryEvidence(registry.regk, proofs=[], target=credential.said, acdc=credential)
+            with pytest.raises(UnverifiedBlindError, match='duplicate'):
+                handler._registryEvidence(registry.regk, proofs=[first, first],
+                                          target=credential.said, acdc=credential)
+            if phase == 1:
+                vacuousProof = Blinder.blind(acdc='', state='', sn=3)
+                for known in (False, True):
+                    if known:
+                        vacuous = blindate(registry.regk, event2.said, vacuousProof.said, sn=3)
+                        registry.processEvent(vacuous)
+                        anchor(issuer, registry, vacuous)
+                        parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(vacuous)))
+                    _, selected = handler._registryEvidence(registry.regk,
+                        proofs=[first, vacuousProof], target=credential.said, acdc=credential)
+                    assert selected[-1].said == event1.said
+                repeated = blindate(registry.regk, vacuous.said, first.said, sn=4)
+                registry.processEvent(repeated)
+                anchor(issuer, registry, repeated)
+                parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0) + public(repeated)))
+                with pytest.raises(ValidationError, match='ambiguous'):
+                    handler.verifyAccepted(exn.said, historical=True)
+        finally:
+            vrgy.close()
+            verifier.close()
+            srgy.close()
+            source.close()
 
 
 @pytest.mark.parametrize('bound', [False, True])
