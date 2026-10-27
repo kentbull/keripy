@@ -147,32 +147,56 @@ def test_targeted_defaults_and_last_conflicting_relation(graph, operator, expect
     assert evaluate(handler, near, far) is expected
 
 
-def test_hidden_issuee_is_unknown_not_an_untargeted_default(graph):
-    """Keep a compact Issuee unknown; NOR/NOT cannot turn undisclosed targeting into evidence.
+@pytest.mark.parametrize('issuee', [
+    pytest.param('hidden', id='compact'),
+    pytest.param(42, id='number'), pytest.param(True, id='boolean'),
+    pytest.param(['not-an-AID'], id='array'),
+    pytest.param(dict(invalid='Issuee'), id='map'),
+    pytest.param(None, id='null'), pytest.param(0, id='zero'),
+    pytest.param(False, id='false'), pytest.param([], id='empty-array'),
+    pytest.param({}, id='empty-map'),
+])
+def test_unresolved_issuee_is_not_an_untargeted_default(graph, issuee):
+    """Hidden or non-string Issuee evidence cannot establish identity or defaults."""
+    from keri.acdc.scheming import validateSchema
 
-    Parameters:
-        graph: Temporary real habitats/handler fixture defined above.
-
-    Returns:
-        None. Assertions check the stated evidence boundary."""
-    _, issuer, other, handler = graph
-    full = acdcmap(israid=issuer.pre, uuid=Noncer().qb64, iseaid=other.pre,
-        attribute=dict(d='', u=Noncer().qb64))
-    compact = Compactor(mad=dict(full.sad['a']), makify=True)
-    far = acdcmap(israid=issuer.pre, uuid=full.sad['u'],
-                   schema=full.schema, attribute=compact.said)
-    assert isinstance(far.attrib, str) and far.iseaid is None
-    for op in (None, 'I2I', 'DI2I', 'NOT'):
+    hby, issuer, other, handler = graph
+    schema = Schemer(sed={'$id': '', 'version': '1.0.0', 'type': 'object'}).sed
+    hidden = issuee == 'hidden'
+    if hidden:
+        full = acdcmap(israid=issuer.pre, uuid=Noncer().qb64, iseaid=other.pre,
+            schema=schema, attribute=dict(d='', u=Noncer().qb64))
+        compact = Compactor(mad=dict(full.sad['a']), makify=True)
+        far = acdcmap(israid=issuer.pre, uuid=full.sad['u'],
+                       schema=schema, attribute=compact.said)
+        assert isinstance(far.attrib, str) and far.iseaid is None
+    else:
+        far = acdcmap(israid=issuer.pre, schema=schema, attribute=dict(d='', i=issuee))
+        assert far.sad['a']['i'] == issuee
+    assert far.verify() is True
+    assert validateSchema(far, db=hby.db) is True
+    for op in ('E1E', None, 'I2I', 'DI2I', 'NOT', ['NI2I', 'E1E']):
         leaf = dict(n=far.said)
         if op is not None:
             leaf['o'] = op
-        near = credential(issuer.pre, edge=dict(d='', o='NOR', proof=leaf))
-        assert evaluate(handler, near, far) is False
+        # Equal malformed identities must not authorize E1E.
+        near = acdcmap(israid=issuer.pre, schema=schema,
+            attribute=dict(d='', i=other.pre if hidden else issuee),
+            edge=dict(d='', proof=leaf))
+        assert near.verify() is True
+        assert validateSchema(near, db=hby.db) is True
+        nodes = {node.said: dict(serder=node) for node in (near, far)}
+        assert handler.evaluate(nodes, list(nodes)) is None
+        nor = acdcmap(israid=issuer.pre, schema=schema, attribute=dict(d=''),
+            edge=dict(d='', o='NOR', proof=leaf))
+        nodes = {node.said: dict(serder=node) for node in (nor, far)}
+        assert handler.evaluate(nodes, list(nodes)) is None
     near = credential(issuer.pre, edge=dict(d='', proof=dict(n=far.said, o='NI2I')))
     assert evaluate(handler, near, far) is True
 
 
-def test_untargeted_default_and_edge_properties(graph):
+@pytest.mark.parametrize('issuee', [None, ''])
+def test_untargeted_default_and_edge_properties(graph, issuee):
     """Accept visible untargeted defaults and schema-defined labeled edge properties.
 
     Parameters:
@@ -181,7 +205,7 @@ def test_untargeted_default_and_edge_properties(graph):
     Returns:
         None. Assertions check the stated evidence boundary."""
     _, issuer, _, handler = graph
-    far = credential(issuer.pre)
+    far = credential(issuer.pre, issuee=issuee)
     near = credential(issuer.pre, edge=dict(d='', proof=dict(
         n=far.said, explanation='a schema-defined labeled edge property')))
     assert evaluate(handler, near, far)

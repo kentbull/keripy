@@ -293,9 +293,9 @@ class EdgeEvaluator:
             serder (SerderACDC): Exact disclosed far-node credential.
 
         Returns:
-            tuple[bool, str | None]: Whether the selected attribute block is visible,
-            and its Issuee when present. A visible block without i is known untargeted;
-            a compact digest is unknown and cannot establish that default."""
+            tuple[bool, str | None]: Whether the selected Issuee is known, and its
+            string value when present. A visible block without i is known untargeted;
+            a compact block or present non-string i is unresolved."""
         if "a" in serder.sad:
             block = serder.sad["a"]
         else:
@@ -303,7 +303,12 @@ class EdgeEvaluator:
             if not isinstance(aggregate, list) or len(aggregate) < 2:
                 return False, None
             block = aggregate[1]
-        return (True, block.get("i")) if isinstance(block, Mapping) else (False, None)
+        if not isinstance(block, Mapping):
+            return False, None
+        if "i" not in block:
+            return True, None
+        issuee = block["i"]
+        return (True, issuee) if isinstance(issuee, str) else (False, None)
 
 
     def _boundEdgeValidity(self, near, far, *, nodes, historical=False):
