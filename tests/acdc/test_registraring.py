@@ -8,14 +8,16 @@ import pytest
 
 from keri import Vrsn_2_0
 from keri.acdc import Registry, Regery, Registrar, acdcmap, blindate as regbup, regcept
+from keri.acdc import regeventing
 from keri.acdc.regbasing import RegBaser
 from keri.app import openHby
 from keri.app.configing import Configer
 from keri.app.habbing import Habery
 from keri.app.keeping import Keeper
 from keri.core import Blinder, Diger, Number, SerderACDC
+from keri.core import eventing
 from keri.db.basing import Baser
-from keri.kering import ConfigurationError, ValidationError
+from keri.kering import ConfigurationError, MissingAnchorError, ValidationError
 
 
 def _anchor(hab, registry, serder):
@@ -32,6 +34,17 @@ def _anchor(hab, registry, serder):
 
     # Return the original registry event for test setup
     return serder
+
+
+def _persistent_registry_owners(root, name):
+    """Open every registry/KEL owner under one durable test-owned root."""
+    kwa = dict(name=name, base="test", temp=False, headDirPath=str(root), reopen=True)
+    hby = Habery(name=name, base=kwa["base"], temp=True, version=Vrsn_2_0,
+                 ks=Keeper(**kwa), db=Baser(**kwa), cf=Configer(**kwa))
+    rgy = Regery(hby=hby, baser=RegBaser(**kwa))
+    assert all(Path(path).is_relative_to(root)
+               for path in (hby.ks.path, hby.db.path, hby.cf.path, rgy.baser.path))
+    return hby, rgy
 
 
 def test_registrar_blindable_registry_state_updates():
@@ -796,15 +809,7 @@ def test_registry_clears_conflicting_out_of_order_siblings():
 def test_registry_preserves_first_verified_anchor_across_reseal(tmp_path):
     """Keep the first verified pair, even when a lower seal arrives after it."""
     def owners():
-        kwa = dict(name="acdc-registry-first-anchor-wins", base="test",
-                   temp=False, headDirPath=str(tmp_path), reopen=True)
-        hby = Habery(name=kwa["name"], base=kwa["base"], temp=True,
-                     version=Vrsn_2_0, ks=Keeper(**kwa), db=Baser(**kwa),
-                     cf=Configer(**kwa))
-        rgy = Regery(hby=hby, baser=RegBaser(**kwa))
-        assert all(Path(path).is_relative_to(tmp_path)
-                   for path in (hby.ks.path, hby.db.path, hby.cf.path, rgy.baser.path))
-        return hby, rgy
+        return _persistent_registry_owners(tmp_path, "acdc-registry-first-anchor-wins")
 
     def anchorPair(said):
         number, diger = rgy.store.anchor(said)
@@ -890,6 +895,91 @@ def test_registry_preserves_first_verified_anchor_across_reseal(tmp_path):
         assert rgy.store.headEvent(registry.regk).said == siblingB.said
         assert rgy.store.seqEvent(registry.regk, 2).said == siblingB.said
         assert rgy.baser.ooes.get(keys=registry.regk, on=2) == []
+    finally:
+        rgy.close()
+        hby.close()
+
+
+@pytest.mark.parametrize("recovery_sn", [3, 4])
+def test_registry_recovery_invalidates_pending_anchor_across_reopen(tmp_path, recovery_sn):
+    """A superseded seal cannot promote a pending TEL; a recovered-branch reseal can."""
+    def owners():
+        return _persistent_registry_owners(tmp_path, "registry-recovery")
+
+    hby, rgy = owners()
+    try:
+        hab = hby.makeHab(name="issuer", version=Vrsn_2_0)
+        registry = rgy.makeRegistry(name="registry", prefix=hab.pre)
+        rip = _anchor(hab, registry, rgy.store.event(registry.regk))
+        acdc = acdcmap(israid=hab.pre, regid=registry.regk,
+                       attribute=dict(d="", name="recovery"), iseaid=hab.pre)
+        t1 = regbup(regid=registry.regk, prior=rip.said, sn=1,
+                    blid=Blinder.blind(acdc=acdc.said, state="issued", sn=1).said)
+        t2 = regbup(regid=registry.regk, prior=t1.said, sn=2,
+                    blid=Blinder.blind(acdc=acdc.said, state="revoked", sn=2).said)
+        seals = []
+        for data in ([dict(d=t1.said)], [], [dict(d=t2.said)]):
+            hab.interact(data=data, version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+            seals.append(hab.kever.serder)
+        c2, c3, c4 = seals
+        assert rgy.store.event(t1.said) is None  # only its C2 seal has arrived
+        assert registry.processEvent(t2) is False
+        assert rgy.store.anchor(t2.said)[1].qb64 == c4.said
+
+        verfers, digers = hab.mgr.rotate(pre=hab.pre, temp=True, erase=False)
+        recovery = eventing.rotate(pre=hab.pre, keys=[v.qb64 for v in verfers],
+                                   ndigs=[d.qb64 for d in digers], sn=recovery_sn,
+                                   dig=(c2 if recovery_sn == 3 else c3).said,
+                                   version=Vrsn_2_0)
+        hby.kvy.processEvent(serder=recovery,
+                             sigers=hab.sign(ser=recovery.raw, verfers=verfers), local=True)
+        assert hab.kever.serder.said == recovery.said
+    finally:
+        rgy.close()
+        hby.close()
+
+    hby, rgy = owners()
+    try:
+        registry = rgy.registryByName("registry")
+        hab = registry.hab
+        assert hab.kever.sn == recovery_sn
+        assert hab.kever.serder.said == recovery.said
+        assert hby.db.kels.getLast(keys=hab.pre, on=4) == (
+            c4.said if recovery_sn == 3 else recovery.said)
+        assert hby.db.evts.get((hab.pre, c4.said)).raw == c4.raw
+        assert hby.db.fons.get((hab.pre, c4.said)) is not None
+        assert registry.processEvent(t1) is True  # no new KEL event
+        assert rgy.store.headEvent(registry.regk).said == t1.said
+        assert rgy.store.seqEvent(registry.regk, 2) is None
+        assert rgy.store.anchor(t2.said) is None
+        assert rgy.baser.maes.get(keys=registry.regk, on=2) == [(t2.said,)]
+        with pytest.raises(ValidationError, match="invalid anchor"):
+            registry.anchorMsg(t2.said, number=Number(num=4), diger=Diger(qb64=c4.said))
+        with pytest.raises(MissingAnchorError):
+            regeventing.vetAnchor(t2, db=hby.db, issuer=hab.pre, source=c4.said)
+
+        # A genuine seal on the recovered branch rehabilitates the same TEL SAID.
+        _anchor(hab, registry, t2)
+        fresh = hab.kever.serder
+        assert fresh.said != c4.said
+        assert rgy.store.anchor(t2.said)[1].qb64 == fresh.said
+        assert registry.processEvent(t2) is True
+        assert rgy.store.seqEvent(registry.regk, 1).said == t1.said
+        assert rgy.store.seqEvent(registry.regk, 2).said == t2.said
+    finally:
+        rgy.close()
+        hby.close()
+
+    hby, rgy = owners()
+    try:
+        registry = rgy.registryByName("registry")
+        rgy.processEscrows()
+        assert rgy.store.headEvent(registry.regk).said == t2.said
+        assert rgy.store.anchor(t2.said)[1].qb64 == fresh.said
+        assert list(rgy.store.cloneTelIter(registry.regk)) == [rip.raw, t1.raw, t2.raw]
+        assert rgy.baser.maes.get(keys=registry.regk, on=2) == []
+        assert rgy.baser.ooes.get(keys=registry.regk, on=2) == []
+        assert hby.db.evts.get((registry.hab.pre, c4.said)).raw == c4.raw
     finally:
         rgy.close()
         hby.close()

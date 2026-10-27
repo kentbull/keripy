@@ -9,13 +9,14 @@ from keri.acdc.regeventing import Rever
 from keri.acdc.regbasing import RegBaser
 from keri.app import openHby
 from keri.core import Codens, Counter, Diger, Number, Parser, SealEvent, SealSource, messagize
+from keri.core import eventing
 from keri.db import openLMDB
 
 from tests.acdc.test_observing import _copy_kel, _events, _seal
 
 
 @contextmanager
-def _anchored_registry():
+def _anchored_registry(recovered=False):
     """Yield independent issuer/receiver evidence with a genuinely anchored inception.
 
     Yields:
@@ -27,7 +28,18 @@ def _anchored_registry():
         issuer = ihby.makeHab(name="issuer")
         rip, _, _ = _events(issuer)
         anchor = _seal(issuer, rip)
+        if recovered:
+            prior = anchor.said  # this first seal remains on the recovered branch
+            issuer.interact(data=[], version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+            anchor = _seal(issuer, rip)  # locator in the later disputed suffix
+            verfers, digers = issuer.mgr.rotate(pre=issuer.pre, temp=True, erase=False)
+            recovery = eventing.rotate(pre=issuer.pre, keys=[v.qb64 for v in verfers],
+                                       ndigs=[d.qb64 for d in digers], sn=2,
+                                       dig=prior, version=Vrsn_2_0)
+            ihby.kvy.processEvent(serder=recovery, local=True,
+                                  sigers=issuer.sign(ser=recovery.raw, verfers=verfers))
         _copy_kel(issuer, rhby)
+        assert rhby.kevers[issuer.pre].serder.said == issuer.kever.serder.said
         yield Rever(db=rhby.db, reger=reger), rip, anchor
 
 
@@ -120,18 +132,18 @@ def test_parse_one_malformed_frame_returns_no_message(processive):
 
 @pytest.mark.parametrize('triple,wrong', [
     (False, 'digest'), (False, 'event'), (True, 'digest'),
-    (True, 'event'), (True, 'controller'),
+    (True, 'event'), (True, 'controller'), (False, 'recovery'), (True, 'recovery'),
 ])
 def test_false_acdc_v2_source_locator_rejects_frame_without_poisoning(triple, wrong):
     """Reject a resolvably false source locator for this frame while allowing later clean authentic replay.
 
     Parameters:
         triple: Whether the locator explicitly names its controller.
-        wrong: False digest, wrong accepted event, or wrong explicit controller mutation.
+        wrong: False digest, event, controller, or a known recovery-disputed source.
 
     Returns:
         None. Assertions check the stated evidence boundary."""
-    with _anchored_registry() as (rever, rip, anchor):
+    with _anchored_registry(recovered=wrong == 'recovery') as (rever, rip, anchor):
         # A real alternative anchor is already accepted, so ignoring the false
         # supplied locator would let the ordinary discovery path accept rip.
         controller = rip.sad['i']
@@ -143,7 +155,7 @@ def test_false_acdc_v2_source_locator_rejects_frame_without_poisoning(triple, wr
             event = rever.db.evts.get((controller,
                 rever.db.kels.getLast(keys=controller, on=0)))
             number, diger = Number(num=0), Diger(qb64=event.said)
-        else:
+        elif wrong == 'controller':
             controller = Diger(ser=b'other controller').qb64
         source = (SealEvent(i=controller, s=number.numh, d=diger.qb64) if triple
                   else SealSource(s=number.numh, d=diger.qb64))

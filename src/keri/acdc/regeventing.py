@@ -273,8 +273,7 @@ def _kever(db, pre):
 
 
 def _kelEvent(db, pre, claim):
-    """Resolve a claimed anchoring key event of pre's KEL by sequence number
-    (int) or SAID (str).  Returns the event serder or None when absent.
+    """Resolve an ordinal or SAID on the current issuer head's prior-digest chain.
 
     Args:
         db (Baser): Caller-populated accepted KEL database.
@@ -283,15 +282,29 @@ def _kelEvent(db, pre, claim):
 
     Returns:
         SerderKERI | None: Accepted event body, or None when the claim is unavailable."""
-    if isinstance(claim, int):
-        dig = db.kels.getLast(keys=pre, on=claim)
-        if dig is None:
-            return None
-        return db.evts.get(keys=(pre, dig))
-    event = db.evts.get(keys=(pre, claim))
-    if event is None or db.kels.getLast(keys=pre, on=event.sn) != event.said:
-        return None
-    return event
+    for event in _kelBranch(db, pre):
+        if isinstance(claim, int):
+            if event.sn < claim:
+                return None
+            if event.sn == claim:
+                return event
+        elif event.said == claim:
+            return event
+    return None
+
+
+def _kelBranch(db, pre):
+    """Yield the current accepted branch backwards, preserving disputed history."""
+    kever = _kever(db, pre)
+    event = kever.serder if kever is not None else None
+    while event is not None:
+        yield event
+        if event.sn == 0:
+            return
+        prior = db.evts.get(keys=(pre, event.prior))
+        if prior is None or prior.sn != event.sn - 1:
+            return
+        event = prior
 
 
 def sealDigests(serder):
@@ -345,17 +358,14 @@ def _scanKel(db, pre, serder):
     Returns:
         tuple[int, str] | None: First matching accepted KEL ordinal/digest, or None.
         Unwitnessed events cannot satisfy an anchor."""
-    kever = _kever(db, pre)
-    if kever is None:
-        return None
     event = _normalizeEventRecord(serder)
-    for sn in range(kever.sn + 1):
-        eserder = _kelEvent(db, pre, sn)
-        if eserder is None or not db.fullyWitnessed(eserder):
+    couple = None
+    for eserder in _kelBranch(db, pre):
+        if not db.fullyWitnessed(eserder):
             continue
         if any(_matchesRegistrySeal(seal, event) for seal in eserder.sad.get('a', ())):
-            return (sn, eserder.said)
-    return None
+            couple = (eserder.sn, eserder.said)
+    return couple  # last match in the backwards walk is the earliest eligible seal
 
 
 def _verifyAnchorCouple(serder, *, db, issuer, number, diger):
@@ -371,8 +381,8 @@ def _verifyAnchorCouple(serder, *, db, issuer, number, diger):
         diger (Diger | None): claimed digest of the sealing KEL event.
 
     Returns:
-        bool: True when the claimed sealing event exists, is fully witnessed,
-            matches ``diger``, and contains the full TEL seal tuple for
+        bool: True when the seal lies on the current KEL branch, is fully witnessed,
+            matches ``diger``, and contains an exact supported registry seal for
             ``serder``. False otherwise.
     """
 
@@ -380,15 +390,7 @@ def _verifyAnchorCouple(serder, *, db, issuer, number, diger):
     if number is None or diger is None:
         return False
 
-    # Retrieve dig of KEL event by issuer and sequence number
-    dig = db.kels.getLast(keys=issuer, on=number.sn)
-    if dig is None:
-        return False
-
-    dig = dig.encode("utf-8")
-    
-    # Retrieve serder from evts
-    aserder = db.evts.get(keys=(issuer, dig))
+    aserder = _kelEvent(db, issuer, number.sn)
     if aserder is None:
         return False
 
@@ -439,6 +441,12 @@ def _validateSourceLocators(serder, *, db, issuer, sscs=(), ssts=()):
         if accepted != diger.qb64:
             raise ValidationError('TEL source locator conflicts with accepted KEL digest')
         anchor = db.evts.get(keys=(controller, accepted))
+        current = _kelEvent(db, controller, number.num)
+        kever = _kever(db, controller)
+        if (anchor is not None and kever is not None
+                and (number.num > kever.sn
+                     or (current is not None and current.said != anchor.said))):
+            raise ValidationError('TEL source locator is on a disputed KEL branch')
         if anchor is not None and not any(
                 _matchesRegistrySeal(seal, event) for seal in anchor.sad.get('a', ())):
             raise ValidationError('TEL source locator does not seal this registry event')
