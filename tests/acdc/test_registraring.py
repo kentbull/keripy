@@ -3,6 +3,9 @@
 
 from pathlib import Path
 from types import SimpleNamespace
+import json
+import subprocess
+import sys
 
 import pytest
 
@@ -815,6 +818,7 @@ def test_registry_preserves_first_verified_anchor_across_reseal(tmp_path):
         number, diger = rgy.store.anchor(said)
         return number.sn, diger.qb64
 
+    reader = None
     hby, rgy = owners()
     try:
         hab = hby.makeHab(name="test")
@@ -822,6 +826,36 @@ def test_registry_preserves_first_verified_anchor_across_reseal(tmp_path):
         registry = registrar.makeRegistry(name="first-anchor-wins", prefix=hab.pre)
         rip = rgy.store.event(registry.regk)
         _anchor(hab, registry, rip)
+
+        # A real long-lived intake process keeps its initial Kever while another
+        # process advances the shared accepted KEL and verifies TEL anchors.
+        reader = subprocess.Popen([sys.executable, '-c', '''
+import json, sys
+from keri.acdc.regbasing import RegBaser
+from keri.acdc.regeventing import Rever
+from keri.core import SerderACDC
+from keri.db import Baser
+root, name, base, issuer = sys.argv[1:]
+db = Baser(name=name, base=base, headDirPath=root, reopen=True)
+reger = RegBaser(name=name, base=base, headDirPath=root)
+try:
+    old = db.kevers[issuer].serder
+    print(json.dumps(dict(head=old.said)), flush=True)
+    event = SerderACDC(raw=bytes.fromhex(input()))
+    cached = db.kevers[issuer].serder.said
+    durable = db.states.get(issuer).d
+    intake = Rever(db=db, reger=reger)
+    accepted = intake.processEvent(event)
+    pair = intake.store.anchor(event.said)
+    print(json.dumps(dict(cached=cached, durable=durable, accepted=accepted,
+        anchor=[pair[0].num, pair[1].qb64] if pair is not None else None)))
+finally:
+    reger.close()
+    db.close()
+''', str(tmp_path), hby.name, hby.base, hab.pre],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        old_head = hab.kever.serder.said
+        assert json.loads(reader.stdout.readline()) == dict(head=old_head)
 
         # Both sn=2 siblings wait for the still-uncommitted sn=1 update.
         acdc = acdcmap(israid=hab.pre,
@@ -866,7 +900,16 @@ def test_registry_preserves_first_verified_anchor_across_reseal(tmp_path):
         later = (Number(num=hab.kever.sn), Diger(qb64=hab.kever.serder.said))
         assert registry.anchorMsg(siblingA.said, number=later[0], diger=later[1]) is False
         assert anchorPair(siblingA.said) == firstA
+
+        output, errors = reader.communicate(siblingA.raw.hex() + '\n', timeout=10)
+        assert reader.returncode == 0, errors
+        assert json.loads(output) == dict(cached=old_head, durable=hab.kever.serder.said,
+                                         accepted=False, anchor=list(firstA))
+        assert anchorPair(siblingA.said) == firstA
     finally:
+        if reader is not None and reader.poll() is None:
+            reader.kill()
+            reader.communicate()
         rgy.close()
         hby.close()
 
