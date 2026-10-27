@@ -28,7 +28,8 @@ from ..core import (Aggor, Compactor, Counter,
 from ..peer.exchanging import (cloneMessage, loadParsedNestedSubstreams,
                                verifyAttachments)
 from . import scheming
-from .edging import EdgeEvaluator, EdgeSectionLabels, EdgeGroupLabels
+from .edging import (EdgeEvaluator, EdgeSectionLabels, EdgeGroupLabels,
+                     edgeTarget, fixedEdgeOrder)
 from .proving import PresentedEvidence
 
 logger = ogler.getLogger()
@@ -990,7 +991,7 @@ class IpexHandler:
                 if position >= len(order):
                     return False
                 said = order[position]
-                hasPositional = True
+                hasPositional = hasPositional or position > 0
             else:
                 said = origin
 
@@ -999,28 +1000,34 @@ class IpexHandler:
                 return False
             nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
             value = nserder.sad
+            edgePath = []
 
             # Follow each virtual `_` hop from a near edge to its far ACDC.
             if prefix not in ("", "/"):
                 for part in prefix.strip("/").split("/"):
                     if part == "_":
-                        if not isinstance(value, Mapping):
+                        try:
+                            said = edgeTarget(nserder, tuple(edgePath), value,
+                                evidence=PresentedEvidence(self.hby, self.rgy), sections=self.sections)
+                        except (ValueError, TypeError):
                             return False
-                        said = value.get("n")
                         nest = nodes.get(said)
                         if nest is None:
                             return False
                         nserder = nest["serder"] if isinstance(nest, dict) else nest.serder
                         value = nserder.sad
+                        edgePath = []
                     elif isinstance(value, Mapping):
                         if part not in value:
                             return False
                         value = value[part]
+                        edgePath.append(part)
                     elif isinstance(value, list) and part.isdigit():
                         index = int(part)
                         if index >= len(value):
                             return False
                         value = value[index]
+                        edgePath.append(part)
                     else:
                         return False
 
@@ -1106,11 +1113,15 @@ class IpexHandler:
                                                                paths=wholePaths):
                 return False
 
-        # A positional list identifies nodes by BFS index and is therefore
-        # gapless. Fully explicit prefixes may omit nodes requesting nothing,
+        # A nonorigin positional selector requires schema-proven fixed shape
+        # and a gapless BFS list. Explicit far prefixes may omit unrequested nodes,
         # but the selected nodes must remain in BFS order and start at origin.
         return (selected[0] == origin
-                and (not hasPositional or selected == order))
+                and (not hasPositional or (selected == order and all(
+                    fixedEdgeOrder(nodes[said]["serder"] if isinstance(nodes[said], dict)
+                                   else nodes[said].serder,
+                        evidence=PresentedEvidence(self.hby, self.rgy), sections=self.sections)
+                    for said in order))))
 
     def _verifyWholeDisclosure(self, serder, *, paths):
         """Verify whole-path closure under the bounded explicit acm profile.
@@ -1536,19 +1547,18 @@ class IpexHandler:
                     return None
 
                 # Expanded edge sections may contain nested edge groups
-                for edge in blocks:
-                    groups = deque([(edge, False)])
+                for index, edge in enumerate(blocks):
+                    path = ("e",) if isinstance(edges, Mapping) else ("e", str(index))
+                    groups = deque([(edge, False, path)])
                     while groups:
-                        group, nested = groups.popleft()
-                        labels = EdgeGroupLabels if nested else EdgeSectionLabels   # Leaf vs group labels
-                        if "n" in group:
-                            edgeSaid = group.get("n")
-                            if not isinstance(edgeSaid, str):
-                                return None
-                            try:
-                                Saider(qb64=edgeSaid)
-                            except Exception:
-                                return None
+                        group, nested, path = groups.popleft()
+                        labels = EdgeGroupLabels if nested else EdgeSectionLabels
+                        try:
+                            edgeSaid = edgeTarget(nserder, path, group,
+                                evidence=PresentedEvidence(self.hby, self.rgy), sections=self.sections)
+                        except (ValueError, TypeError):
+                            return None
+                        if edgeSaid is not None:
                             if edgeSaid not in nodes:
                                 if closed:
                                     # Nested Grant bytes are immutable.  Retrying
@@ -1561,12 +1571,12 @@ class IpexHandler:
                                 queue.append(edgeSaid)
                             continue
 
+                        if not isinstance(group, Mapping):
+                            return None
                         for label, node in group.items():
                             if label in labels:
                                 continue
-                            if not isinstance(node, Mapping):
-                                return None
-                            groups.append((node, True))
+                            groups.append((node, True, (*path, label)))
 
         # Even when offer omits farther nodes, every carried nest must still be
         # part of the root-reachable disclosed graph.

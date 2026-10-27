@@ -7,6 +7,8 @@ Boolean, bound-history and arithmetic policy retain their existing behavior.
 from collections.abc import Mapping
 from math import isfinite
 
+from referencing.jsonschema import DRAFT202012
+
 from ..core import BoundState, Diger, Number, Saider
 from ..kering import (FailedSchemaValidationError, Ilks, KeriError, MissingAnchorError,
                       MissingChainError, MissingSchemaError, MissingSenderKeyStateError,
@@ -21,6 +23,158 @@ EdgeNodeLabels = ("d", "u", "n", "s", "o", "w")
 UnaryEdgeOps = ("I2I", "NI2I", "DI2I", "E1E", "NOT")
 DelegativeEdgeOps = ("I2I", "NI2I", "DI2I")
 EdgeGroupOps = ("AND", "OR", "NAND", "NOR", "AVG", "WAVG")
+
+
+def _edgeSchema(near, evidence, sections):
+    """Reuse authenticated local schema resources; never fetch or expand nodes."""
+    source = near.schema
+    schemer = (scheming._verifySchemer(source, kind=near.kind)
+               if isinstance(source, Mapping) else
+               scheming._cachedSchema(evidence.hby.db, source, sections=sections))
+    if schemer is None:
+        raise MissingSchemaError(source)
+    registry = scheming._registry(schemer, evidence.hby.db, sections=sections)
+    return schemer.sed, registry.resolver(base_uri=schemer.said)
+
+
+def _staticEdgeSchema(schema, resolver, depth=64, *, expanded=False):
+    """Resolve static types/refs in their resource scope, with bounded ancestors.
+
+    Only an already expanded ancestor may select the unique object branch of a
+    string/object oneOf. A digest-valued leaf never uses that selection.
+    """
+    if depth <= 0 or not isinstance(schema, Mapping):
+        return None
+    resolver = resolver.in_subresource(DRAFT202012.create_resource(schema))
+    if '$ref' in schema:
+        annotations = {'$ref', '$id', '$schema', 'title', 'description', '$comment',
+                       'deprecated', 'readOnly', 'writeOnly', 'examples', 'default'}
+        if set(schema) - annotations:
+            return None
+        try:
+            resolved = resolver.lookup(schema['$ref'])
+        except Exception:
+            return None
+        return _staticEdgeSchema(resolved.contents, resolved.resolver, depth - 1,
+                                 expanded=expanded)
+    if any(key in schema for key in ('anyOf', 'allOf', 'not', 'if',
+            'then', 'else', 'dependentSchemas', 'patternProperties')):
+        return None
+    if 'oneOf' in schema:
+        annotations = {'oneOf', '$id', '$schema', 'title', 'description', '$comment',
+                       'deprecated', 'readOnly', 'writeOnly', 'examples', 'default'}
+        branches = schema['oneOf']
+        if (not expanded or set(schema) - annotations
+                or not isinstance(branches, list) or len(branches) != 2):
+            return None
+        selected = [_staticEdgeSchema(branch, resolver, depth - 1) for branch in branches]
+        if any(branch is None for branch in selected):
+            return None
+        types = [branch[0].get('type') for branch in selected]
+        if types not in (['object', 'string'], ['string', 'object']):
+            return None
+        return next(branch for branch in selected if branch[0]['type'] == 'object')
+    return schema, resolver
+
+
+def edgeTarget(near, path, value, *, evidence, sections=None):
+    """Return the exact far SAID for an expanded or schema-proven simple edge.
+
+    Only declared nonreserved edge/group children with a statically string-only
+    schema are simple edges. Open/map-admitting/ambiguous schemas cannot turn
+    opaque strings into hops. Expanded leaf reserved fields precede application
+    properties in normative order. No received bytes are rewritten.
+
+    Returns None for groups/unsupported strings; malformed expanded leaves raise
+    ValueError. Missing authenticated schema resources remain dependencies.
+    """
+    if (len(path) < 2 or path[0] != 'e'
+            or any(part in EdgeNodeLabels for part in path[1:])):
+        return None
+    ancestor = near.sad
+    for part in path:
+        if isinstance(ancestor, Mapping):
+            if 'n' in ancestor:
+                return None  # application properties never extend a leaf edge
+            ancestor = ancestor.get(part)
+        elif isinstance(ancestor, list) and part.isdigit() and int(part) < len(ancestor):
+            ancestor = ancestor[int(part)]
+        else:
+            break  # standalone evaluator operands need no stored instance path
+    if isinstance(value, Mapping):
+        if 'n' not in value:
+            return None
+        reserved = [label for label in value if label in EdgeNodeLabels]
+        expected = [label for label in EdgeNodeLabels if label in value]
+        if reserved != expected or list(value)[:len(reserved)] != reserved:
+            raise ValueError('edge reserved fields must precede properties in order')
+        target = value['n']
+    elif isinstance(value, str):
+        schema, resolver = _edgeSchema(near, evidence, sections)
+        instance = near.sad
+        for part in path:
+            selected = _staticEdgeSchema(schema, resolver, expanded=True)
+            if selected is None or not isinstance(instance, Mapping):
+                return None
+            schema, resolver = selected
+            if schema.get('type') != 'object' or 'n' in instance:
+                return None  # leaf application properties are never graph edges
+            properties = schema.get('properties', {})
+            if part not in properties or part not in instance:
+                return None
+            schema, instance = properties[part], instance[part]
+        selected = _staticEdgeSchema(schema, resolver)
+        if selected is None or selected[0].get('type') != 'string':
+            return None
+        target = value
+    else:
+        return None
+    try:
+        if not isinstance(target, str) or Saider(qb64=target).qb64 != target:
+            raise ValueError('edge target must be a SAID')
+    except (KeriError, ValueError, TypeError) as ex:
+        raise ValueError('edge target must be a SAID') from ex
+    return target
+
+
+def fixedEdgeOrder(near, *, evidence, sections=None):
+    """Prove a closed required edge/group shape before positional selection.
+
+    Present optional members do not establish fixed issuance shape. Unsupported
+    schemas conservatively fail this proof; explicit prefixes remain available.
+    This inspects the schema hierarchy, not a second credential graph traversal.
+    """
+    schema, resolver = _edgeSchema(near, evidence, sections)
+
+    def fixed(schema, resolver, *, root=False, depth=64):
+        if depth <= 0 or (selected := _staticEdgeSchema(schema, resolver)) is None:
+            return False
+        schema, resolver = selected
+        if schema.get('type') == 'string':
+            return not root
+        if schema.get('type') != 'object':
+            return False
+        props = schema.get('properties', {})
+        required = schema.get('required', [])
+        if 'n' in required and 'n' in props:
+            return not root
+        if schema.get('additionalProperties') is not False:
+            return False
+        labels = EdgeSectionLabels if root else EdgeGroupLabels
+        children = [key for key in props if key not in labels]
+        return (all(key in required for key in children)
+                and all(fixed(props[key], resolver, depth=depth - 1)
+                        for key in children))
+
+    selected = _staticEdgeSchema(schema, resolver)
+    if selected is None or selected[0].get('type') != 'object':
+        return False
+    schema, resolver = selected
+    props = schema.get('properties', {})
+    if 'e' not in props:
+        return schema.get('additionalProperties') is False
+    return ('e' in schema.get('required', [])
+            and fixed(props['e'], resolver, root=True))
 
 
 class EdgeEvaluator:
@@ -115,11 +269,12 @@ class EdgeEvaluator:
                 blocks = [edges] if isinstance(edges, Mapping) else edges
                 if not isinstance(blocks, list) or not all(isinstance(e, Mapping) for e in blocks):
                     return None
-                for edge in blocks:
+                for index, edge in enumerate(blocks):
                     if "n" in edge:
                         return None  # the edge section is always a group
                     result = self._evaluateGroupEdge(edge, nodes=nodes, nserder=serder,
-                        nested=False, inheritedSchema=None, memo=memo,
+                        nested=False, path=("e",) if isinstance(edges, Mapping) else ("e", str(index)),
+                        inheritedSchema=None, memo=memo,
                         active=active, averages=averages, historical=historical)
                     if result is None:
                         return None
@@ -385,7 +540,7 @@ class EdgeEvaluator:
 
     def _evaluateGroupEdge(self, group, *, nodes, nserder, nested,
                            inheritedSchema=None, memo=None, active=None, averages=None,
-                           historical=False):
+                           historical=False, path=("e",)):
         """Reduce all members; uncertainty cannot be laundered by OR/NAND/NOR.
 
         AVG/WAVG require explicit graphPolicy.value(near, edge, far) and
@@ -398,6 +553,7 @@ class EdgeEvaluator:
             nodes (dict): Exact authenticated nodes indexed by SAID.
             nserder (SerderACDC): Near node establishing the edge.
             nested (bool): Whether group is below the section root.
+            path (tuple): Node-relative edge/group location for schema resolution.
             inheritedSchema: Additional ancestor constraints, preserved at every child.
             memo (dict | None): Shared node truth cache for this evaluation only.
             active (set | None): Shared recursion path used to detect cycles.
@@ -428,16 +584,25 @@ class EdgeEvaluator:
         for label, member in group.items():
             if label in labels:
                 continue
-            if not isinstance(member, Mapping):
+            try:
+                target = edgeTarget(nserder, (*path, label), member,
+                                    evidence=self.evidence, sections=self.sections)
+            except MissingSchemaError:
+                raise
+            except (ValueError, TypeError, KeriError):
                 return None
-            if "n" in member:
+            if target is not None:
+                # A transient interpretation, never a rewrite of retained bytes.
+                member = member if isinstance(member, Mapping) else dict(n=target)
                 result = self._evaluateLeafEdge(member, nodes=nodes, nserder=nserder,
                     inheritedSchema=pins, memo=memo, active=active, averages=averages,
                     historical=historical)
-            else:
+            elif isinstance(member, Mapping):
                 result = self._evaluateGroupEdge(member, nodes=nodes, nserder=nserder,
-                    nested=True, inheritedSchema=pins, memo=memo, active=active, averages=averages,
+                    nested=True, path=(*path, label), inheritedSchema=pins, memo=memo, active=active, averages=averages,
                     historical=historical)
+            else:
+                return None
             if result is None:
                 return None
             members.append(member)

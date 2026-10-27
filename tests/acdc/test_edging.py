@@ -10,10 +10,11 @@ from keri.acdc import acdcmap, grant, loadHandlers
 from keri.acdc.edging import EdgeEvaluator
 from keri.acdc.proving import PresentedEvidence
 from keri.app import openHby
-from keri.core import (Compactor, Diger, Kevery, Noncer, Number, Parser, SealSource, Signer,
+from keri.core import (Compactor, Diger, Kevery, Noncer, Number, Parser, Schemer, SealSource, Signer,
                        delcept, messagize)
 from keri.kering import MissingChainError, MissingSchemaError
 from keri.peer import Exchanger
+from keri.peer.exchanging import loadParsedNestedSubstreams
 
 
 class Notices:
@@ -497,3 +498,110 @@ def test_production_grant_uses_shared_graph_policy_and_rejects_bad_proof(graph):
         parser.parse(ims=bytearray(other.replay(gvrsn=Vrsn_2_0)))
         parser.parse(ims=bytearray(bad.raw + batc))
         assert not exc.complete(bad.said)
+
+
+@pytest.mark.parametrize('shape,accepted', [
+    ('string', True), ('nested', True), ('reference', True), ('expanded', True),
+    ('worked', True), ('worked-map-leaf', False), ('nested-ancestor', True),
+    ('ambiguous-ancestor', False), ('scoped-string', True), ('scoped-map', False),
+    ('map-admitting', False), ('open', False), ('missing-far', False),
+    ('leaf-property-hop', False),
+    ('property-before-reserved', False), ('reserved-out-of-order', False),
+])
+def test_schema_authorized_edges_through_signed_grant(graph, shape, accepted):
+    """Authenticate exact compact/expanded edges without interpreting opaque strings."""
+    from copy import deepcopy
+    hby, issuer, _, evaluator = graph
+    far = credential(issuer.pre, marker='far')
+    body = deepcopy(far.schema)
+    leaf = {'type': 'string', 'description': 'Far Node SAID'}
+    if shape == 'map-admitting':
+        leaf = {'oneOf': [{'type': 'string'}, {'type': 'object'}]}
+    elif shape == 'open':
+        leaf = {}
+    elif shape == 'reference':
+        body['$defs'] = {'far': leaf}
+        leaf = {'$ref': '#/$defs/far'}
+    elif shape in ('expanded', 'property-before-reserved', 'reserved-out-of-order',
+                   'leaf-property-hop'):
+        leaf = {'type': 'object'}
+    props = {'d': {'type': 'string'}, 'proof': leaf}
+    edge = dict(d='', proof=far.said)
+    prefix = '/e/proof/_/'
+    if shape == 'nested':
+        props = {'d': {'type': 'string'}, 'group': {
+            'type': 'object', 'properties': {'proof': leaf}}}
+        edge = dict(d='', group=dict(proof=far.said))
+        prefix = '/e/group/proof/_/'
+    elif shape == 'expanded':
+        edge['proof'] = dict(n=far.said, explanation='retained property')
+    elif shape == 'property-before-reserved':
+        edge['proof'] = dict(explanation='misordered', n=far.said)
+    elif shape == 'reserved-out-of-order':
+        edge['proof'] = dict(o='NI2I', n=far.said)
+    attribute = dict(d='', marker=shape)
+    if shape == 'leaf-property-hop':
+        edge['proof'] = dict(n=far.said, shadow=dict(n=far.said))
+        prefix = '/e/proof/shadow/_/'
+    body['properties']['e'] = {'type': 'object', 'properties': props}
+    if shape in ('worked', 'worked-map-leaf'):
+        target = (leaf if shape == 'worked' else
+                  {'oneOf': [{'type': 'string'}, {'type': 'object'}]})
+        detail = dict(type='object', additionalProperties=False,
+            required=['d', 'u', 'accreditation', 'reports'], properties=dict(
+                d=dict(type='string'), u=dict(type='string'), accreditation=target,
+                reports=dict(type='object', additionalProperties=False,
+                    required=['research', 'project'], properties=dict(research=leaf, project=leaf))))
+        # Pinned simpleTranscriptSchema: section SAID or expanded object, with
+        # string-only accreditation and reports/research, reports/project edges.
+        body['properties']['e'] = {'oneOf': [dict(type='string'), detail]}
+        edge = dict(d='', u=Noncer().qb64, accreditation=far.said,
+                    reports=dict(research=far.said, project=far.said))
+        prefix = '/e/accreditation/_/'
+    elif shape in ('nested-ancestor', 'ambiguous-ancestor'):
+        detail = dict(type='object', properties=dict(proof=leaf))
+        other = dict(type='string') if shape == 'nested-ancestor' else dict(type='object')
+        body['properties']['e']['properties'] = dict(group={'oneOf': [other, detail]})
+        edge = dict(d='', group=dict(proof=far.said))
+        prefix = '/e/group/proof/_/'
+    elif shape in ('scoped-string', 'scoped-map'):
+        opaque = {'oneOf': [dict(type='string'), dict(type='object')]}
+        local = leaf if shape == 'scoped-string' else opaque
+        root = opaque if shape == 'scoped-string' else leaf
+        bundle = Schemer(sed={'$id': '', 'version': '1.0.0', 'type': 'object',
+            'properties': dict(d=dict(type='string'), proof={'$ref': '#/$defs/target'}),
+            '$defs': dict(target=local)})
+        body['$defs'] = dict(target=root)
+        body['properties']['e'] = bundle.sed
+    schema = Schemer(sed=body)
+    near = acdcmap(israid=issuer.pre, schema=schema.sed,
+                   attribute=attribute, edge=edge)
+    before = (near.raw, far.raw)
+    with openHby(name='schema-edge-receiver', version=Vrsn_2_0) as receiver:
+        holder = receiver.makeHab(name='holder')
+        exc = Exchanger(hby=receiver, handlers=[])
+        loadHandlers(receiver, exc, Notices())
+        parser = Parser(kvy=Kevery(db=receiver.db, lax=False, local=False),
+                        exc=exc, version=Vrsn_2_0)
+        parser.parse(ims=bytearray(issuer.replay(gvrsn=Vrsn_2_0)))
+        artifacts = [] if shape == 'missing-far' else [signed(far, issuer)]
+        plan = [[schema.said, '', []]]
+        if artifacts:
+            plan.append([far.schema['$id'], prefix, []])
+        exn, atc = grant(issuer, holder.pre, shape, origin=signed(near, issuer),
+                         artifacts=artifacts, modifiers=dict(dp=plan))
+        retained = bytes(exn.raw + atc)
+        ims = bytearray(retained)
+        parser.parse(ims=ims)
+        assert not ims
+        assert exc.complete(exn.said) is accepted
+        assert (near.raw, far.raw) == before
+        assert bytes(exn.raw + atc) == retained
+        if accepted:
+            nests = loadParsedNestedSubstreams(receiver, exn.said)
+            assert [nest.serder.raw for nest in nests] == list(before)
+        if not accepted:
+            assert receiver.db.epse.get((exn.said,)) is None
+        # The semantic owner independently applies the same edge classification.
+        if shape != 'missing-far':
+            assert evaluate(evaluator, near, far) is (accepted or shape == 'leaf-property-hop')
