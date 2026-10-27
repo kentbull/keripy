@@ -142,10 +142,10 @@ def _anchor(hab, registry, serder, *, framed=False):
 def _edge(label, node, *, op=None, schema=None):
     """Create a simple edge block that points at another disclosed ACDC node."""
     target = dict(d="", n=node.said)
-    if op is not None:
-        target["o"] = op
     if schema is not None:
         target["s"] = schema
+    if op is not None:
+        target["o"] = op
     return dict(d="", **{label: target})
 
 # Tests
@@ -2485,8 +2485,8 @@ def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
                                          u=Noncer().qb64,
                                          holder=dict(d="",
                                                      n=schemaChild.said,
-                                                     o="I2I",
-                                                     s=compatSchemer.said)),
+                                                     s=compatSchemer.said,
+                                                     o="I2I")),
                                iseaid=subject.pre)
         assert_accepted("Here is the schema-pinned DAG",
                         schemaOrigin,
@@ -4149,26 +4149,39 @@ def test_ipex_v2_disclosure_plan_supports_normative_bfs_forms():
                  base="test",
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name="test")
-        first = acdcmap(israid=hab.pre, attribute=dict(d="", value="first"))
-        second = acdcmap(israid=hab.pre, attribute=dict(d="", value="second"))
-        origin = acdcmap(
-            israid=hab.pre,
+        template = acdcmap(israid=hab.pre, attribute=dict(d="")).schema
+        leafBody = deepcopy(template)
+        leafBody['properties'].pop('e')
+        leafBody['additionalProperties'] = False
+        leafSchema = Schemer(sed=leafBody)
+        first = acdcmap(israid=hab.pre, schema=leafSchema.sed,
+                        attribute=dict(d="", value="first"))
+        second = acdcmap(israid=hab.pre, schema=leafSchema.sed,
+                         attribute=dict(d="", value="second"))
+        edgeSchema = dict(type='object', additionalProperties=False,
+            required=['first', 'second'], properties=dict(
+                d=dict(type='string'),
+                first=dict(type='object', additionalProperties=False, required=['n'],
+                           properties=dict(n=dict(type='string'))),
+                second=dict(type='object', additionalProperties=False, required=['n'],
+                            properties=dict(n=dict(type='string')))))
+        body = deepcopy(template)
+        body['required'].append('e')
+        body['properties']['e'] = edgeSchema
+        schema = Schemer(sed=body)
+        origin = acdcmap(israid=hab.pre, schema=schema.sed,
             attribute=dict(d="", value="origin"),
-            edge=dict(d="",
-                      first=dict(n=first.said),
-                      second=dict(n=second.said)),
-        )
+            edge=dict(d="", first=dict(n=first.said), second=dict(n=second.said)))
         order = [origin.said, first.said, second.said]
-        nodes = {node.said: dict(serder=node)
-                 for node in (origin, first, second)}
-        schema = origin.schema["$id"]
-        assert first.schema["$id"] == second.schema["$id"] == schema
+        nodes = {node.said: dict(serder=node) for node in (origin, first, second)}
+        schema = schema.said
+        farSchema = leafSchema.said
 
         handler = IpexHandler(resource="/ipex/grant", hby=hby,
                               notifier=Recorder())
         positional = [[schema, "", []],
-                      [schema, "", ["a/value"]],
-                      [schema, "", ["a/value"]]]
+                      [farSchema, "", ["a/value"]],
+                      [farSchema, "", ["a/value"]]]
         assert _validDisclosurePath(positional)
         assert handler._verifyDisclosurePlan(
             positional, origin.said, nodes, order)
@@ -4176,15 +4189,84 @@ def test_ipex_v2_disclosure_plan_supports_normative_bfs_forms():
         # Explicit prefixes identify their nodes, so a node from which nothing
         # is requested may be absent while the retained entries stay in BFS order.
         omitted = [[schema, "/", []],
-                   [schema, "/e/second/_/", ["a/value"]]]
+                   [farSchema, "/e/second/_/", ["a/value"]]]
         assert handler._verifyDisclosurePlan(
             omitted, origin.said, nodes, order)
 
         reversedPlan = [[schema, "/", []],
-                        [schema, "/e/second/_/", ["a/value"]],
-                        [schema, "/e/first/_/", ["a/value"]]]
+                        [farSchema, "/e/second/_/", ["a/value"]],
+                        [farSchema, "/e/first/_/", ["a/value"]]]
         assert not handler._verifyDisclosurePlan(
             reversedPlan, origin.said, nodes, order)
+
+        exc = Exchanger(hby=hby, handlers=[])
+        loadHandlers(hby, exc, Recorder())
+
+        def intake(near, far, plan, message):
+            exn, atc = ipexGrant(hab, hab.pre, message, origin=_signed(near, hab),
+                artifacts=[_signed(node, hab) for node in far], modifiers=dict(dp=plan))
+            raw = bytes(exn.raw + atc)
+            Parser(version=Vrsn_2_0, exc=exc).parse(ims=bytearray(raw))
+            assert bytes(exn.raw + atc) == raw
+            return exc.complete(exn.said)
+
+        assert intake(origin, (first, second), positional, 'fixed positional shape')
+        for optionalKind in ('edge', 'group', 'section', 'open-leaf', 'scoped-group'):
+            for present in (True, False):
+                if not present and optionalKind in ('section', 'open-leaf', 'scoped-group'):
+                    continue
+                optionalBody = deepcopy(body)
+                edges = deepcopy(origin.sad['e'])
+                far = (first, second) if present else (first,)
+                secondPrefix = '/e/second/_/'
+                if optionalKind == 'section':
+                    optionalBody['required'].remove('e')
+                elif optionalKind == 'open-leaf':
+                    optionalBody['properties']['e']['properties']['second'] = dict(type='object')
+                elif optionalKind == 'edge':
+                    optionalBody['properties']['e']['required'].remove('second')
+                    if not present:
+                        edges.pop('second')
+                else:
+                    groupSchema = dict(type='object', additionalProperties=False,
+                        required=['second'], properties=dict(second=edgeSchema['properties']['second']))
+                    optionalBody['properties']['e']['properties'].pop('second')
+                    optionalBody['properties']['e']['properties']['group'] = groupSchema
+                    optionalBody['properties']['e']['required'].remove('second')
+                    secondLeaf = edges.pop('second')
+                    if present:
+                        edges['group'] = dict(second=secondLeaf)
+                    secondPrefix = '/e/group/second/_/'
+                if optionalKind == 'scoped-group':
+                    local = deepcopy(groupSchema)
+                    local['required'] = []  # optional second, inside its own resource
+                    optionalBody['$defs'] = dict(group=groupSchema)
+                    scoped = deepcopy(optionalBody['properties']['e'])
+                    scoped.update({'$id': '', 'version': '1.0.0', '$defs': dict(group=local)})
+                    scoped['required'].append('group')
+                    scoped['properties']['group'] = {'$ref': '#/$defs/group'}
+                    optionalBody['properties']['e'] = Schemer(sed=scoped).sed
+                optionalSchema = Schemer(sed=optionalBody)
+                optional = acdcmap(israid=hab.pre, schema=optionalSchema.sed,
+                    attribute=dict(d='', value='optional'), edge=edges)
+                optionalOrder = [optional.said, *(node.said for node in far)]
+                optionalNodes = {node.said: dict(serder=node) for node in (optional, *far)}
+                optionalPlan = [[optionalSchema.said, '', []],
+                                *[[farSchema, '', ['a/value']] for _ in far]]
+                message = f'{optionalKind} present={present}'
+                assert not intake(optional, far, optionalPlan, message)
+                assert not handler._verifyDisclosurePlan(optionalPlan, optional.said,
+                    optionalNodes, optionalOrder)
+                explicit = [[optionalSchema.said, '', []],
+                            [farSchema, '/e/first/_/', ['a/value']]]
+                if present:
+                    explicit.append([farSchema, secondPrefix, ['a/value']])
+                assert intake(optional, far, explicit, f'explicit {message}')
+
+        # Empty origin is not a positional far selector; explicit omissions work.
+        omitted[0][1] = ""
+        assert handler._verifyDisclosurePlan(omitted, origin.said, nodes, order)
+        assert intake(origin, (first, second), omitted, 'empty origin explicit omission')
 
         historical = [positional]
         assert not _validDisclosurePath(historical)
