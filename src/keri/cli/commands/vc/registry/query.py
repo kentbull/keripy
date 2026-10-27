@@ -1,4 +1,4 @@
-"""Query an observer and independently verify its fresh public registry proof."""
+"""Query an observer and verify its exact registry proof without claiming freshness."""
 import argparse
 from ....common import Parsery, public_evidence
 

@@ -1,4 +1,9 @@
-"""Exercise the ACDC v2 IPEX CLI sender against actual sockets without wallet setup."""
+"""Exercise ACDC v2 IPEX CLI transport and exact registry synchronization."""
+from contextlib import contextmanager, nullcontext
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+from pathlib import Path
+from threading import Thread
 from types import SimpleNamespace
 
 import pytest
@@ -6,7 +11,15 @@ from hio.base import doing
 from hio.core import tcp
 
 from keri.cli.common.acdc_v2_ipex import ExchangeDoer
+from keri.cli.common import acdc_v2, acdc_v2_ipex, public_evidence
 from keri.kering import ConfigurationError
+from keri import Vrsn_2_0
+from keri.acdc import Registrar, acdcmap
+from keri.acdc.sectioning import SectionBaser
+from keri.app.credentialing import Wallet, WalletBaser
+from keri.app.evidencing import EvidenceContext
+from keri.core import Counter, Codens, Diger
+from tests.acdc.test_registraring import _anchor, _persistent_registry_owners
 
 
 class Sender(ExchangeDoer):
@@ -45,6 +58,134 @@ class Sender(ExchangeDoer):
         self.tock = tock
         yield tock
         self.result = yield from self.request(self.url, self.body)
+
+
+@contextmanager
+def registry_response(tmp_path, case, monkeypatch):
+    """Serve real signed registry evidence to the commands' ordinary processors."""
+    source, srgy = _persistent_registry_owners(tmp_path, 'sync-source')
+    target, rgy = _persistent_registry_owners(tmp_path, 'sync-target')
+    wallet = Wallet(target, rgy, db=WalletBaser(name=target.name, base=target.base,
+        headDirPath=str(tmp_path), temp=False))
+    sections = SectionBaser(name=target.name, base=target.base,
+        headDirPath=str(tmp_path), temp=False)
+    server = thread = None
+    try:
+        assert all(Path(owner.path).is_relative_to(tmp_path) for owner in (wallet.db, sections))
+        issuer = source.makeHab(name='issuer')
+        target.makeHab(name='actor')
+        registries = []
+        for name in ('requested', 'other'):
+            reg = srgy.makeRegistry(name, issuer.pre)
+            rip = _anchor(issuer, reg, srgy.store.event(reg.regk))
+            credential = acdcmap(israid=issuer.pre, regid=reg.regk,
+                                 attribute={'d': '', 'value': name})
+            _, first = Registrar(srgy).issue(reg, acdc=credential)
+            _anchor(issuer, reg, first)
+            _, newer = Registrar(srgy).issue(reg, acdc=credential, state='revoked')
+            _anchor(issuer, reg, newer)
+            registries.append((rip, first, newer))
+        requested, other = registries
+        foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+
+        def stream(events):
+            return bytes(issuer.replay(gvrsn=Vrsn_2_0)) + b''.join(event.raw + foot for event in events)
+
+        if case == 'stale-prefix':
+            result = EvidenceContext(target, reger=rgy.baser).ingest(stream(requested))
+            assert result['heads'][requested[0].said] == requested[2].said
+        selected = other if case == 'unrelated' else requested
+        body = stream(selected if case == 'matching' else selected[:2])
+        advertised = selected[2].said if case in ('matching', 'stale-prefix', 'mismatched-head') else selected[1].said
+
+        class Endpoint(BaseHTTPRequestHandler):
+            def do_POST(self):
+                self.rfile.read(int(self.headers['Content-Length']))
+                self.send_response(202 if case == 'wrong-status' else 200)
+                self.send_header('Content-Type', 'text/plain' if case == 'wrong-media' else 'application/cesr')
+                self.send_header('Observer-Evidence-State', 'fresh')
+                self.send_header('Observer-Registry-Head', advertised)
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Endpoint)
+        thread = Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
+        thread.start()
+        ingested = []
+        ordinary_ingest = EvidenceContext.ingest
+
+        def ingest(evidence, raw):
+            ingested.append(bytes(raw))
+            return ordinary_ingest(evidence, raw)
+
+        monkeypatch.setattr(EvidenceContext, 'ingest', ingest)
+        # Substitute only owner acquisition; transport and all acceptance processors are real.
+        monkeypatch.setattr(acdc_v2, 'opened', lambda *args, **kwa: nullcontext((target, rgy, wallet)))
+        monkeypatch.setattr(acdc_v2_ipex, 'openLMDB', lambda **kwa: nullcontext(sections))
+        yield SimpleNamespace(target=target, rgy=rgy, wallet=wallet, requested=requested,
+            body=body, ingested=ingested, issuer=issuer, url=f'http://127.0.0.1:{server.server_port}/')
+    finally:
+        if server is not None:
+            server.shutdown()
+            server.server_close()
+        if thread is not None:
+            thread.join(timeout=2)
+            assert not thread.is_alive()
+        sections.close()
+        wallet.close()
+        rgy.close()
+        target.close()
+        srgy.close()
+        source.close()
+
+
+@pytest.mark.parametrize('case', ['unrelated', 'stale-prefix', 'mismatched-head',
+                                  'wrong-media', 'wrong-status', 'matching'])
+def test_ipex_synchronization_requires_exact_requested_result(tmp_path, monkeypatch, capsys, case):
+    """A response must prove the requested operation before the real Apply is authored."""
+    with registry_response(tmp_path, case, monkeypatch) as fixture:
+        args = SimpleNamespace(name=fixture.target.name, base=fixture.target.base, bran=None,
+            alias='actor', timeout=2, input=None, registry=[fixture.requested[0].said],
+            observer=fixture.url, proposal=None, proposal_output=None, recipient=fixture.issuer.pre,
+            message='', time=None, plan=json.dumps([[Diger(ser=b'schema').qb64, '/', ['a/value']]]),
+            output=None, endpoint=None)
+        doer = ExchangeDoer(args, 'apply')
+        if case == 'matching':
+            doing.Doist(real=True, tock=0.01, limit=2).do(doers=[doer])
+            assert json.loads(capsys.readouterr().out)['accepted']
+            assert fixture.rgy.store.headEvent(args.registry[0]).said == fixture.requested[2].said
+        else:
+            with pytest.raises(ConfigurationError):
+                doing.Doist(real=True, tock=0.01, limit=2).do(doers=[doer])
+            assert list(fixture.target.db.exns.getTopItemIter()) == []
+        assert fixture.ingested == ([] if case in ('wrong-media', 'wrong-status') else [fixture.body])
+
+
+def test_public_query_old_exact_prefix_is_synchronized_without_freshness(tmp_path, monkeypatch, capsys):
+    """A fresh receiver can verify an old exact HTTP prefix without knowing a later head."""
+    with registry_response(tmp_path, 'old-exact-prefix', monkeypatch) as fixture:
+        output = tmp_path / 'verified.cesr'
+        args = SimpleNamespace(name=fixture.target.name, base=fixture.target.base, bran=None,
+            alias='actor', endpoint=fixture.url, timeout=2,
+            registry=fixture.requested[0].said, output=str(output))
+        assert fixture.rgy.store.headEvent(args.registry) is None
+        doing.Doist(real=True, tock=0.01, limit=2).do(doers=[public_evidence.Request(args, 'query')])
+        result = json.loads(capsys.readouterr().out)
+        assert result['accepted'] and result['head'] == fixture.requested[1].said
+        assert result['fresh'] is False
+        assert output.read_bytes() == fixture.body
+        assert fixture.ingested == [fixture.body]
+        regid, head = args.registry, result['head']
+    reopened, rgy = _persistent_registry_owners(tmp_path, 'sync-target')
+    try:
+        assert rgy.store.headEvent(regid).said == head
+    finally:
+        rgy.close()
+        reopened.close()
 
 
 def test_tcp_send_preserves_bytes_and_only_reports_transport():
