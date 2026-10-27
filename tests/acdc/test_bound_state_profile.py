@@ -3,6 +3,8 @@ import pytest
 
 from keri import Vrsn_2_0
 from keri.acdc import acdcmap
+from keri.acdc.edging import EdgeEvaluator
+from keri.acdc.proving import PresentedEvidence
 from keri.acdc.regeventing import vetBound
 from keri.app import openHby
 from keri.core import Blinder, BoundState, Diger, Kevery, Parser
@@ -383,10 +385,12 @@ def test_production_graph_bound_authority_uses_real_anchored_history(when, expec
             if when == 'partial':
                 # NOT must not turn an undisclosed historical state into proof.
                 handler = exc.routes['/ipex/grant']
+                evaluator = EdgeEvaluator(PresentedEvidence(hby, rgy),
+                    graphPolicy=handler.graphPolicy, sections=handler.sections)
                 parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(artifact), processive=False)[0]
                 nodes = {near.said: dict(serder=near, sscs=[(nearSource.s, nearSource.d)]),
                          far.said: parsed}
-                assert handler._evaluateLeafEdge(dict(n=far.said, o='NOT'),
+                assert evaluator._evaluateLeafEdge(dict(n=far.said, o='NOT'),
                     nodes=nodes, nserder=near) is None
         finally:
             rgy.close()

@@ -15,6 +15,8 @@ from keri.acdc import (IpexHandler, Regery, Registrar, acdcagg, acdcatt, acdcmap
                        loadHandlers, offer as ipexOffer, regcept,
                        spurn as ipexSpurn)
 from keri.acdc.ipexing import _validDisclosurePath
+from keri.acdc.edging import EdgeEvaluator
+from keri.acdc.proving import PresentedEvidence
 from keri.app import openCF, openHby
 from keri.core import (Aggor, Blinder, Codens, Compactor, Counter, Diger, GenDex,
                        Kevery, Kramer, Noncer, Number, Parser, Schemer, SealEvent,
@@ -2713,7 +2715,9 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
         assert_rejected("Here is the NOT-operator DAG",
                         notOrigin,
                         [notChild])
-        assert handler._evaluateLeafEdge(notOrigin.sad["e"]["holder"],
+        evaluator = EdgeEvaluator(PresentedEvidence(handler.hby, handler.rgy),
+            graphPolicy=handler.graphPolicy, sections=handler.sections)
+        assert evaluator._evaluateLeafEdge(notOrigin.sad["e"]["holder"],
                                          nodes={notChild.said: {"serder": notChild}},
                                          nserder=notOrigin,
                                          inheritedSchema=None) is False
@@ -2729,7 +2733,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
         assert_rejected("Here is the DI2I-operator DAG",
                         diOrigin,
                         [diChild])
-        assert handler._evaluateLeafEdge(diOrigin.sad["e"]["holder"],
+        assert evaluator._evaluateLeafEdge(diOrigin.sad["e"]["holder"],
                                          nodes={diChild.said: {"serder": diChild}},
                                          nserder=diOrigin,
                                          inheritedSchema=None) is False
