@@ -10,18 +10,19 @@ import falcon
 from hio.base import doing
 from hio.core import http
 
-from keri import Vrsn_2_0, Kinds
+from keri import Vrsn_1_0, Vrsn_2_0, Kinds
 from keri.acdc import ipexing
 from keri.acdc.regeventing import issuerRegistry
 from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import GroupHab, Notifier
 from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from keri.app.credential_disclosing import registryProof
-from keri.app.httping import CESR_CONTENT_TYPE
+from keri.app.httping import CESR_CONTENT_TYPE, CESR_ATTACHMENT_HEADER
 from keri.app.indirecting import createHttpServer
 from keri.app.evidencing import EvidenceContext, signedQuery, KEL_DEPENDENCIES
-from keri.core import Compactor, Diger, Number, Parser, SerderACDC, messagize
-from keri.kering import ConfigurationError, MissingChainError, MissingSchemaError
+from keri.core import Compactor, Counter, Diger, GenDex, Number, Parser, SerderACDC, Serdery, messagize
+from keri.kering import (ConfigurationError, ExtractionError, MissingChainError,
+                         MissingSchemaError, ValidationError)
 from keri.peer import exchanging
 from keri.db import openLMDB
 from keri.cli.common import acdc_v2, cesr_sending
@@ -79,6 +80,9 @@ class Peer:
         list of exchange SAIDs with their current core accepted flags. Incomplete
         framing raises ConfigurationError; other proof failures propagate. Neither
         intake nor acceptance records wallet consent or claims delivery."""
+        # Independent input streams retain the v2 default; their own GVCs may
+        # select another genus without changing the next request's default.
+        self.parser.version = Vrsn_2_0
         ims = bytearray(raw)
         grants = []
         while ims:
@@ -434,23 +438,50 @@ class ExchangeDoer(doing.DoDoer):
 
 
 class Intake:
-    """Expose raw CESR intake for a shared ACDC v2 peer without wallet consent."""
+    """Expose raw or detached-header CESR intake without changing signed bodies or granting consent."""
     def __init__(self, peer):
         """Retain the peer whose core processors own this endpoint's evidence.
 
         No separate parser, identity, or store is created by the HTTP adapter."""
         self.peer = peer
 
+    @staticmethod
+    def decode(raw, attachment, genus):
+        """Reattach exact header bytes with their declared or body-metadata genus.
+
+        Header form requires one bare serialized body. Full streams retain
+        their original bytes and the peer's v2 default; their explicit GVCs
+        remain authoritative within the stream. No JSON is reserialized."""
+        if attachment is None and genus is None:
+            return raw
+        first = None
+        if attachment is not None:
+            remaining = bytearray(raw)
+            first = Serdery().reap(ims=remaining, genus=GenDex.KERI, svrsn=Vrsn_2_0)
+            if remaining:
+                raise ValidationError('attachment-header body must contain exactly one message')
+            raw += attachment.encode('ascii')
+        selected = genus if genus is not None else str((first.gvrsn or first.pvrsn).major)
+        if selected not in ('1', '2'):
+            raise ValidationError('CESR-Genus must be 1 or 2')
+        return Counter.makeGVC(Vrsn_1_0 if selected == '1' else Vrsn_2_0) + raw
+
     def on_post(self, req, rep):
         """Dispatch the request's bounded CESR bytes and return intake status 202.
 
         req and rep are Falcon request/response objects. Require application/cesr
-        or raise HTTPUnsupportedMediaType; framing/proof errors propagate through
-        the framework. The JSON lists core exchange acceptance, not wallet consent
+        or raise HTTPUnsupportedMediaType; malformed detached-header framing
+        raises HTTPBadRequest and core proof errors propagate through the
+        framework. The JSON lists core exchange acceptance, not wallet consent
         or recipient delivery, and this adapter records no admission itself."""
         if (req.content_type or '').split(';')[0] != CESR_CONTENT_TYPE:
             raise falcon.HTTPUnsupportedMediaType()
-        rep.media = self.peer.ingest(req.bounded_stream.read())
+        try:
+            raw = self.decode(req.bounded_stream.read(), req.get_header(CESR_ATTACHMENT_HEADER),
+                              req.get_header('CESR-Genus'))
+        except (ExtractionError, ValidationError, ValueError) as error:
+            raise falcon.HTTPBadRequest(description=str(error)) from error
+        rep.media = self.peer.ingest(raw)
         rep.status = falcon.HTTP_202
 
     # StreamPoster uses PUT at the recipient endpoint root. Both methods enter

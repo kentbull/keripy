@@ -498,7 +498,7 @@ def test_http_preserves_query_and_does_not_hide_refusal(status):
         assert not thread.is_alive()
 
 
-def test_http_intake_accepts_streamposter_put_without_changing_verification():
+def test_http_intake_accepts_streamposter_put_without_changing_verification(tmp_path):
     """POST and StreamPoster PUT pass exact bytes to the same ACDC v2 IPEX peer."""
     import falcon
     from falcon import testing
@@ -524,3 +524,66 @@ def test_http_intake_accepts_streamposter_put_without_changing_verification():
                                            headers={'Content-Type': 'application/cesr'})
         assert response.status_code == 202 and response.json == {'accepted': []}
     assert peer.messages == [b'cesr-frame', b'cesr-frame']
+
+    from keri import Vrsn_1_0
+    from keri.acdc import ipexing
+    from keri.core import Schemer
+
+    source, srgy = _persistent_registry_owners(tmp_path, 'http-source')
+    target, rgy = _persistent_registry_owners(tmp_path, 'http-target')
+    wallet = Wallet(target, rgy, db=WalletBaser(name=target.name, base=target.base,
+        headDirPath=str(tmp_path), temp=False))
+    sections = SectionBaser(name=target.name, base=target.base,
+        headDirPath=str(tmp_path), temp=False)
+    try:
+        assert all(Path(owner.path).is_relative_to(tmp_path) for owner in (wallet.db, sections))
+        sender = source.makeHab(name='sender', version=Vrsn_1_0)
+        recipient = target.makeHab(name='recipient')
+        actual = acdc_v2_ipex.Peer(target, rgy, wallet, sections)
+        app = falcon.App()
+        app.add_route('/', Intake(actual))
+        transport = testing.TestClient(app)
+        body = sender.kever.serder.raw
+        replay = bytes(sender.replay(gvrsn=Vrsn_2_0))
+        assert replay.startswith(body)
+        response = transport.simulate_post('/', body=body, headers={
+            'Content-Type': 'application/cesr', 'CESR-Genus': '2',
+            'CESR-ATTACHMENT': replay[len(body):].decode('ascii')})
+        assert response.status_code == 202, response.text
+        assert target.kevers[sender.pre].serder.raw == body
+
+        schema = Schemer(sed={'$id': '', 'version': '1.0.0', 'type': 'object'})
+        apply, attachment = ipexing.apply(sender, recipient.pre, 'detached proof',
+            modifiers={'dp': [[schema.said, '/', []]]}, gvrsn=Vrsn_2_0)
+        response = transport.simulate_put('/', body=apply.raw, headers={
+            'Content-Type': 'application/cesr',
+            'CESR-ATTACHMENT': bytes(attachment).decode('ascii')})
+        assert response.status_code == 202, response.text
+        assert actual.exc.complete(apply.said)
+        assert target.db.exns.get((apply.said,)).raw == apply.raw
+        genus_one = bytes(sender.replay(gvrsn=Vrsn_1_0))
+        response = transport.simulate_post('/', body=body, headers={
+            'Content-Type': 'application/cesr', 'CESR-Genus': '1',
+            'CESR-ATTACHMENT': genus_one[len(body):].decode('ascii')})
+        assert response.status_code == 202, response.text
+        streamed, foot = ipexing.apply(sender, recipient.pre, 'raw stream after genus one',
+            modifiers={'dp': [[schema.said, '/', []]]}, gvrsn=Vrsn_2_0)
+        response = transport.simulate_put('/', body=streamed.raw + bytes(foot),
+            headers={'Content-Type': 'application/cesr'})
+        assert response.status_code == 202, response.text
+        assert actual.exc.complete(streamed.said)
+        assert target.db.exns.get((streamed.said,)).raw == streamed.raw
+        assert wallet.inventory() == {'issued': [], 'held': []}
+
+        for headers, raw in (({'CESR-Genus': '3'}, apply.raw),
+                             ({'CESR-ATTACHMENT': ''}, apply.raw + apply.raw)):
+            response = transport.simulate_post('/', body=raw,
+                headers={'Content-Type': 'application/cesr', **headers})
+            assert response.status_code == 400
+    finally:
+        sections.close()
+        wallet.close()
+        rgy.close()
+        target.close()
+        srgy.close()
+        source.close()
