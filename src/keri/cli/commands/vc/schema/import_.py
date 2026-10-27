@@ -26,6 +26,8 @@ parser.add_argument('--base', '-b', help='additional optional prefix to file loc
 parser.add_argument('--passcode', '-p', help='21 character encryption passcode for keystore (is not saved)',
                     dest="bran", default=getenv("KLI_KEYSTORE_PASSCODE"))  # passcode => bran
 parser.add_argument('--schema', '-s', help='path to ACDC JSON schema file to import', required=True)
+parser.add_argument('--no-prompt', action='store_true', dest='noPrompt',
+                    help='Disable interactive passcode prompts')
 
 
 def import_schema(args):
@@ -35,17 +37,19 @@ def import_schema(args):
     idoer = ImportDoer(name=args.name,
                        base=args.base,
                        bran=args.bran,
-                       schema=args.schema)
+                       schema=args.schema,
+                       noPrompt=args.noPrompt)
     return [idoer]
 
 
 class ImportDoer(doing.DoDoer):
 
-    def __init__(self, name, base, bran, schema):
+    def __init__(self, name, base, bran, schema, noPrompt=False):
         """Open existing schema inventory without changing Keeper encryption.
 
         name/base select the existing environment, bran authenticates an already
-        encrypted Keeper, and schema names a JSON file. Return None. Missing
+        encrypted Keeper, schema names a JSON file, and noPrompt disables
+        interactive passcode retries when explicitly requested. Return None. Missing
         Keeper or authentication errors propagate; a supplied environment passcode
         never migrates an unencrypted identity as a side effect of schema import.
         """
@@ -57,7 +61,8 @@ class ImportDoer(doing.DoDoer):
                 raise ConfigurationError('schema import requires an existing Keeper')
         finally:
             keeper.close()
-        self.hby = setupHby(name=name, base=base, bran=bran if aeid else None)
+        self.hby = setupHby(name=name, base=base, bran=bran if aeid else None,
+                            noPrompt=noPrompt)
 
         doers = [doing.doify(self.importDo)]
 
