@@ -35,7 +35,7 @@ parser.add_argument("--full", help="export credential, signatures, tels, kels an
 parser.add_argument("--files", help="export artifacts to individual files keyed off of AIDs or SAIDS, default is "
                                     "stdout", action="store_true")
 acdc_v2.options(parser)
-parser.add_argument('--custody', action='store_true', help='export a plaintext per-registry salt file with owner-only permissions; arrange authenticated private transfer separately')
+parser.add_argument('--custody', action='store_true', help='export a POSIX-only plaintext per-registry salt file with owner-only permissions; arrange authenticated private transfer separately')
 parser.add_argument('--derive', action='store_true', help='with --acdc-v2 --full, explicitly derive a missing historical issuance opening from provisioned custody')
 parser.add_argument('--opening', help='with --acdc-v2 --full, use one event-specific CESR opening file without loading registry salts')
 parser.add_argument('--registry-name', '-r', default=None)

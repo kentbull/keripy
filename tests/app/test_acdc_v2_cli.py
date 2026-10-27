@@ -64,36 +64,55 @@ def invoke(name, *args):
     return [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
 
 
-def test_acdc_v2_cli_authoring_reopen_and_private_export(tmp_path):
-    """Reopen installed ACDC v2 authoring, verify actual public/private exports, and retain exact old issuance after revocation or custody-row loss.
-
-    Parameters:
-        tmp_path: Pytest-owned exclusive credential, public proof, private custody, and bound-evidence files.
-
-    Returns:
-        None. Assertions check the stated evidence boundary."""
+def _issued_cli_case(registry_name, data):
+    """Create one real encrypted issuer, registry and accepted CLI issuance."""
     name = 'acdc-v2-' + uuid.uuid4().hex
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         issuer = hby.makeHab(name='issuer', version=Vrsn_2_0)
         prefix = issuer.pre
 
-    created = invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer', '-r', 'authority')[0]
+    created = invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody', '-a', 'issuer', '-r', registry_name)[0]
     assert created['accepted'] is True
     assert created['controller'] == prefix
     regid = created['registry']
-    status = invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]
+    status = invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', registry_name)[0]
     assert status['sn'] == 0
     assert status['head'] == regid
     assert invoke(name, 'vc', 'registry', 'list', '--acdc-v2')[0]['registry'] == regid
 
-    issued = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
-                    '--data', '{"name":"Alice"}')[0]
+    issued = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', registry_name,
+                    '--data', data)[0]
     assert issued['accepted'] is True
     assert issued['state'] == 'issued'
     credential = issued['credential']
     assert invoke(name, 'vc', 'list', '--acdc-v2', '--issued', '-a', 'issuer')[0]['credential'] == credential
 
+    return SimpleNamespace(name=name, prefix=prefix, regid=regid, issued=issued,
+                           credential=credential)
+
+
+def _revoke_and_retry_cli(case, public):
+    """Revoke and retry the exact issuance through independently reopened CLI calls."""
+    name, credential = case.name, case.credential
+    revoked = invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'authority', '--said', credential)[0]
+    assert revoked['accepted'] is True
+    assert revoked['state'] == 'revoked'
+    assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
+    # Retrying each command does not reissue, rotate a secret, or append a new event.
+    repeated = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
+                      '--credential', '@' + str(public))[0]
+    assert repeated['credential'] == credential
+    assert repeated['state'] == 'unknown'  # retained issuance is not current blinded standing
+    assert invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
+                  '--said', credential)[0]['update'] == revoked['update']
+    assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
+
+
+def test_acdc_v2_cli_authoring_reopen_and_public_export(tmp_path):
+    """Retain public/full evidence and historical retries without plaintext handoff."""
+    case = _issued_cli_case('authority', '{"name":"Alice"}')
+    name, regid, credential, issued = case.name, case.regid, case.credential, case.issued
     public = tmp_path / 'credential.json'
     invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
            '--said', credential, '--output', str(public))
@@ -109,28 +128,7 @@ def test_acdc_v2_cli_authoring_reopen_and_private_export(tmp_path):
     assert [item.sscs[0][0].num for item in tels] == [1, 2]
     assert parsed[-1].serder.said == credential
     assert parsed[-1].bsqs[0][2].qb64 == credential
-    private = tmp_path / 'custody.json'
-    output = invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
-                    '--custody', '--output', str(private))[0]
-    assert 'salt' not in output
-    assert private.stat().st_mode & 0o777 == 0o600
-    custody = private.read_bytes()
-    invoke(name, 'vc', 'import', '--acdc-v2', '--custody', '--registry', regid,
-           '--controller', prefix, '--discloser', prefix, '--file', str(private), '--passcode', PASSCODE)
-
-    revoked = invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'authority', '--said', credential)[0]
-    assert revoked['accepted'] is True
-    assert revoked['state'] == 'revoked'
-    assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
-    # Retrying each command does not reissue, rotate a secret, or append a new event.
-    repeated = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
-                      '--credential', '@' + str(public))[0]
-    assert repeated['credential'] == credential
-    assert repeated['state'] == 'unknown'  # retained issuance is not current blinded standing
-    assert invoke(name, 'vc', 'revoke', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
-                  '--said', credential)[0]['update'] == revoked['update']
-    assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
-    assert private.read_bytes() == custody
+    _revoke_and_retry_cli(case, public)
     # Simulate loss of this test registry's custody row. Historical issuance
     # retry must neither regenerate a salt nor try to derive current standing.
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
@@ -147,6 +145,27 @@ def test_acdc_v2_cli_authoring_reopen_and_private_export(tmp_path):
     assert retained['update'] == issued['update']
     assert retained['state'] == 'unknown'
     assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
+def test_cli_protected_custody_round_trip_preserves_export(tmp_path):
+    """Round-trip one protected salt file and retain it across actual authoring retries."""
+    case = _issued_cli_case('authority', '{"name":"Alice"}')
+    name, prefix, regid = case.name, case.prefix, case.regid
+    public = tmp_path / 'credential.json'
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
+           '--said', case.credential, '--output', str(public))
+    private = tmp_path / 'custody.json'
+    output = invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
+                    '--custody', '--output', str(private))[0]
+    assert 'salt' not in output
+    assert private.stat().st_mode & 0o777 == 0o600
+    custody = private.read_bytes()
+    invoke(name, 'vc', 'import', '--acdc-v2', '--custody', '--registry', regid,
+           '--controller', prefix, '--discloser', prefix, '--file', str(private), '--passcode', PASSCODE)
+
+    _revoke_and_retry_cli(case, public)
+    assert private.read_bytes() == custody
 
 
 def test_acdc_v2_option_is_explicit_and_v1_remains_default():
@@ -614,23 +633,12 @@ def test_acdc_v2_cli_bound_issue_revoke_and_historical_retry(tmp_path):
         [field.qb64 for field in proof] for proof in parsed[-1].bsss]
 
 
-def test_full_export_requires_explicit_verified_opening(tmp_path):
-    """Reject wrong supplied/derived proofs before output; valid held proof ignores custody.
-
-    tmp_path owns the exclusive artifacts. A deliberately replaced test salt is
-    structurally valid and correctly encrypted, but cannot open the old issuance.
-    This exercises real installed commands and core vet, not mocked verification.
-    """
+def _full_export_cli_case(tmp_path):
+    """Obtain a real issuance opening and exercise missing/wrong proof refusal."""
     from keri.core import Blinder, Salter
 
-    name = 'export-proof-' + uuid.uuid4().hex
-    with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
-                 version=Vrsn_2_0) as hby:
-        prefix = hby.makeHab(name='issuer', version=Vrsn_2_0).pre
-    regid = invoke(name, 'vc', 'registry', 'incept', '--acdc-v2', '--with-custody',
-                   '-a', 'issuer', '-r', 'r')[0]['registry']
-    said = invoke(name, 'vc', 'create', '--acdc-v2', '-a', 'issuer', '-r', 'r',
-                  '--data', '{"status":"valid"}')[0]['credential']
+    case = _issued_cli_case('r', '{"status":"valid"}')
+    name, said = case.name, case.credential
     full = ['vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r', '-s', said, '--full']
     missing = tmp_path / 'missing.cesr'
     refusal = command(name, *full, '--output', str(missing))
@@ -647,29 +655,14 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
     assert refusal.returncode != 0
     assert not wrong.exists()
 
-    # Import a well-formed wrong salt after explicitly losing only this test's
-    # row. Possession, encryption and bindings cannot replace event verification.
-    private = tmp_path / 'salt.json'
-    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
-           '--custody', '--output', str(private))
-    payload = json.loads(private.read_text())
-    payload['salt'] = Salter().qb64
-    private.write_text(json.dumps(payload))
-    with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
-                 version=Vrsn_2_0) as hby:
-        rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
-        try:
-            assert wallet.db.custody.rem((regid,))
-        finally:
-            wallet.close()
-            rgy.close()
-    invoke(name, 'vc', 'import', '--acdc-v2', '--custody', '--file', str(private),
-           '--registry', regid, '--controller', prefix, '--discloser', prefix)
-    wrongSalt = tmp_path / 'wrong-salt.cesr'
-    refusal = command(name, *full, '--derive', '--output', str(wrongSalt))
-    assert refusal.returncode != 0
-    assert not wrongSalt.exists()
+    case.full, case.valid = full, valid
+    return case
+
+
+def test_full_export_requires_explicit_verified_opening(tmp_path):
+    """A held verified opening works despite corrupt custody; exports stay exclusive."""
+    case = _full_export_cli_case(tmp_path)
+    name, regid, said, full, valid = case.name, case.regid, case.credential, case.full, case.valid
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
@@ -694,6 +687,38 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
     original = supplied.read_bytes()
     assert command(name, *full, '--opening', str(valid), '--output', str(supplied)).returncode != 0
     assert supplied.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
+def test_full_export_rejects_wrong_salt_after_protected_handoff(tmp_path):
+    """Importing an authenticated, bound but wrong salt cannot replace event proof."""
+    from keri.core import Salter
+
+    case = _full_export_cli_case(tmp_path)
+    name, regid, prefix, full = case.name, case.regid, case.prefix, case.full
+    # Import a well-formed wrong salt after explicitly losing only this test's
+    # row. Possession, encryption and bindings cannot replace event verification.
+    private = tmp_path / 'salt.json'
+    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
+           '--custody', '--output', str(private))
+    payload = json.loads(private.read_text())
+    payload['salt'] = Salter().qb64
+    private.write_text(json.dumps(payload))
+    with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
+                 version=Vrsn_2_0) as hby:
+        rgy = Regery(hby=hby, name=name, base=hby.base)
+        wallet = Wallet(hby, rgy)
+        try:
+            assert wallet.db.custody.rem((regid,))
+        finally:
+            wallet.close()
+            rgy.close()
+    invoke(name, 'vc', 'import', '--acdc-v2', '--custody', '--file', str(private),
+           '--registry', regid, '--controller', prefix, '--discloser', prefix)
+    wrongSalt = tmp_path / 'wrong-salt.cesr'
+    refusal = command(name, *full, '--derive', '--output', str(wrongSalt))
+    assert refusal.returncode != 0
+    assert not wrongSalt.exists()
 
 
 @pytest.mark.parametrize('tokens, message', [

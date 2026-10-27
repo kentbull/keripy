@@ -3,6 +3,7 @@ from dataclasses import asdict
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -98,18 +99,9 @@ def anchored(hab, registry, event):
     assert registry.anchorMsg(event.said)
 
 
-def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_path, capsys):
-    """Reopen encrypted custody, reproduce future openings, enforce protected export/import, and recover AEID mismatch only by explicit rewrap.
-
-    Parameters:
-        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
-        capsys: Pytest output capture used to prove exported salt is absent from logs.
-
-    Returns:
-        None. Assertions check the stated evidence boundary."""
+def _custody_issuance_case(tmp_path):
+    """Create encrypted custody and authentic issuer/holder KEL/TEL state without handoff."""
     issuerKey, holderKey = Signer(transferable=False), Signer(transferable=False)
-    export = tmp_path / 'private-custody.json'
-    issuerInfo = holderInfo = None
     with (encrypted('custody-issuer', tmp_path, issuerKey) as issuer,
           encrypted('custody-holder', tmp_path, holderKey) as holder):
         ihab, hhab = issuer.makeHab(name='issuer'), holder.makeHab(name='holder')
@@ -133,9 +125,7 @@ def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_
             registry.processEvent(update)
             anchored(ihab, registry, update)
             assert iwallet.recordIssued(acdc, update.said, blinder=opening).credential == acdc.said
-            assert iwallet.custody.exportCustody(registry.regk, export) == export
-            assert export.stat().st_mode & 0o777 == 0o600
-            salt = json.loads(export.read_text())['salt']
+            salt = iwallet.custody._load(registry.regk).salt
             retained = iwallet.db.custody.get((registry.regk,))
             assert retained.aeid == issuer.mgr.aeid and salt not in retained.cipher
             assert salt.encode() not in Path(iwallet.db.path, 'data.mdb').read_bytes()
@@ -144,20 +134,84 @@ def test_encrypted_custody_export_import_and_future_derivation_after_reopen(tmp_
             receiver = Rever(db=holder.db, reger=hrgy.baser)
             assert receiver.processEvent(rip)
             assert receiver.processEvent(update)
-            holderInfo = hwallet.custody.importCustody(export, regid=registry.regk,
-                                               controller=ihab.pre, discloser=hhab.pre)
-            assert holderInfo == issuerInfo
-            assert hwallet.custody.derive(registry.regk, 1, acdc.said, 'issued').qb64 == opening.qb64
             future = iwallet.custody.derive(registry.regk, 17, acdc.said, 'revoked').qb64
-            assert hwallet.custody.derive(registry.regk, 17, acdc.said, 'revoked').qb64 == future
-            issuerReplacement = Signer(transferable=False)
-            issuer.mgr.updateAeid(issuerReplacement.verfer.qb64, issuerReplacement.qb64)
-            assert iwallet.custody.importCustody(export, regid=registry.regk, controller=ihab.pre,
-                                         discloser=hhab.pre, rewrap=True) == issuerInfo
-            assert iwallet.custody.derive(registry.regk, 17, acdc.said, 'revoked').qb64 == future
             assert all(salt.encode() not in Path(baser.path, 'data.mdb').read_bytes()
                        for baser in (irgy.baser, hrgy.baser))
             regid, controller, discloser, credential = registry.regk, ihab.pre, hhab.pre, acdc.said
+        finally:
+            iwallet.close()
+            hwallet.close()
+            irgy.close()
+            hrgy.close()
+    return SimpleNamespace(issuerKey=issuerKey, holderKey=holderKey, issuerInfo=issuerInfo,
+                           regid=regid, controller=controller, discloser=discloser,
+                           credential=credential, update=update, opening=opening,
+                           future=future, salt=salt)
+
+
+def test_encrypted_custody_future_derivation_after_reopen(tmp_path, capsys):
+    """Encrypted derivation, real receiver history and AEID refusal need no file handoff."""
+    case = _custody_issuance_case(tmp_path)
+    with (encrypted('custody-issuer', tmp_path, case.issuerKey) as issuer,
+          encrypted('custody-holder', tmp_path, case.holderKey) as holder):
+        irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
+        iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
+        hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        iwallet.custody = RegistryCustody(issuer, irgy, db=iwallet.db)
+        hwallet.custody = RegistryCustody(holder, hrgy, db=hwallet.db)
+        try:
+            assert holder.habByPre(case.discloser)
+            assert hrgy.store.head(case.regid).qb64 == case.update.said
+            assert iwallet.custody.derive(case.regid, 1, case.credential, 'issued').qb64 == case.opening.qb64
+            assert iwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64 == case.future
+            with pytest.raises(ConfigurationError, match='custody is not provisioned'):
+                hwallet.custody.derive(case.regid, 17, case.credential, 'revoked')
+            replacement = Signer(transferable=False)
+            issuer.mgr.updateAeid(replacement.verfer.qb64, replacement.qb64)
+            with pytest.raises(AuthError, match='AEID changed'):
+                iwallet.custody.derive(case.regid, 18, case.credential, 'revoked')
+        finally:
+            iwallet.close()
+            hwallet.close()
+            irgy.close()
+            hrgy.close()
+    captured = capsys.readouterr()
+    assert case.salt not in captured.out + captured.err
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
+def test_protected_custody_handoff_and_explicit_rewrap_after_reopen(tmp_path, capsys):
+    """Enforce protected transfer, imported derivation continuity and explicit old-AEID rewrap."""
+    case = _custody_issuance_case(tmp_path)
+    issuerKey, holderKey, issuerInfo = case.issuerKey, case.holderKey, case.issuerInfo
+    opening, update = case.opening, case.update
+    export = tmp_path / 'private-custody.json'
+    with (encrypted('custody-issuer', tmp_path, issuerKey) as issuer,
+          encrypted('custody-holder', tmp_path, holderKey) as holder):
+        ihab, hhab = issuer.habByPre(case.controller), holder.habByPre(case.discloser)
+        irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
+        iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
+        hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        iwallet.custody = RegistryCustody(issuer, irgy, db=iwallet.db)
+        hwallet.custody = RegistryCustody(holder, hrgy, db=hwallet.db)
+        try:
+            assert iwallet.custody.exportCustody(case.regid, export) == export
+            assert export.stat().st_mode & 0o777 == 0o600
+            salt = json.loads(export.read_text())['salt']
+            holderInfo = hwallet.custody.importCustody(export, regid=case.regid,
+                                               controller=ihab.pre, discloser=hhab.pre)
+            assert holderInfo == issuerInfo
+            assert hwallet.custody.derive(case.regid, 1, case.credential, 'issued').qb64 == opening.qb64
+            future = iwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64
+            assert hwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64 == future
+            issuerReplacement = Signer(transferable=False)
+            issuer.mgr.updateAeid(issuerReplacement.verfer.qb64, issuerReplacement.qb64)
+            assert iwallet.custody.importCustody(export, regid=case.regid, controller=ihab.pre,
+                                         discloser=hhab.pre, rewrap=True) == issuerInfo
+            assert iwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64 == future
+            assert all(salt.encode() not in Path(baser.path, 'data.mdb').read_bytes()
+                       for baser in (irgy.baser, hrgy.baser))
+            regid, controller, discloser, credential = case.regid, ihab.pre, hhab.pre, case.credential
         finally:
             iwallet.close()
             hwallet.close()

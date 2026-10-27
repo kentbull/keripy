@@ -4,6 +4,9 @@ import os
 import subprocess
 import sys
 import uuid
+from types import SimpleNamespace
+
+import pytest
 
 from keri import Vrsn_2_0
 from keri.app import openHby
@@ -37,14 +40,8 @@ def invoke(name, *args):
     return [json.loads(line) for line in result.stdout.splitlines() if line.startswith('{')]
 
 
-def test_acdc_v2_cli_full_negotiation_and_holder_presentation(tmp_path):
-    """Negotiate/admit with real CLI processes, present retained proof without salt, and separately refresh by supplied opening and explicit provisioned derivation.
-
-    Parameters:
-        tmp_path: Pytest-owned exclusive KEL/proposal/credential/opening files transferred between installed processes.
-
-    Returns:
-        None. Assertions check the stated evidence boundary."""
+def _negotiated_cli_case(tmp_path):
+    """Negotiate/admit with three real CLI actors and retain a genuinely newer TEL head."""
     names, prefixes = {}, {}
     for role in ('issuer', 'holder', 'verifier'):
         name = names[role] = role + '-' + uuid.uuid4().hex
@@ -111,9 +108,8 @@ def test_acdc_v2_cli_full_negotiation_and_holder_presentation(tmp_path):
     incoming.write_bytes(evidence.read_bytes() + presentation.read_bytes())
     assert invoke(names['verifier'], 'ipex', 'admit', '--acdc-v2', '-a', 'verifier',
         '-s', presented['exchange'], '--input', str(incoming))[0]['admitted'] is True
-    # Author a genuine state-preserving update, then provision the designated
-    # holder and let a new CLI process derive the fresh opening. The admitted
-    # credential view and original grant are unchanged.
+    # Author a genuine state-preserving update without changing the admitted
+    # credential view or original grant. Each test supplies its own opening capability.
     from keri.acdc import Regery
     from keri.acdc.messaging import blindate
     from keri.app.credentialing import Wallet
@@ -133,9 +129,17 @@ def test_acdc_v2_cli_full_negotiation_and_holder_presentation(tmp_path):
             wallet.close()
             rgy.close()
     refreshed = tmp_path / 'refreshed.cesr'
-    private = tmp_path / 'custody.json'
     invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
         '--said', said, '--kels', '--tels', '--output', str(refreshed))
+    return SimpleNamespace(names=names, prefixes=prefixes, said=said, grant=grant,
+                           presented=presented, regid=reg.regk, opening=opening,
+                           refreshed=refreshed, incoming=incoming)
+
+
+def _present_with_supplied_opening(case, tmp_path):
+    """Refresh and independently admit one presentation using a supplied event opening."""
+    names, prefixes, said, grant = case.names, case.prefixes, case.said, case.grant
+    opening, refreshed, incoming = case.opening, case.refreshed, case.incoming
     # A supplied event opening is a narrower capability than a derivation salt.
     # The holder can refresh and present it before any custody is imported.
     specific = tmp_path / 'event-opening.cesr'
@@ -148,9 +152,25 @@ def test_acdc_v2_cli_full_negotiation_and_holder_presentation(tmp_path):
     incoming.write_bytes(refreshed.read_bytes() + suppliedPresentation.read_bytes())
     assert invoke(names['verifier'], 'ipex', 'admit', '--acdc-v2', '-a', 'verifier',
         '-s', supplied['exchange'], '--input', str(incoming))[0]['admitted'] is True
+
+
+def test_acdc_v2_cli_full_negotiation_and_holder_presentation(tmp_path):
+    """Retained and refreshed supplied-opening presentations need no salt transfer."""
+    case = _negotiated_cli_case(tmp_path)
+    _present_with_supplied_opening(case, tmp_path)
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
+def test_cli_holder_refresh_derives_after_protected_custody_handoff(tmp_path):
+    """A designated holder imports protected custody before fresh derived presentation."""
+    case = _negotiated_cli_case(tmp_path)
+    _present_with_supplied_opening(case, tmp_path)
+    names, prefixes, said, grant = case.names, case.prefixes, case.said, case.grant
+    presented, refreshed, incoming = case.presented, case.refreshed, case.incoming
+    private = tmp_path / 'custody.json'
     invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
         '--custody', '--output', str(private))
-    invoke(names['holder'], 'vc', 'import', '--acdc-v2', '--custody', '--registry', reg.regk,
+    invoke(names['holder'], 'vc', 'import', '--acdc-v2', '--custody', '--registry', case.regid,
         '--controller', prefixes['issuer'], '--discloser', prefixes['holder'],
         '--file', str(private), '--passcode', PASSCODE)
     fresh = tmp_path / 'fresh-presentation.cesr'
