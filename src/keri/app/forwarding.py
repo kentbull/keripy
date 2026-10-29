@@ -6,7 +6,6 @@ keri.app.forwarding module
 module for enveloping and forwarding KERI message
 """
 import random
-import pysodium
 from ordered_set import OrderedSet as oset
 
 from hio.base import doing
@@ -15,9 +14,9 @@ from hio.help import decking, ogler
 from ..kering import (Roles, Vrsn_1_0, Version, Kinds,
                       ConfigurationError, ValidationError)
 from .agenting import messengerFrom, streamMessengerFrom
-from ..core import (Bexter, Prefixer, Verfer, Texter, Diger,
-                    Counter, SerderKERI, Parser, exchange,
-                    MtrDex, Codens, NonTransDex)
+from .essring import envelope
+from ..core import (Bexter, Prefixer, Verfer, Diger,
+                    SerderKERI, Parser, exchange, NonTransDex)
 from ..db import dgKey
 from ..peer import specialExchange
 from ..peer.exchanging import serializeParsedSubstream
@@ -413,22 +412,7 @@ class StreamPoster:
             rkever = self.hby.kevers[ctrl]
             verfer = rkever.verfers[0]
 
-        pubkey = pysodium.crypto_sign_pk_to_box_pk(verfer.raw)
-        raw = pysodium.crypto_box_seal(bytes(msg), pubkey)
-
-        texter = Texter(raw=raw)
-        diger = Diger(ser=raw, code=MtrDex.Blake3_256)
-        essr, _ = specialExchange(sender=hab.pre,
-                                  route='/essr/req',
-                                  modifiers=dict(src=hab.pre, dest=ctrl),
-                                  diger=diger,
-                                  version=Vrsn_1_0, kind=self.kind)
-        ims = hab.endorse(serder=essr, framed=True, gvrsn=self.version)
-        ims.extend(Counter(Codens.ESSRPayloadGroup,
-                           count=1 if self.version.major < 2 else len(texter.qb64b) // 4,
-                           gvrsn=self.version).qb64b)
-        ims.extend(texter.qb64b)
-        return ims
+        return envelope(hab, msg, ctrl, verfer, version=self.version, kind=self.kind)
 
     def createForward(self, hab, ends, serder, atc, topic, *, gvrsn=None):
         """Wrap a child with input attachment genus gvrsn in this poster's version."""
