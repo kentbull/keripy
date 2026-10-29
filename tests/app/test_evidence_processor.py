@@ -80,6 +80,8 @@ def test_public_bup_opening_survives_pending_order_restart_and_exact_clone(tmp_p
             assert first.registries() == []
         finally:
             first.close()
+            assert baser.opened
+            baser.close()
 
         baser.reopen()
         second = EvidenceContext(target, reger=baser)
@@ -102,6 +104,8 @@ def test_public_bup_opening_survives_pending_order_restart_and_exact_clone(tmp_p
             assert Blinder(data=BlindState(*registryFrames[1].bsqs[0])).qb64 == opening.qb64
         finally:
             second.close()
+            assert baser.opened
+            baser.close()
 
 
 def test_private_bup_remains_acceptable_without_public_opening():
@@ -127,6 +131,8 @@ def test_private_bup_remains_acceptable_without_public_opening():
             assert parsed[-1].bsqs == []
         finally:
             ctx.close()
+            assert not ctx.reger.opened
+            assert target.db.opened
 
 
 def test_clone_never_leaks_pending_rival_opening():

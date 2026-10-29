@@ -83,7 +83,8 @@ class EvidenceContext(doing.DoDoer):
 
             Args:
                 hby: Caller-owned Habery containing authenticated KEL and KRAM persistence.
-                reger (RegBaser | None): Registry store, closed by this context's close().
+                reger (RegBaser | None): Borrowed registry store; when omitted, this
+                    context opens and owns its store.
                 config (dict | None): Enabled KRAM settings accepted by ServiceConfig.
 
             Returns:
@@ -100,6 +101,7 @@ class EvidenceContext(doing.DoDoer):
         self.kvy = Kevery(db=hby.db, cf=self.cf, enableKram=True, lax=False, local=False)
         self.kvy.kramer = Kramer(db=hby.db, cf=self.cf, cues=self.kvy.cues)
         self.pruner = Pruner(self.kvy.kramer, tock=1.0)
+        self.ownReger = reger is None
         self.reger = reger if reger is not None else RegBaser(
             name=hby.name, base=hby.base, temp=hby.temp)
         self.rever = Rever(db=hby.db, reger=self.reger)
@@ -139,12 +141,13 @@ class EvidenceContext(doing.DoDoer):
             yield tock
 
     def close(self):
-        """Close the ACDC v2 registry store after child doers have stopped.
+        """Close only a registry store opened by this context.
 
             Returns:
                 None. Habery remains caller-owned; scheduling cancellation must precede
                 this close so pruning/escrow work cannot access a closed environment."""
-        self.reger.close()
+        if self.ownReger:
+            self.reger.close()
 
 
 class EvidenceProcessor:
