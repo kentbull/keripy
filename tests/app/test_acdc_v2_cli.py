@@ -753,3 +753,42 @@ def test_registry_reads_do_not_open_wallet(monkeypatch, capsys):
         result = json.loads(capsys.readouterr().out)
         assert result['registry'] == expected
         assert result['accepted'] is True
+
+
+@pytest.mark.parametrize('with_custody', [False, True])
+def test_registry_inception_does_not_open_wallet(monkeypatch, capsys, with_custody):
+    """Create and reopen a registry without an application credential database.
+
+    Optional encrypted salt storage belongs to Keeper. Neither a public RIP nor
+    a RIP with custody needs issued credentials or admitted grant records.
+    """
+    from hio.base import doing
+    from keri.cli.common import acdc_v2
+
+    name = 'registry-incept-' + uuid.uuid4().hex
+    base = 'acdc-v2-cli-test'
+    with openHby(name=name, base=base, temp=False, bran=PASSCODE, version=Vrsn_2_0) as hby:
+        issuer = hby.makeHab(name='issuer', version=Vrsn_2_0)
+        prefix = issuer.pre
+
+    def unavailable(*args, **kwa):
+        """Fail at the unwanted inventory boundary while retaining real stores."""
+        pytest.fail('registry inception must not construct credential inventory')
+
+    monkeypatch.setattr(acdc_v2, 'Wallet', unavailable)
+    tokens = ['vc', 'registry', 'incept', '--acdc-v2', '--name', name,
+              '--base', base, '--passcode', PASSCODE, '-a', 'issuer', '-r', 'authority']
+    if with_custody:
+        tokens.append('--with-custody')
+    args = multicommand.create_parser(commands).parse_args(tokens)
+    doist = doing.Doist(real=True, limit=5.0, tock=0.03125)
+    doist.do(doers=args.handler(args))
+    assert doist.done
+    result = json.loads(capsys.readouterr().out)
+    assert result['accepted'] is True
+    with acdc_v2.openedRegistry(args) as (hby, rgy):
+        reg = rgy.registryByName('authority')
+        assert reg.regk == result['registry']
+        assert reg.hab.pre == prefix
+        assert reg.store.headEvent(reg.regk).said == reg.regk
+        assert (hby.ks.custody.get((reg.regk,)) is not None) == with_custody

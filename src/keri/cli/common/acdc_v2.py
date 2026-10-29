@@ -1,5 +1,5 @@
 """Explicit ACDC v2 adapters for the existing credential command hierarchy."""
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import asdict
 import json
 import math
@@ -449,7 +449,13 @@ class AcdcV2Author(doing.DoDoer):
             raise ConfigurationError('--timeout must be positive')
         wantsCustody = (getattr(args, 'with_custody', False) if self.operation == 'incept'
                         else not args.public)
-        with opened(args, custody=wantsCustody) as (hby, rgy, wallet):
+        with openedRegistry(args) as (hby, rgy), ExitStack() as inventory:
+            custody = RegistryCustody(hby, rgy) if wantsCustody else None
+            # RIP creates registry state, not a credential. Only issuance and
+            # revocation still need the application inventory pending its removal.
+            if self.operation != 'incept':
+                wallet = Wallet(hby, rgy, custody=custody)
+                inventory.callback(wallet.close)
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('ACDC v2 authoring requires a local alias')
@@ -479,7 +485,7 @@ class AcdcV2Author(doing.DoDoer):
                 if self.operation == 'incept':
                     if wantsCustody:
                         # Explicit provisioning authenticates before public mutation.
-                        wallet.custody._manager()
+                        custody._manager()
                     elif args.discloser:
                         raise ConfigurationError('--discloser requires --with-custody')
                     if args.backers:
@@ -528,19 +534,19 @@ class AcdcV2Author(doing.DoDoer):
                                         self.proposedSalts = proposal.sad['a']['salts']
                                         break
                             if self.proposedSalts is None:
-                                root = (Salter(qb64=wallet.custody._load(reg.regk).salt)
-                                        if wallet.hby.ks.custody.get((reg.regk,)) else Salter())
-                                self.proposedSalts = wallet.custody.sealMembers(hab, root)
+                                root = (Salter(qb64=custody._load(reg.regk).salt)
+                                        if hby.ks.custody.get((reg.regk,)) else Salter())
+                                self.proposedSalts = custody.sealMembers(hab, root)
                         # Fail before signing if this member cannot open its copy.
-                        wallet.custody.openRoot(self.proposedSalts[hab.mhab.pre], hab.mhab.kever.verfers[0])
+                        custody.openRoot(self.proposedSalts[hab.mhab.pre], hab.mhab.kever.verfers[0])
                     yield from self.anchor(hby, reg, event, receiptor)
                     if not wantsCustody:
                         print(json.dumps(dict(registry=reg.regk, name=name, controller=hab.pre,
                                               accepted=True, custody='not requested')))
                         return
-                    info = (wallet.custody.retainMemberCopy(reg.regk, hab, self.proposedSalts)
+                    info = (custody.retainMemberCopy(reg.regk, hab, self.proposedSalts)
                             if self.group is not None else
-                            wallet.custody.createCustody(reg.regk, args.discloser or hab.pre))
+                            custody.createCustody(reg.regk, args.discloser or hab.pre))
                     print(json.dumps(dict(registry=reg.regk, name=name, controller=hab.pre,
                                           discloser=info.discloser, accepted=True)))
                     return

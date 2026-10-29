@@ -409,11 +409,11 @@ def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fano
     assert issuedAgain['credential'] == issued['credential']
     assert invoke(names[0], 'vc', 'registry', 'status', '--acdc-v2', '-r', 'registry')[0]['sn'] == 1
     # Public group authoring must not provision a secret in either member store.
-    from keri.app.credentialing import WalletBaser
+    from keri.app import Keeper
     from keri.db import openLMDB
     for name in names:
-        with openLMDB(cls=WalletBaser, name=name, base='acdc-v2-cli-test', temp=False) as wallet:
-            assert wallet.custody.get((accepted['registry'],)) is None
+        with openLMDB(cls=Keeper, name=name, base='acdc-v2-cli-test', temp=False) as keeper:
+            assert keeper.custody.get((accepted['registry'],)) is None
     for path in (first, second, issue1, issue2):
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(path.read_bytes()), processive=False)
         wrapper = parsed[-1]
