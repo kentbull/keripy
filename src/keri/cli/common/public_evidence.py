@@ -583,3 +583,38 @@ def inspect(args):
                 recipient=event.sad.get('ri'), prior=event.sad['p'], thread=event.sad.get('x'),
                 route=event.route, nodes=nodes)))
     return [doing.doify(run)]
+
+
+def exportRegistry(args):
+    """Return a read-only public registry export operation using shared evidence cloning.
+
+    Args:
+        args (Namespace): Existing identity/passcode, exact registry SAID and a
+            new public output path. No credential or custody capability is selected.
+
+    Returns:
+        list[Doer]: One operation producing accepted controller/delegation KEL,
+            selected accepted TEL history and only explicitly public openings.
+
+    Unknown registries and unsupported history fail before exclusive file
+    creation. RegistryCustody is never constructed or used to derive an opening.
+    """
+    def run(tymth, tock=0.0, **kwa):
+        """Clone one accepted scope and close caller-owned stores on every exit.
+
+        HIO supplies tymth/tock/kwa. Yield once, then print public identifiers and
+        the exact output digest after writing. Protocol and file errors propagate.
+        """
+        yield tock
+        with acdc_v2.opened(args, custody=False) as (hby, rgy, _):
+            if rgy.store.seqEvent(args.registry, 0) is None:
+                raise ConfigurationError('public registry export requires an accepted registry inception')
+            evidence = EvidenceContext(hby, reger=rgy.baser)
+            # Read-only cloning needs no scheduler/pruner lifecycle and reuses the
+            # shared accepted-history/opening contract instead of serializing TELs here.
+            raw = evidence.clone([args.registry])
+            head = rgy.store.headEvent(args.registry)
+            digest = write(args.output, raw)
+            print(json.dumps(dict(registry=args.registry, accepted=True, head=head.said,
+                                  sn=head.sn, output=args.output, sha256=digest)))
+    return [doing.doify(run)]
