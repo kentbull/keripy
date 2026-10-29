@@ -479,7 +479,8 @@ class Revery:
             self.db.sdts.rem(keys=keys)
 
     def escrowReply(
-        self, *, serder, saider, dater, route, prefixer, snumber, sdiger, sigers
+        self, *, serder, saider, dater, route, prefixer=None, snumber=None,
+        sdiger=None, sigers=None, cigars=None
     ):
         """Escrow reply by route
 
@@ -491,14 +492,27 @@ class Revery:
             prefixer (Prefixer): is pre of trans endorser
             snumber (Number): is sequence number of trans endorser's est evt for keys for sigs
                 sdiger (Diger) is said of trans endorser's est evt for keys for sigs
-            sigers (list): is indexed sigs from trans endorser's key from est evt"""
-        if not sigers:
+            sigers (list | None): indexed signatures from a transferable endorser.
+            cigars (list | None): nontransferable signatures with attached verfers.
+
+        Either or both attachment forms may be retained. This method does not
+        authenticate them; ordinary route verification runs again on recovery.
+        Nontransferable replies can depend on application evidence even though
+        their signing key needs no KEL resolution. Reuse the existing scgs table
+        so recovery does not require a second application reply journal.
+        """
+        if not (sigers or cigars):
             return  # nothing to escrow
+        if sigers and (prefixer is None or snumber is None or sdiger is None):
+            raise ValidationError('transferable reply escrow requires establishment coordinates')
         keys = (saider.qb64,)
         self.db.sdts.put(keys=keys, val=dater)  # first one idempotent
         self.db.rpys.put(keys=keys, val=serder)  # first one idempotent
-        quadkeys = (saider.qb64, prefixer.qb64, f"{snumber.sn:032x}", sdiger.qb64)
-        self.db.tsgs.put(keys=quadkeys, vals=sigers)
+        if sigers:
+            quadkeys = (saider.qb64, prefixer.qb64, f"{snumber.sn:032x}", sdiger.qb64)
+            self.db.tsgs.put(keys=quadkeys, vals=sigers)
+        if cigars:
+            self.db.scgs.put(keys=keys, vals=[(cigar.verfer, cigar) for cigar in cigars])
         self.db.rpes.put(keys=(route,), vals=[saider])
 
     def processEscrowReply(self):
@@ -513,10 +527,14 @@ class Revery:
                 tsgs = fetchTsgs(db=self.db.tsgs, diger=diger)
 
                 keys = (diger.qb64,)
+                cigars = []
+                for verfer, cigar in self.db.scgs.get(keys=keys):
+                    cigar.verfer = verfer
+                    cigars.append(cigar)
                 dater = self.db.sdts.get(keys=keys)
                 serder = self.db.rpys.get(keys=keys)
                 try:
-                    if not (dater and serder and tsgs):
+                    if not (dater and serder and (tsgs or cigars)):
                         raise ValueError(
                             f"Missing escrow artifacts at said={diger.qb64}"
                             f"for route={route}."
@@ -534,7 +552,7 @@ class Revery:
 
                         raise ValidationError(f"Stale reply escrow at route = {route}.")
 
-                    self.processReply(serder=serder, tsgs=tsgs)
+                    self.processReply(serder=serder, tsgs=tsgs, cigars=cigars)
 
                 except UnverifiedReplyError as ex:
                     # still waiting on missing prior event to validate
