@@ -309,6 +309,12 @@ class AcdcV2Author(doing.DoDoer):
         bound = resolveBoundEvent(hby, acdc, boundEvent) if boundEvent else {}
 
         def makeOpening(ordinal):
+            """Select this credential/state opening for the given TEL ordinal.
+
+            Public mode generates an opening for explicit publication; private
+            mode requires the supplied custody provider and resolved issuee
+            binding. Retain and return the selected opening for this command.
+            """
             if public:
                 self.blinder = Blinder.blind(sn=ordinal, acdc=acdc.said, state=state)
                 self.publishOpening = True
@@ -319,6 +325,11 @@ class AcdcV2Author(doing.DoDoer):
             return self.blinder
 
         def matches(event, proof):
+            """Match a retained BUP and opening to the requested credential/state.
+
+            event must commit to proof's exact digest; a missing proof or a
+            different credential/state returns False and cannot justify reuse.
+            """
             return (event.ilk == 'bup' and proof is not None
                     and event.sad.get('b') == proof.said
                     and proof.acdc == acdc.said and proof.state == state)
