@@ -2259,7 +2259,14 @@ class Kever:
         habord = self.db.habs.get(keys=(self.prefixer.qb64,))
         kever = self.kevers[habord.mid]
 
-        idx = [verfer.qb64 for verfer in verfers].index(kever.verfers[0].qb64)
+        try:
+            idx = [verfer.qb64 for verfer in verfers].index(kever.verfers[0].qb64)
+        except ValueError:
+            # A personal rotation may precede the group rotation. Continue
+            # protecting its historical contributed key; a retired member has
+            # no contribution in this event's keys and returns no index.
+            contribution = kever.fetchLatestContribTo(verfers)
+            return [contribution[1]] if contribution is not None else []
         return [idx]
 
 

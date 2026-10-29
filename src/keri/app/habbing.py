@@ -542,6 +542,7 @@ class Habery:
 
         hab.save(habord)
         hab.prefixes.add(pre)
+        hab.db.groups.add(pre)
         hab.inited = True
 
         self.habs[hab.pre] = hab
@@ -656,6 +657,7 @@ class Habery:
 
         hab.save(habord)
         hab.prefixes.add(pre)
+        hab.db.groups.add(pre)
         hab.inited = True
 
         self.habs[hab.pre] = hab
@@ -3558,6 +3560,7 @@ class SignifyGroupHab(SignifyHab):
             **kwa: Absorbed for API compatibility; not used."""
         self.pre = serder.ked["i"]  # new pre
         self.prefixes.add(self.pre)
+        self.db.groups.add(self.pre)
         self.processEvent(serder, sigers)
         habord = HabitatRecord(hid=self.pre, mid=self.mhab.pre, smids=self.smids, rmids=self.rmids,
                                       sid=self.pre, name=self.name, domain=self.ns)
@@ -3774,6 +3777,7 @@ class GroupHab(BaseHab):
                                       rmids=self.rmids)
         self.save(habord)
         self.prefixes.add(self.pre)
+        self.db.groups.add(self.pre)
 
         # during delegation initialization of a habitat we ignore the MissingDelegationError and
         # MissingSignatureError
