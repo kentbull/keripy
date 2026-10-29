@@ -42,7 +42,7 @@ def attachService(case, node):
     case.stack.callback(closeRegistry, rgy)
     db = WalletBaser(name=node.hby.name, headDirPath=str(case.path))
     case.stack.callback(db.close)
-    custody = RegistryCustody(node.hby, rgy, db=db)
+    custody = RegistryCustody(node.hby, rgy)
     exc = Exchanger(node.hby, handlers=[])
     mux = Multiplexor(node.hby, Notices(), exc=exc, rgy=Rever(db=node.hby.db, reger=rgy.baser))
     mux.kvy.kramer = Kramer(db=node.hby.db, cf=ServiceConfig())

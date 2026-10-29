@@ -1,12 +1,12 @@
-"""Optional encrypted per-registry derivation custody over existing wallet records.
+"""Optional encrypted per-registry derivation custody in the existing Keeper.
 
 The encrypted records and methods were moved from credentialing.Wallet at
 KERIpy ea3d8281 without changing the custody. database layout; their introducing
 local commit was d30395c1acbf609d9099f9ce34288d1d4c89233f. This extraction and
 explicit no-regeneration guard are local application changes.
-Manager.updateAeid migrates Keeper secrets only. These application records remain
-under their old AEID and require the original Keeper. There is no automatic
-migration or plaintext salt export/import.
+Registry records now live in Keeper and follow Manager.updateAeid alongside
+prefix salts and signing seeds. There is no plaintext salt export/import or
+separate rewrap workflow. Moving the table is a local application design choice.
 
 Supplied-root preparation and qualified sealed-box handoff are local application
 additions using the existing Encrypter and Keeper Manager. The domain caller
@@ -15,6 +15,8 @@ root retention and never generates a replacement for a supplied root.
 
 """
 from dataclasses import asdict, dataclass, field
+
+from .keeping import EncryptedCustody
 import json
 
 from keri.core import (Blinder, Cipher, Encrypter, MtrDex, Number,
@@ -43,16 +45,9 @@ class _Custody:
     salt: str = field(repr=False)
 
 
-@dataclass
-class EncryptedCustody:
-    """Existing custody. row: Keeper encryption identity plus authenticated cipher."""
-    aeid: str
-    cipher: str = field(repr=False)
-
-
 @dataclass(frozen=True)
 class PreparedCustody:
-    """Encrypted root row and exact previous-row snapshot for one wallet transaction.
+    """Encrypted root row and exact previous-row snapshot for one Keeper transaction.
 
     Both serialized rows contain ciphertext, never a plaintext root. Excluding
     them from repr also keeps ciphertext out of ordinary diagnostic output.
@@ -65,21 +60,20 @@ class PreparedCustody:
 class RegistryCustody:
     """Explicit private capability; no inventory operation constructs or reads it.
 
-    The caller owns and closes the existing WalletBaser. A separate owner does
-    not imply a separate LMDB environment or atomicity with Keeper rotations.
+    The caller owns the Habery and its Keeper. Registry salts use the Keeper
+    encryption lifecycle independently of credential inventory.
     """
-    def __init__(self, hby, rgy, *, db):
+    def __init__(self, hby, rgy):
         """Bind optional derivation to authenticated identity and existing storage.
 
         Args:
             hby (Habery): Keeper authentication and local participant identities.
             rgy (Regery): Accepted registry evidence defining controller bindings.
-            db (WalletBaser): Existing encrypted custody table; caller closes it.
 
         Returns:
             None. Construction does not inspect, decrypt, or create a custody row.
         """
-        self.hby, self.rgy, self.db = hby, rgy, db
+        self.hby, self.rgy, self.db = hby, rgy, hby.ks
 
     def _manager(self):
         """Require an authenticated encrypted Keeper for a secret-bearing operation.
@@ -204,7 +198,7 @@ class RegistryCustody:
         return self._prepare(_Custody(asdict(info), root.qb64))
 
     def _prepare(self, secret):
-        """Encrypt validated private data before entering the wallet transaction.
+        """Encrypt validated private data before entering the Keeper transaction.
 
         Args:
             secret (_Custody): Original fixed-profile metadata and supplied root.
@@ -228,12 +222,12 @@ class RegistryCustody:
         return PreparedCustody(regid, expected, encrypted)
 
     def retainPrepared(self, prepared, txn):
-        """CAS-retain a prepared row inside a caller-owned wallet write transaction.
+        """CAS-retain a prepared row inside a caller-owned Keeper write transaction.
 
         Args:
             prepared (PreparedCustody): Encrypted output of prepareRoot, prepared
                 before the caller opened its transaction.
-            txn (lmdb.Transaction): Active write transaction in this WalletBaser.
+            txn (lmdb.Transaction): Active write transaction in this Keeper.
 
         Returns:
             bool: True when ciphertext changes, False for an identical retained row.
@@ -243,8 +237,7 @@ class RegistryCustody:
             ValidationError: The previous row changed concurrently.
 
         This method never opens a transaction, decrypts, or emits a receipt. The
-        application commits the encrypted root in its existing transaction, then
-        produces any notification or retention receipt after that commit succeeds.
+        caller commits the encrypted root in its existing Keeper transaction.
         """
         mgr = self._manager()
         if (not isinstance(prepared, PreparedCustody)
@@ -412,11 +405,11 @@ class RegistryCustody:
                 event = self.rgy.store.seqEvent(regid, ordinal)
                 if event is None or event.ilk != 'bup':
                     continue
-                qb64 = self.db.openings.get((event.said,))
+                qb64 = self.rgy.store.opening(event.said)
                 candidates = regeventing._blindCandidates(qb64) if qb64 else []
                 if len(candidates) != 1:
                     raise ConfigurationError(
-                        'blinded registry history requires explicit custody import; salt cannot be recreated')
+                        'blinded registry history requires the existing encrypted salt; salt cannot be recreated')
                 regeventing.vetBlind(candidates[0], blid=event.sad['b'])
         return self._retain(_Custody(asdict(CustodyInfo(regid, controller, discloser)), Salter().qb64))
 

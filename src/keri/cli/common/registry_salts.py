@@ -179,7 +179,7 @@ class SaltDoer(doing.DoDoer):
             if args.operation == 'status':
                 self._require('registry')
                 print(json.dumps(dict(registry=args.registry,
-                    custody_present=wallet.db.custody.get((args.registry,)) is not None)))
+                    custody_present=wallet.hby.ks.custody.get((args.registry,)) is not None)))
                 return
             if args.operation == 'receive':
                 self._require('input')

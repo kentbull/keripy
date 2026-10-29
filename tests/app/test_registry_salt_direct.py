@@ -37,7 +37,7 @@ def network(tmp_path, request):
         for hby, rgy in zip(hbys, rgys):
             db = WalletBaser(name=hby.name, headDirPath=str(tmp_path))
             stack.callback(db.close)
-            custody = RegistryCustody(hby, rgy, db=db)
+            custody = RegistryCustody(hby, rgy)
             wallet = Wallet(hby, rgy, db=db, custody=custody)
             rvy = Revery(db=hby.db)
             kvy = Kevery(db=hby.db, rvy=rvy,
@@ -176,7 +176,7 @@ def groupServiceNetwork(tmp_path):
         for index, (hby, rgy) in enumerate(zip(hbys, rgys)):
             db = WalletBaser(name=hby.name, headDirPath=str(tmp_path))
             stack.callback(db.close)
-            custody = RegistryCustody(hby, rgy, db=db)
+            custody = RegistryCustody(hby, rgy)
             rvy = owners[index].mux.rvy if index < 3 else Revery(db=hby.db)
             service = RegistrySaltService(hby, rgy, custody, rvy)
             service.register()
@@ -255,8 +255,6 @@ def test_join_retains_member_salt_after_real_registry_quorum(groupServiceNetwork
     event = regcept(c.groups[0].pre)
     first, attachments = c.owners[0].approveRegistry(event, salts=copies)
     with joining(c.members) as (command, clock), groupNetwork(c.members, unused_tcp_port_factory) as (until, _):
-        # Borrow the already-open encrypted test store; no second environment owner.
-        command.saltWallet = Wallet(c.hbys[1], c.rgys[1], db=c.services[1].custody.db)
         c.owners[1].receive(first.raw + attachments)
         assert c.services[1].custody.db.custody.get((event.said,)) is None
         result = drive(command, clock, command.registry(dict(r=first.route, d=first.said)), until)

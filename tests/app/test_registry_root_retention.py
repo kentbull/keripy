@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from keri.acdc import Registrar
-from keri.app.credentialing import WalletBaser
 from keri.app.registry_custody import CustodyInfo, RegistryCustody
 from keri.core import Encrypter, MtrDex, Salter, Signer
 from keri.kering import AuthError, ValidationError
@@ -22,9 +21,7 @@ def roots(tmp_path):
         recipient = hby.makeHab(name='recipient')
         rgy = regery(hby, tmp_path)
         stack.callback(rgy.close)
-        db = WalletBaser(name=hby.name, headDirPath=str(tmp_path))
-        stack.callback(db.close)
-        custody = RegistryCustody(hby, rgy, db=db)
+        custody = RegistryCustody(hby, rgy)
         registry = Registrar(rgy=rgy).makeRegistry(name='root', prefix=issuer.pre)
         anchored(issuer, registry, rgy.store.event(registry.regk))
         info = CustodyInfo(registry.regk, issuer.pre, recipient.pre)
@@ -94,8 +91,8 @@ def test_prepared_cas_cannot_replace_concurrently_retained_root(roots):
     assert custody.db.custody.get((info.registry,)) == previous
 
 
-def test_keeper_identity_change_invalidates_preparation_and_existing_custody(roots):
-    """AEID rotation neither commits an old prepared cipher nor rewraps a root."""
+def test_keeper_identity_change_rotates_custody_and_invalidates_preparation(roots):
+    """Existing Keeper rotation preserves the salt and rejects a stale prepared row."""
     custody, info, root, _, _ = roots
     assert retain(custody, custody.prepareRoot(info, root))
     prepared = custody.prepareRoot(info, root)
@@ -104,9 +101,14 @@ def test_keeper_identity_change_invalidates_preparation_and_existing_custody(roo
     custody.hby.mgr.updateAeid(replacement.verfer.qb64, replacement.qb64)
     with pytest.raises(AuthError, match='authenticated Keeper'):
         retain(custody, prepared)
-    with pytest.raises(AuthError, match='AEID changed'):
-        custody.prepareRoot(info, root)
-    assert custody.db.custody.get((info.registry,)) == previous
+    current = custody.db.custody.get((info.registry,))
+    assert current.aeid == replacement.verfer.qb64
+    assert current.cipher != previous.cipher
+    assert custody._load(info.registry).salt == root.qb64
+    assert not retain(custody, custody.prepareRoot(info, root))
+    with pytest.raises(AuthError, match='require Keeper encryption'):
+        custody.hby.mgr.updateAeid('', '')
+    assert custody._load(info.registry).salt == root.qb64
 
 
 def test_root_seal_uses_exact_recipient_key_and_retained_historical_seed(roots):

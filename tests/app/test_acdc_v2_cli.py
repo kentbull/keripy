@@ -136,7 +136,7 @@ def test_acdc_v2_cli_authoring_reopen_and_public_export(tmp_path):
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
-            assert wallet.db.custody.rem((regid,))
+            assert wallet.hby.ks.custody.rem((regid,))
         finally:
             wallet.close()
             rgy.close()
@@ -222,7 +222,7 @@ def test_public_cli_lifecycle_never_provisions_or_encrypts_custody():
         try:
             assert not hby.mgr.aeid
             assert wallet.custody is None
-            assert list(wallet.db.custody.getTopItemIter()) == []
+            assert list(wallet.hby.ks.custody.getTopItemIter()) == []
             assert rgy.registryByName('public').sn == 2
             head = rgy.registryByName('public').store.headEvent(reg['registry'])
             assert head.ilk == 'bup'
@@ -541,7 +541,7 @@ def test_public_pending_bup_without_retained_opening_refuses_replacement():
             event = AcdcV2Author(args, 'create').update(wallet, reg, acdc, 'issued')
             raw = event.raw
             assert wallet.publicOpening(event).state == 'issued'
-            assert wallet.db.openings.rem((event.said,))
+            assert rgy.store.baser.openings.rem((event.said,))
 
             with pytest.raises(ConfigurationError,
                                match='pending public bup is missing its retained opening'):
@@ -647,9 +647,9 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
-            row = wallet.db.custody.get((regid,))
+            row = wallet.hby.ks.custody.get((regid,))
             row.cipher = 'invalid-ciphertext'
-            wallet.db.custody.pin((regid,), row)
+            wallet.hby.ks.custody.pin((regid,), row)
         finally:
             wallet.close()
             rgy.close()
@@ -683,7 +683,7 @@ def test_full_export_rejects_wrong_salt_after_encrypted_reply(tmp_path):
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
-            assert wallet.db.custody.rem((regid,))
+            assert wallet.hby.ks.custody.rem((regid,))
             hab = hby.habByName('issuer')
             cipher = Encrypter(verkey=hab.kever.verfers[0].qb64).encrypt(prim=Salter())
             body = reply(pre=prefix, route=ROUTE, version=Vrsn_2_0,

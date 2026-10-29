@@ -102,7 +102,7 @@ class JoinDoer(doing.DoDoer):
         if registrySalt and not group:
             raise ConfigurationError('--registry-salt requires an explicit --group')
         self.registrySalt = registrySalt
-        self.saltWallet = self.saltService = None
+        self.saltService = None
         self.timeout = timeout
         self.group = group
         self.version = version
@@ -238,8 +238,6 @@ class JoinDoer(doing.DoDoer):
         try:
             super().exit(deeds=deeds)
         finally:
-            if deeds is None and getattr(self, 'saltWallet', None) is not None:
-                self.saltWallet.close()
             if deeds is None and self.rgyV2 is not None and self.rgyV2.store.opened:
                 self.rgyV2.close()
 
@@ -254,14 +252,11 @@ class JoinDoer(doing.DoDoer):
         if not isinstance(hab, GroupHab) or not hab.accepted:
             return  # initial group join is still responsible for admission
         if self.saltService is None:
-            from ....app.credentialing import Wallet
             from ....app.registry_custody import RegistryCustody
             from ....app.registry_salt_service import RegistrySaltService, ROUTES
             from ....app.essring import EssrReplyHandler
 
-            self.saltWallet = Wallet(self.hby, self.rgyV2)
-            custody = RegistryCustody(self.hby, self.rgyV2, db=self.saltWallet.db)
-            self.saltWallet.custody = custody
+            custody = RegistryCustody(self.hby, self.rgyV2)
             self.saltService = RegistrySaltService(self.hby, self.rgyV2, custody, self.rvy)
             self.saltService.register()
             self.exc.addHandler(EssrReplyHandler(self.hby, hab.mhab, self.psr, ROUTES))
@@ -306,11 +301,8 @@ class JoinDoer(doing.DoDoer):
         copies = wrapper.sad['a'].get('salts')
         custody = None
         if copies and ghab.mhab.pre in copies:
-            from ....app.credentialing import Wallet
             from ....app.registry_custody import RegistryCustody
-            if self.saltWallet is None:
-                self.saltWallet = Wallet(self.hby, self.rgyV2)
-            custody = RegistryCustody(self.hby, self.rgyV2, db=self.saltWallet.db)
+            custody = RegistryCustody(self.hby, self.rgyV2)
             # Validate local decryption before human approval and KEL signing.
             custody.openRoot(copies[ghab.mhab.pre], ghab.mhab.kever.verfers[0])
         print(f'\nGroup registry {event.ilk} proposed for {ghab.name} ({ghab.pre}):')

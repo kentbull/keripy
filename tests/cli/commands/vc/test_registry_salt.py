@@ -64,7 +64,7 @@ def test_installed_kli_encrypted_salt_survives_every_command_exit(tmp_path):
             stack.callback(rgy.close)
             wallet = Wallet(hby, rgy)
             stack.callback(wallet.close)
-            custody = RegistryCustody(hby, rgy, db=wallet.db)
+            custody = RegistryCustody(hby, rgy)
             openings.append(custody.derive(registry, 1, Diger(ser=b'credential').qb64, 'issued').qb64)
             roots.append(custody._load(registry).salt)
     assert openings[0] == openings[1] and roots[0] == roots[1]
@@ -128,7 +128,7 @@ def test_installed_group_inception_reuses_encrypted_proposal_after_exit(tmp_path
             stack.callback(rgy.close)
             wallet = Wallet(hby, rgy)
             stack.callback(wallet.close)
-            custody = RegistryCustody(hby, rgy, db=wallet.db)
+            custody = RegistryCustody(hby, rgy)
             roots.append(custody._load(accepted['registry']).salt)
     assert roots[0] == roots[1]
     assert roots[0].encode() not in first.read_bytes() + second.read_bytes()

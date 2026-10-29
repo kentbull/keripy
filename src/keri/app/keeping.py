@@ -44,6 +44,17 @@ Algoage = namedtuple("Algoage", 'randy salty group extern')
 Algos = Algoage(randy='randy', salty='salty', group="group", extern="extern")  # randy is rerandomize, salty is use salt
 
 
+@dataclass
+class EncryptedCustody:
+    """Registry salt payload encrypted under the Keeper's current AEID.
+
+    The registry SAID is the table key. The payload contains application binding
+    metadata and a salt; it is never a signing seed or delivery record.
+    """
+    aeid: str
+    cipher: str = field(repr=False)
+
+
 @dataclass()
 class PubLot:
     """
@@ -231,7 +242,7 @@ class Keeper(LMDBer):
     TailDirPath = "keri/ks"
     AltTailDirPath = ".keri/ks"
     TempPrefix = "keri_ks_"
-    MaxNamedDBs = 10
+    MaxNamedDBs = 11
 
     def __init__(self, headDirPath=None, perm=None, reopen=False, **kwa):
         """
@@ -280,6 +291,7 @@ class Keeper(LMDBer):
         # to avoid namespace collisions with Base64 identifier prefixes.
 
         self.gbls = Suber(db=self, subkey='gbls.')
+        self.custody = Komer(db=self, subkey='registry-salts.', klas=EncryptedCustody)
         self.pris = CryptSignerSuber(db=self, subkey='pris.')
         self.prxs = CesrSuber(db=self,
                                      subkey='prxs.',
@@ -796,6 +808,11 @@ class Manager:
             seed (str): qb64 of new seed from which new aeid is derived (private signing
                         key seed)
         """
+        # Registry salts are an explicitly encrypted capability. Refuse to
+        # remove Keeper encryption while such secrets are retained.
+        if not aeid and next(self.ks.custody.getTopItemIter(), None) is not None:
+            raise AuthError("Retained registry salts require Keeper encryption")
+
         if self.aeid:  # check that last current seed matches last current .aeid
             # verifies seed belongs to aeid
             if not self.seed or not self.encrypter.verifySeed(self.seed):
@@ -831,6 +848,13 @@ class Manager:
                     data.salt = (self.encrypter.encrypt(prim=salter).qb64
                                  if self.encrypter else salter.qb64)
                     self.ks.prms.pin(keys, val=data)
+
+            # Registry payloads follow the same old-decrypter/new-encrypter
+            # lifecycle as prefix salts, without export or a rewrap command.
+            for keys, data in self.ks.custody.getTopItemIter():
+                raw = self.decrypter.decrypt(qb64=data.cipher, bare=True)
+                self.ks.custody.pin(keys, EncryptedCustody(
+                    aeid, self.encrypter.encrypt(ser=raw).qb64))
 
             # private signing key seeds
             # keys is tuple == (verkey.qb64,) .pris database auto decrypts

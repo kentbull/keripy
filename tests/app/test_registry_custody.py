@@ -44,8 +44,8 @@ def test_explicit_custody_provisioning_allows_public_prefix_but_never_recreates_
             anchored(issuer, registry, public)
             wallet.retainPublicOpening(public, publicOpening)
             assert wallet.custody is None
-            assert not list(wallet.db.custody.getTopItemIter())
-            wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
+            assert not list(wallet.hby.ks.custody.getTopItemIter())
+            wallet.custody = RegistryCustody(hby, rgy)
             info = wallet.custody.createCustody(registry.regk, issuer.pre)
             assert info.registry == registry.regk
             opening = wallet.custody.derive(registry.regk, 2, credential.said, 'issued')
@@ -59,10 +59,10 @@ def test_explicit_custody_provisioning_allows_public_prefix_but_never_recreates_
                 registry.processEvent(tail)
                 anchored(issuer, registry, tail)
             # Simulate private record loss, preserving all authentic public history.
-            assert wallet.db.custody.rem((registry.regk,))
+            assert wallet.hby.ks.custody.rem((registry.regk,))
             with pytest.raises(ConfigurationError, match='salt cannot be recreated'):
                 wallet.custody.createCustody(registry.regk, issuer.pre)
-            assert wallet.db.custody.get((registry.regk,)) is None
+            assert wallet.hby.ks.custody.get((registry.regk,)) is None
         finally:
             wallet.close()
             rgy.close()
@@ -98,7 +98,7 @@ def test_fresh_blinded_issuance_requires_supplied_common_verifier_opening(tmp_pa
                                     blinder=Blinder.blind(acdc=credential.said, state='revoked'))
             record = wallet.recordIssued(credential, event.said, blinder=proof)
             assert wallet.recordIssued(credential, event.said) == record
-            assert not list(wallet.db.custody.getTopItemIter())
+            assert not list(wallet.hby.ks.custody.getTopItemIter())
         finally:
             wallet.close()
             rgy.close()
@@ -159,15 +159,16 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
             registry = Registrar(rgy=rgy).makeRegistry(name='private capability', prefix=hhab.pre)
             anchored(hhab, registry, rgy.store.event(registry.regk))
             regid = registry.regk
-            wallet.custody = RegistryCustody(holder, rgy, db=wallet.db)
+            wallet.custody = RegistryCustody(holder, rgy)
             wallet.custody.createCustody(regid, hhab.pre)
             if custodyState == 'corrupt':
-                row = wallet.db.custody.get((regid,))
+                row = wallet.hby.ks.custody.get((regid,))
                 row.cipher = 'corrupt ciphertext'
-                wallet.db.custody.pin((regid,), row)
+                wallet.hby.ks.custody.pin((regid,), row)
             else:
-                keys['holder'] = Signer(transferable=False)
-                holder.mgr.updateAeid(keys['holder'].verfer.qb64, keys['holder'].qb64)
+                row = holder.ks.custody.get((regid,))
+                row.aeid = Signer(transferable=False).verfer.qb64
+                holder.ks.custody.pin((regid,), row)
             with pytest.raises(AuthError):
                 wallet.custody.derive(regid, 1, credential.said, 'issued')
         assert wallet.heldCredential(original.said)['proof'] == retained
@@ -192,7 +193,7 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
             assert not holder.mgr.aeid
         assert wallet.heldCredential(original.said)['proof'] == retained
         if regid is not None:
-            capability = RegistryCustody(holder, hrgy, db=wallet.db)
+            capability = RegistryCustody(holder, hrgy)
             with pytest.raises(AuthError):
                 capability.derive(regid, 1, credential.said, 'issued')
         hhab = holder.habByName('holder')

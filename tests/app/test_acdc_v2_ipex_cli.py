@@ -121,7 +121,7 @@ def _negotiated_cli_case(tmp_path):
         wallet = Wallet(hby, rgy)
         try:
             reg = rgy.registryByName('r')
-            opening = RegistryCustody(hby, rgy, db=wallet.db).derive(reg.regk, 2, said, 'issued')
+            opening = RegistryCustody(hby, rgy).derive(reg.regk, 2, said, 'issued')
             event = blindate(reg.regk, reg.store.headEvent(reg.regk).said, opening.said, sn=2)
             reg.processEvent(event)
             hby.habByName('issuer').interact(data=[dict(s=event.sad['n'], d=event.said)])

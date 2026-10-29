@@ -18,7 +18,6 @@ from keri.db import dbing, koming, subing
 from keri.help import helping
 from keri.kering import ConfigurationError, ValidationError
 from keri.peer import exchanging
-from .registry_custody import EncryptedCustody
 from .credential_disclosing import boundEvent
 
 
@@ -65,7 +64,7 @@ class WalletBaser(dbing.LMDBer):
     AltTailDirPath = '.keri/wallet'
 
     def reopen(self, **kwa):
-        """Open inventory and optional encrypted custody without reading secrets.
+        """Open credential inventory without private salt storage.
 
             Args:
                 **kwa: Ordinary LMDBer path/reopen settings.
@@ -73,12 +72,10 @@ class WalletBaser(dbing.LMDBer):
             Returns:
                 bool: Whether the application environment is open.
 
-            The custody Komer is storage schema only: opening it does not enumerate or
-            decrypt secrets. Consent and its rebuildable credential index share a store."""
+            Consent and its rebuildable credential index share this store.
+            Private registry salts belong to the existing Keeper."""
         super().reopen(**kwa)
-        self.custody = koming.Komer(db=self, subkey='custody.', klas=EncryptedCustody)
         self.issued = koming.Komer(db=self, subkey='issued.', klas=IssuedCredential)
-        self.openings = subing.Suber(db=self, subkey='public-openings.')
         self.derivations = koming.Komer(db=self, subkey='derived-updates.', klas=DerivedUpdate)
         self.admitted = koming.Komer(db=self, subkey='admitted.', klas=AdmittedCredential)
         # The index is rebuildable from admitted records, but is committed with them.
@@ -99,7 +96,7 @@ class Wallet:
             hby (Habery): Authenticated local identity and retained exchange owner.
             rgy (Regery): ACDC v2 registry evidence owner.
             exc (Exchanger | None): Router used to check retained completion.
-            db (WalletBaser | None): Existing inventory/custody store, or create one.
+            db (WalletBaser | None): Existing credential inventory store, or create one.
             verification (AcdcV2IpexVerification | None): Explicit context returned by
                 app.ipexing.loadHandlers for ACDC v2. None uses ordinary default policy;
                 configured applications must pass their actual shared context.
@@ -143,17 +140,19 @@ class Wallet:
         if event is None or event.ilk != 'bup' or not isinstance(blinder, Blinder):
             raise ValidationError('public opening requires an ACDC v2 blinded update')
         regeventing.vetBlind(blinder, blid=event.sad['b'])
-        old = self.db.openings.get((event.said,))
+        old = self.rgy.store.opening(event.said)
         if old is not None and old != blinder.qb64:
             raise ValidationError('different public opening is already retained for this event')
-        self.db.openings.pin((event.said,), blinder.qb64)
+        # Authoring retains the opening before the event enters normal TEL
+        # processing. This row alone never establishes event acceptance.
+        self.rgy.store.baser.openings.pin((event.said,), blinder.qb64)
         return blinder
 
     def publicOpening(self, event):
         """Return the authenticated retained public opening for ``event``, if any."""
         if event is None or event.ilk != 'bup':
             return None
-        qb64 = self.db.openings.get((event.said,))
+        qb64 = self.rgy.store.opening(event.said)
         if qb64 is None:
             return None
         candidates = regeventing._blindCandidates(qb64)
@@ -417,6 +416,6 @@ class Wallet:
         """Close this wallet's application environment after dependent work stops.
 
             Returns:
-                None. Habery/Regery remain caller-owned. Optional RegistryCustody shares
-                this store and must not access it after closing; no secret is exported."""
+                None. Habery/Regery remain caller-owned. RegistryCustody uses
+                the independently owned Keeper; no secret is exported."""
         self.db.close()

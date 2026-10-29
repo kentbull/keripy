@@ -134,7 +134,7 @@ def opened(args, *, custody=False):
         rgy = Regery(hby=hby, name=args.name, base=args.base)
         wallet = Wallet(hby, rgy)
         if custody:
-            wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
+            wallet.custody = RegistryCustody(hby, rgy)
         yield hby, rgy, wallet
     finally:
         if wallet is not None:
@@ -318,10 +318,10 @@ class AcdcV2Author(doing.DoDoer):
             opening = wallet.publicOpening(event)
             if opening is not None:
                 return opening, True
-            if wallet.db.custody.get((reg.regk,)) is None:
+            if wallet.hby.ks.custody.get((reg.regk,)) is None:
                 return None, False
             if wallet.custody is None:
-                wallet.custody = RegistryCustody(wallet.hby, wallet.rgy, db=wallet.db)
+                wallet.custody = RegistryCustody(wallet.hby, wallet.rgy)
             ordinal = Number(numh=event.sad['n']).num
             retained = wallet.db.derivations.get((event.said,))
             if retained is not None:
@@ -517,7 +517,7 @@ class AcdcV2Author(doing.DoDoer):
                                         break
                             if self.proposedSalts is None:
                                 root = (Salter(qb64=wallet.custody._load(reg.regk).salt)
-                                        if wallet.db.custody.get((reg.regk,)) else Salter())
+                                        if wallet.hby.ks.custody.get((reg.regk,)) else Salter())
                                 self.proposedSalts = wallet.custody.sealMembers(hab, root)
                         # Fail before signing if this member cannot open its copy.
                         wallet.custody.openRoot(self.proposedSalts[hab.mhab.pre], hab.mhab.kever.verfers[0])
