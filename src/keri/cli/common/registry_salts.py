@@ -21,12 +21,11 @@ from ...app import GroupHab, HaberyDoer, MailboxDirector, Notifier
 from ...app.essring import EssrReplyHandler
 from ...app.evidencing import KEL_DEPENDENCIES, ServiceConfig
 from ...app.forwarding import StreamPoster
-from ...app.grouping import Multiplexor, loadHandlers
+from ...app.grouping import Multiplexor, loadHandlers, replyProposal, endorseReply, multisigRpyExn
 from ...app.indirecting import createHttpServer
 from ...app.registry_salt_service import RegistrySaltService, ROUTES
-from ...app.registry_salt_state import RegistrySaltState
-from ...app.registry_salt_delivery import SaltTransportAttempt
-from ...core import Kramer, Parser, Pruner
+from ...core import Kramer, Parser, Pruner, Diger, messagize
+from ...db import fetchTsgs
 from ...kering import ConfigurationError, MissingEntryError, UnverifiedReplyError, ValidationError
 from ...peer import Exchanger
 from . import acdc_v2, cesr_sending
@@ -56,9 +55,7 @@ class SaltPeer:
         self.parser = Parser(kvy=self.mux.kvy, rvy=self.mux.rvy, rgy=self.rever,
                              exc=self.exc, version=Vrsn_2_0, local=False)
         loadHandlers(self.exc, self.mux)
-        self.state = RegistrySaltState(wallet.custody)
-        self.service = RegistrySaltService(hby, rgy, wallet, wallet.custody,
-            self.state, self.parser, self.mux.rvy, exc=self.exc, mux=self.mux)
+        self.service = RegistrySaltService(hby, rgy, wallet.custody, self.mux.rvy)
         self.service.register()
         self.exc.addHandler(EssrReplyHandler(hby, self.member, self.parser, ROUTES))
 
@@ -91,22 +88,7 @@ class SaltPeer:
         self.mux.kvy.processEscrows()
         self.rever.processEscrows()
         self.exc.processEscrow()
-        self.service.process()
-
-    def trust(self, path):
-        """Validate an explicit operator roster file against accepted local history.
-
-        path names a JSON object mapping logical AID to ordered member-AID list.
-        This is local configuration, never a membership assertion from the wire.
-        Returns None; invalid input/history raises before any local approval.
-        """
-        if path is None:
-            return
-        rosters = json.loads(Path(path).read_text())
-        if not isinstance(rosters, dict):
-            raise ConfigurationError('--rosters requires a logical-AID to ordered-member-list map')
-        for party, members in rosters.items():
-            self.service.trustRoster(party, members)
+        self.mux.rvy.processEscrowReply()
 
 
 def command(args):
@@ -127,68 +109,45 @@ class SaltDoer(doing.DoDoer):
         if any(getattr(self.args, name) is None for name in names):
             raise ConfigurationError('registry-salt operation is missing required named arguments: ' + ', '.join(names))
 
-    def _body(self, peer):
-        """Select one explicit service action and its exact unsigned body.
+    def _reply(self, peer):
+        """Sign the operator-selected reply or explicitly approve its retained proposal.
 
-        peer supplies authenticated domain state. Returns (body, proposal SAID).
-        This operator path is consent; network intake never invokes it.
+        Group signatures travel in ordinary multisig/rpy wrappers. There is no
+        assignment event, salt activation record, or application delivery state.
         """
         args, service = self.args, peer.service
-        match args.operation:
-            case 'init':
-                self._require('issuer', 'discloser')
-                body = service.prepareInit(issuer=args.issuer, discloser=args.discloser,
-                    party=peer.hab.pre, representative=peer.member.pre)
-            case 'bind':
-                self._require('init', 'registry')
-                body = service.prepareBind(args.init, args.registry, peer.member.pre)
-            case 'confirm':
-                self._require('init', 'bind')
-                body = service.prepareConfirm(args.init, args.bind)
-            case 'assign':
-                self._require('origin', 'party')
-                body = service.prepareAssign(args.origin, args.party)
-            case 'resume':
-                self._require('init')
-                body = service.resume(args.init, peer.member.pre)
-            case 'approve':
-                self._require('proposal')
-                body = service.inspectProposal(args.proposal)
-            case _:
-                raise ConfigurationError('registry-salt operation does not author a reply')
-        if body.pre != peer.hab.pre:
-            raise ConfigurationError('registry-salt reply belongs to a different logical alias')
-        return body, args.proposal if args.operation == 'approve' else None
+        if args.operation == 'approve':
+            self._require('proposal')
+            child = replyProposal(peer.hby, peer.exc, peer.mux, args.proposal,
+                                  ghab=peer.hab, validate=service.validate)
+            return endorseReply(peer.hby, peer.hab, child, validate=service.validate)
+        self._require('registry', 'party')
+        body = service.makeReply(peer.hab, args.registry, args.party, target=args.target)
+        stream = peer.hab.endorse(body, gvrsn=Vrsn_2_0)
+        if isinstance(peer.hab, GroupHab):
+            proposal, attachments = multisigRpyExn(peer.hab, stream,
+                version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+            return stream, proposal, attachments
+        return stream, None, None
 
-    def _fanout(self, peer, outbound):
-        """Return supervised member attempts and the number of unavailable routes."""
-        if outbound.proposal is None:
-            return [], 0
-        children, unavailable = [], 0
-        roster = peer.service.roster(peer.hab.pre)
-        for member in roster.members:
-            if member.aid == peer.member.pre:
-                continue
-            try:
-                poster = StreamPoster(hby=peer.hby, hab=peer.member, recp=member.aid,
+    def _fanout(self, peer, proposal, attachments):
+        """Schedule ordinary finite member submissions under this command's owner."""
+        children = []
+        if proposal is not None:
+            for member in peer.hab.smids:
+                if member == peer.member.pre:
+                    continue
+                poster = StreamPoster(hby=peer.hby, hab=peer.member, recp=member,
                                       topic='multisig', version=Vrsn_2_0)
-                poster.send(outbound.proposal, attachment=outbound.attachments, gvrsn=Vrsn_2_0)
-                pending = poster.deliver()
-            except (ConfigurationError, MissingEntryError, ValidationError):
-                unavailable += 1
-                continue
-            if pending:
-                children.append(SaltTransportAttempt(pending, self.args.timeout))
-            else:
-                unavailable += 1
-        return children, unavailable
+                poster.send(proposal, attachment=attachments, gvrsn=Vrsn_2_0)
+                children.extend(poster.deliver() or [])
+        return children
 
     def run(self, tymth, tock=0.0, **kwa):
         """Run the explicit action and release scheduled children before store closure.
 
-        HIO supplies tymth/tock/kwa. Wait for quorum and bounded group delivery,
-        allowing one healthy submission before cancelling optional peers. An
-        authenticated proof remains successful when dissemination is pending.
+        HIO supplies tymth/tock/kwa. Ordinary reply escrows collect the group
+        signatures while the command owns finite member transport children.
         Output never infers remote custody from transport completion.
         """
         self.wind(tymth)
@@ -212,98 +171,75 @@ class SaltDoer(doing.DoDoer):
             activity.callback(self.remove, children)
             for path in args.evidence:
                 peer.ingest(Path(path).read_bytes())
-            peer.trust(args.rosters)
-            if args.input and args.operation != 'archive':
+            if args.input:
                 peer.ingest(Path(args.input).read_bytes())
             if args.operation == 'serve':
                 yield from self.serve(peer, activity)
                 return
             if args.operation == 'status':
                 self._require('registry')
-                origin = peer.state.origin(args.registry)
                 print(json.dumps(dict(registry=args.registry,
-                    origin=asdict(origin) if origin else None,
-                    custody_present=wallet.db.custody.get((args.registry,)) is not None,
-                    deliveries=[asdict(row) for _, row in wallet.db.saltDeliveries.getTopItemIter()
-                                if row.registry == args.registry])))
+                    custody_present=wallet.db.custody.get((args.registry,)) is not None)))
                 return
-            if args.operation == 'archive':
+            if args.operation == 'receive':
                 self._require('input')
-                body = peer.service.importProof(Path(args.input).read_bytes())
-                print(json.dumps(dict(said=body.said, archived=True)))
+                print(json.dumps(dict(processed=True)))
                 return
-            if args.operation == 'import':
-                self._require('input')
-                print(json.dumps(dict(received=True)))
-                return
-            if args.operation == 'export':
-                self._require('said', 'output')
-                stream = peer.state.proof(args.said)
-                if stream is None:
-                    raise MissingEntryError('authenticated registry-salt proof is unavailable')
-                print(json.dumps(dict(said=args.said, output=args.output, sha256=write(args.output, stream))))
-                return
-            body, proposal = self._body(peer)
-            outbound = peer.service.approveReply(body, proposal=proposal)
+            if not (args.output or args.endpoint or args.proposal_output):
+                raise ConfigurationError('send/approve requires --output, --endpoint or --proposal-output')
+            stream, proposal, attachments = self._reply(peer)
+            body = Parser(version=Vrsn_2_0).parseOne(ims=bytearray(stream), processive=False).serder
+            peer.ingest(stream)
+            if proposal is not None:
+                peer.ingest(proposal.raw + attachments)
             if args.proposal_output:
-                if outbound.proposal is None:
+                if proposal is None:
                     raise ConfigurationError('--proposal-output requires a group alias')
-                write(args.proposal_output, outbound.proposal.raw + outbound.attachments)
-                print(json.dumps(dict(said=body.said, proposal=outbound.proposal.said,
-                                      pending=peer.state.proof(body.said) is None)))
+                write(args.proposal_output, proposal.raw + attachments)
+                print(json.dumps(dict(said=body.said, proposal=proposal.said)))
                 return
-            deliveries, unavailable = self._fanout(peer, outbound)
+            deliveries = self._fanout(peer, proposal, attachments)
             self.extend(deliveries)
             activity.callback(self.remove, deliveries)
             deadline = self.tyme + args.timeout
             while True:
                 peer.process()
-                authenticated = peer.state.proof(body.said) is not None
-                delivered = any(child.done and child.error is None for child in deliveries)
-                if authenticated and (delivered or all(child.done for child in deliveries)):
+                # Read normal Revery signature storage, then use its ordinary
+                # threshold verification. A stored body alone may still be escrowed.
+                diger = Diger(qb64=body.said)
+                tsgs = list(fetchTsgs(db=hby.db.tsgs, diger=diger))
+                cigars = []
+                for verfer, cigar in hby.db.scgs.get(keys=(body.said,)):
+                    cigar.verfer = verfer
+                    cigars.append(cigar)
+                if peer.mux.rvy.acceptReply(serder=body, saider=diger,
+                        route=body.route, aid=body.pre, tsgs=tsgs, cigars=cigars):
+                    stream = messagize(body, tsgs=tsgs or None, cigars=cigars or None,
+                                       gvrsn=Vrsn_2_0)
                     break
                 if self.tyme >= deadline:
-                    if not authenticated:
-                        raise TimeoutError('registry-salt reply is pending exact group approval')
-                    break
+                    raise TimeoutError('registry salt reply awaits the group signing threshold')
                 yield self.tock
-            stream = peer.state.proof(body.said)
             if args.output:
                 write(args.output, stream)
-            transport = None
             if args.endpoint:
-                # Quorum or witness work can outlive the original signed body's
-                # applicable KRAM window. Never silently refresh its DH transcript.
-                peer.service.checkLive(body)
-                transport = yield from cesr_sending.send(self, args.endpoint, stream, args.timeout)
-            print(json.dumps(dict(said=body.said, route=body.route, authenticated=True,
-                submitted=transport is not None, dissemination_pending=bool(unavailable or
-                    any(not child.done or child.error is not None for child in deliveries)))))
+                yield from cesr_sending.send(self, args.endpoint, stream, args.timeout)
+            print(json.dumps(dict(said=body.said, submitted=bool(args.endpoint))))
 
     def serve(self, peer, activity):
-        """Run HTTP intake and the durable worker under the command's one scheduler.
+        """Run HTTP intake and ordinary protocol escrows under the command's one scheduler.
 
         peer supplies the shared Parser/Revery and source party; activity owns
         cleanup callbacks. No received request triggers logical-party approval.
         """
-        from ...app.registry_salt_delivery import RegistrySaltDelivery
-
-        peer.service.reconcileKnown(peer.hab.pre)
-        establishment = peer.hab.kever.lastEst.d
         app = falcon.App()
         intake = Intake(peer)
         app.add_route('/', intake)
         app.add_route('/ingest', intake)
         server = createHttpServer(self.args.host, self.args.port, app)
-        owners = [http.ServerDoer(server=server),
-                  RegistrySaltDelivery(peer.service, source=peer.hab.pre)]
+        owners = [http.ServerDoer(server=server)]
         self.extend(owners)
         activity.callback(self.remove, owners)
         while True:
             peer.process()
-            if peer.hab.kever.lastEst.d != establishment:
-                # KEL acceptance owns membership changes. Only afterwards may
-                # existing entitlements queue the same root for new members.
-                peer.service.reconcileKnown(peer.hab.pre)
-                establishment = peer.hab.kever.lastEst.d
             yield self.tock

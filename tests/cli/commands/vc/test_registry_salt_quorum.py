@@ -1,17 +1,12 @@
-"""Authenticated group replies survive an unavailable nonapproving third member."""
+"""Finite group reply submission does not impose an all-members-online barrier."""
 from contextlib import contextmanager
-import json
 import socket
-from types import SimpleNamespace
-
 import pytest
-from hio.base import doing
-
 from keri import Vrsn_2_0
-from keri.cli.common import registry_salts
-from keri.kering import Kinds, Roles
+from keri.kering import ConfigurationError, Kinds, Roles
 from tests.app.test_acdc_v2_groups import groupNetwork
-from tests.app.test_registry_salt_service import groupServiceNetwork
+from tests.app.test_registry_salt_direct import groupServiceNetwork
+from tests.cli.commands.multisig.test_join_registry_salt import proposal
 from tests.cli.commands.multisig.test_join_v2 import joining, drive
 
 
@@ -42,108 +37,35 @@ def thirdMember(case, mode):
                 # EOF, rather than timeout, proves cancellation closed the child.
 
 
-def initialProposal(case):
-    """Retain one real representative contribution on the independent cosigner."""
-    leader = case.services[0]
-    body = leader.prepareInit(issuer=case.groups[0].pre, discloser=case.discloser.pre,
-        party=case.groups[0].pre, representative=case.groups[0].mhab.pre)
-    outbound = leader.approveReply(body)
-    case.owners[1].receive(outbound.proposal.raw + outbound.attachments)
-    return body, outbound.proposal.said
+
+@pytest.mark.parametrize('mode', ['missing', 'stalled'])
+def test_join_returns_signature_without_waiting_for_third(groupServiceNetwork, unused_tcp_port_factory, mode):
+    """The actual proposer receives quorum; optional stalled HTTP is closed on return."""
+    case = groupServiceNetwork
+    first = (case.members[0], *(items[:1] for items in case.members[1:]))
+    with groupNetwork(first, unused_tcp_port_factory) as (until, endpoints), \
+         thirdMember(case, mode), joining(case.members) as (command, clock):
+        command.rvy, command.saltService = case.services[1].rvy, case.services[1]
+        command.group = case.groups[1].name
+        body, wrapper = proposal(case)
+        result = drive(command, clock, command.rpy(dict(r=wrapper.route, d=wrapper.said)), until)
+        assert result is True and endpoints[0].requests == 1
+        case.services[0].rvy.processEscrowReply()
+        assert case.hbys[0].db.rpys.get((body.said,)).raw == body.raw
+        assert case.hbys[1].db.rpys.get((body.said,)).raw == body.raw
+        assert case.hbys[2].db.rpys.get((body.said,)) is None
+        assert not command.doers
 
 
-@pytest.mark.parametrize('mode', ['missing', 'stalled', 'all-stalled'])
-def test_join_salt_quorum_cancels_unavailable_third(tmp_path, unused_tcp_port_factory, capsys, mode):
-    """Deliver to the healthy representative, then close an optional stalled child."""
-    with groupServiceNetwork(tmp_path) as case:
-        count = 0 if mode == 'all-stalled' else 1
-        first = (case.members[0], *(items[:count] for items in case.members[1:]))
-        with groupNetwork(first, unused_tcp_port_factory) as (until, endpoints), \
-             thirdMember(case, mode), joining(case.members) as (command, clock):
-            command.rvy = case.services[1].rvy
-            command.saltService = case.services[1]
-            if mode == 'all-stalled':
-                command.timeout = 0.2
-            body, proposal = initialProposal(case)
-            assert not command.saltService.state.proof(body.said)
-            result = drive(command, clock, command.rpy(dict(r='/multisig/rpy', d=proposal)), until)
-            assert result is True
-            if endpoints:
-                assert endpoints[0].requests == 1
-            assert 'Dissemination to some members remains pending' in capsys.readouterr().out
-            assert bool(case.services[0].state.proof(body.said)) is (mode != 'all-stalled')
-            assert case.services[1].state.proof(body.said)
-            assert case.services[2].state.proof(body.said) is None
-            assert not command.deeds
-
-
-@pytest.mark.parametrize('mode', ['missing', 'stalled', 'all-stalled'])
-def test_salt_command_quorum_cancels_unavailable_third(tmp_path, unused_tcp_port_factory, monkeypatch, capsys, mode):
-    """The actual command composes its processors and exports the threshold proof."""
-    with groupServiceNetwork(tmp_path) as case:
-        count = 0 if mode == 'all-stalled' else 1
-        first = (case.members[0], *(items[:count] for items in case.members[1:]))
-        with groupNetwork(first, unused_tcp_port_factory) as (until, endpoints), thirdMember(case, mode):
-            body, proposal = initialProposal(case)
-            service = case.services[1]
-
-            @contextmanager
-            def borrowed(args, custody):
-                """Borrow real encrypted fixture stores; their existing owner closes them."""
-                yield service.hby, service.rgy, service.wallet
-
-            monkeypatch.setattr(registry_salts.acdc_v2, 'opened', borrowed)
-            output = tmp_path / 'authenticated.cesr'
-            args = SimpleNamespace(operation='approve', alias='group', timeout=0.2 if mode == 'all-stalled' else 1.0,
-                evidence=[], rosters=None, input=None, output=str(output),
-                proposal=proposal, proposal_output=None, endpoint=None)
-            command = registry_salts.SaltDoer(args)
-            runner = doing.Doist(tock=0.01, real=False, doers=[command])
-            runner.enter()
-            try:
-                def complete():
-                    runner.recur()
-                    return command.done
-                until(complete)
-            finally:
-                runner.exit()
-            if endpoints:
-                assert endpoints[0].requests == 1
-            result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
-            assert result['authenticated'] and result['dissemination_pending']
-            assert output.read_bytes() == service.state.proof(body.said)
-            assert bool(case.services[0].state.proof(body.said)) is (mode != 'all-stalled')
-            assert case.services[2].state.proof(body.said) is None
-            assert not command.deeds
-
-
-def test_salt_command_submission_without_quorum_remains_pending(tmp_path, unused_tcp_port_factory, monkeypatch):
-    """A healthy HTTP submission cannot replace the missing second approval."""
-    with groupServiceNetwork(tmp_path) as case:
-        first = (case.members[0], *(items[:1] for items in case.members[1:]))
-        with groupNetwork(first, unused_tcp_port_factory) as (until, endpoints):
-            service = case.services[1]
-
-            @contextmanager
-            def borrowed(args, custody):
-                """Borrow the independent member's actual encrypted stores."""
-                yield service.hby, service.rgy, service.wallet
-
-            monkeypatch.setattr(registry_salts.acdc_v2, 'opened', borrowed)
-            output = tmp_path / 'unapproved.cesr'
-            args = SimpleNamespace(operation='init', alias='group', timeout=0.2,
-                issuer=case.groups[0].pre, discloser=case.discloser.pre,
-                evidence=[], rosters=None, input=None, output=str(output),
-                proposal=None, proposal_output=None, endpoint=None)
-            command = registry_salts.SaltDoer(args)
-            runner = doing.Doist(tock=0.01, real=False, doers=[command])
-            runner.enter()
-            try:
-                with pytest.raises(TimeoutError, match='pending exact group approval'):
-                    until(lambda: (runner.recur(), command.done)[1])
-            finally:
-                runner.exit()
-            assert endpoints[0].requests == 1
-            assert not output.exists()
-            assert service.state.db.saltProofs.cnt() == 0
-            assert not command.deeds
+def test_missing_proposer_route_is_explicit_submission_failure(groupServiceNetwork):
+    """Local approval is retained, but no route must not be reported as delivery."""
+    case = groupServiceNetwork
+    with joining(case.members) as (command, clock):
+        command.rvy, command.saltService = case.services[1].rvy, case.services[1]
+        command.group = case.groups[1].name
+        body, wrapper = proposal(case)
+        with pytest.raises(ConfigurationError, match='proposer has no delivery route'):
+            next(command.rpy(dict(r=wrapper.route, d=wrapper.said)))
+        assert case.hbys[1].db.rpys.get((body.said,)).raw == body.raw
+        assert case.hbys[0].db.rpys.get((body.said,)) is None
+        assert not command.doers

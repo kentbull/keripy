@@ -17,7 +17,7 @@ from ...app.credentialing import Wallet
 from ...app.registry_custody import RegistryCustody
 from ...app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from ...core import (Blinder, Codens, Counter, Number, Prefixer, SealEvent,
-                     SealSource, SerderACDC, messagize)
+                     SealSource, SerderACDC, Parser, Salter, messagize)
 from ...kering import AuthError, ConfigurationError, Vrsn_2_0
 from ...peer import Exchanger
 
@@ -208,6 +208,7 @@ class AcdcV2Author(doing.DoDoer):
         self.args, self.operation = args, operation
         self.auths = {}
         self.group = self.proposedEvent = self.proposedAnchor = self.proposedBlinder = None
+        self.proposedSalts = None
         self.blinder = None
         self.publishOpening = False
         super().__init__(doers=[doing.doify(self.run)])
@@ -227,7 +228,8 @@ class AcdcV2Author(doing.DoDoer):
             if accepted is not None and accepted.said == event.said:
                 return
             wrapper, attachments = self.group.approveRegistry(
-                event, self.proposedAnchor, opening=self.blinder if self.publishOpening else None)
+                event, self.proposedAnchor, opening=self.blinder if self.publishOpening else None,
+                salts=self.proposedSalts)
             if self.args.proposal_output:
                 # The file contains public KELs and a member-signed proposal,
                 # never the registry custody salt or encrypted custody record.
@@ -454,6 +456,14 @@ class AcdcV2Author(doing.DoDoer):
                 if args.proposal:
                     (self.proposedEvent, self.proposedAnchor,
                      self.proposedBlinder) = self.group.registryProposal(Path(args.proposal).read_bytes())
+                    # The authenticated EXN retains encrypted member copies separately
+                    # from the optional public event opening returned above.
+                    proposals = Parser(version=Vrsn_2_0).parse(
+                        ims=bytearray(Path(args.proposal).read_bytes()), processive=False)
+                    wrapper = next(item.serder for item in proposals
+                                   if item.serder.ilk == 'exn' and item.serder.route in
+                                   ('/multisig/rip', '/multisig/bup'))
+                    self.proposedSalts = wrapper.sad['a'].get('salts')
                 if self.operation == 'incept':
                     if wantsCustody:
                         # Explicit provisioning authenticates before public mutation.
@@ -484,16 +494,41 @@ class AcdcV2Author(doing.DoDoer):
                     event = reg.store.event(reg.regk)
                     if self.proposedEvent is not None and self.proposedEvent.said != event.said:
                         raise ConfigurationError('group proposal is for a different registry inception')
+                    if self.group is not None and wantsCustody:
+                        if args.discloser and args.discloser != hab.pre:
+                            raise ConfigurationError('group custody belongs to the issuer; send an encrypted reply to a discloser after inception')
+                        if self.proposedEvent is not None and self.proposedSalts is None:
+                            raise ConfigurationError('the proposed inception has no encrypted salt; approve without --with-custody')
+                        if self.proposedSalts is None:
+                            # Recover ciphertext from ordinary retained proposals for
+                            # this pending anchor, never from a separate salt journal.
+                            pending = hby.db.pses.getLast(keys=hab.pre, on=hab.kever.sn + 1)
+                            anchor = hby.db.evts.get((hab.pre, pending)) if pending else None
+                            accepted_anchor = reg.store.anchor(event.said)
+                            if anchor is None and accepted_anchor is not None:
+                                anchor = hby.db.evts.get((hab.pre, accepted_anchor[1].qb64))
+                            if anchor is not None:
+                                for said in hby.db.meids.get((anchor.said,)):
+                                    proposal = hby.db.exns.get((said.qb64,))
+                                    if (proposal is not None and proposal.pre == hab.mhab.pre
+                                            and proposal.sad['a'].get('tel') == event.said
+                                            and proposal.sad['a'].get('salts')):
+                                        self.proposedSalts = proposal.sad['a']['salts']
+                                        break
+                            if self.proposedSalts is None:
+                                root = (Salter(qb64=wallet.custody._load(reg.regk).salt)
+                                        if wallet.db.custody.get((reg.regk,)) else Salter())
+                                self.proposedSalts = wallet.custody.sealMembers(hab, root)
+                        # Fail before signing if this member cannot open its copy.
+                        wallet.custody.openRoot(self.proposedSalts[hab.mhab.pre], hab.mhab.kever.verfers[0])
                     yield from self.anchor(hby, reg, event, receiptor)
                     if not wantsCustody:
                         print(json.dumps(dict(registry=reg.regk, name=name, controller=hab.pre,
                                               accepted=True, custody='not requested')))
                         return
-                    if self.proposedEvent is not None and wallet.db.custody.get((reg.regk,)) is None:
-                        print(json.dumps(dict(registry=reg.regk, name=name, controller=hab.pre,
-                            accepted=True, custody='requires explicit protected import')))
-                        return
-                    info = wallet.custody.createCustody(reg.regk, args.discloser or hab.pre)
+                    info = (wallet.custody.retainMemberCopy(reg.regk, hab, self.proposedSalts)
+                            if self.group is not None else
+                            wallet.custody.createCustody(reg.regk, args.discloser or hab.pre))
                     print(json.dumps(dict(registry=reg.regk, name=name, controller=hab.pre,
                                           discloser=info.discloser, accepted=True)))
                     return
@@ -552,17 +587,17 @@ class AcdcV2Author(doing.DoDoer):
 
 
 def read(args, operation):
-    """Return scheduled ACDC v2 inventory/evidence reads or explicit handoff work.
+    """Return scheduled ACDC v2 inventory and evidence reads.
 
     args carries identity, filters, registry, file, and capability options;
-    operation chooses registries/status/inventory/export/import. Return a list of
+    operation chooses registries/status/inventory/export. Return a list of
     hio-compatible generator functions. Ordinary listing never enables custody;
-    explicit custody import/export or --derive may do so. --full selects public
+    only explicit --derive enables it. --full selects public
     evidence plus the historical issuance proof, never permission to load salts.
     The worker prints results or writes an exclusive destination, propagating
     invalid option, authentication, proof, and file errors with store cleanup."""
     def run(tymth, tock=0.0, **kwa):
-        """Execute one selected read/handoff after the scheduler's initial yield.
+        """Execute one selected read after the scheduler's initial yield.
 
         tymth/tock/kwa follow hio's generator contract; args and operation come from
         the enclosing read adapter. Print JSON inventory/evidence results or write the
@@ -571,9 +606,8 @@ def read(args, operation):
         wallet, registry, and identity owners even when the operation fails."""
         yield tock
         # Plain inventory/status never composes derivation capability; only
-        # the explicit handoff/export operations below may request it.
-        with opened(args, custody=(operation == 'import' or operation == 'export'
-                    and (args.custody or args.derive))) as (hby, rgy, wallet):
+        # explicit derivation during credential export may request it.
+        with opened(args, custody=(operation == 'export' and args.derive)) as (hby, rgy, wallet):
             if operation == 'registries':
                 for name, reg in rgy.names.items():
                     head = reg.store.headEvent(reg.regk)
@@ -620,48 +654,40 @@ def read(args, operation):
                 if hab is None:
                     raise ConfigurationError('unknown ACDC v2 export alias')
                 reg = registry(rgy, args.registry_name, hab)
-                if args.custody:
-                    path = wallet.custody.exportCustody(reg.regk, args.output)
-                    print(json.dumps(dict(registry=reg.regk, custody_file=str(path))))
-                else:
-                    record = wallet.db.issued.get((args.said,))
-                    if record is None or record.registry != reg.regk:
-                        raise ConfigurationError('ACDC v2 export requires an issued inventory credential')
-                    acdc = wallet.issuedCredential(record.credential)
-                    if args.chains or (args.full and acdc.sad.get('e')):
-                        raise ConfigurationError('ACDC v2 chained evidence must be exported from its accepted IPEX disclosure')
-                    # Authenticate the exact historical opening before constructing
-                    # output. A salt-derived Blinder is only a candidate until vet.
-                    origin = (issuanceOrigin(wallet, acdc, record,
-                              opening=loadOpening(args.opening) if args.opening else None)
-                              if args.full else None)
-                    stream = bytearray()
-                    if args.kels or args.full:
-                        for msg in hby.db.clonePreIter(pre=record.controller, version=Vrsn_2_0):
-                            stream.extend(msg)
-                    if args.full and record.bound and acdc.iseaid != record.controller:
-                        for msg in hby.db.clonePreIter(pre=acdc.iseaid, version=Vrsn_2_0):
-                            stream.extend(msg)
-                    if args.tels or args.full:
-                        for raw in reg.store.cloneTelIter(reg.regk):
-                            event = SerderACDC(raw=raw)
-                            number, diger = reg.store.anchor(event.said)
-                            bonds = [SealSource(s=number.numh, d=diger.qb64)]
-                            # Public bup is public because every publication carries
-                            # its exact expanded opening. The wallet retains that
-                            # event evidence across restarts without retaining registry
-                            # custody or synthesizing an opening during export.
-                            if (opening := wallet.publicOpening(event)) is not None:
-                                bonds.insert(0, opening.data)
-                            stream.extend(messagize(event, bonds=bonds, gvrsn=Vrsn_2_0))
-                    if args.full:
-                        stream.extend(origin)
-                    elif not (args.tels or args.kels):
-                        stream.extend(acdc.raw)
-                    with Path(args.output).open('xb') as output:
-                        output.write(stream)
-            elif operation == 'import':
-                wallet.custody.importCustody(args.file, regid=args.registry, controller=args.controller,
-                                            discloser=args.discloser, rewrap=args.rewrap)
-                print(json.dumps(dict(registry=args.registry, custody_imported=True)))
+                record = wallet.db.issued.get((args.said,))
+                if record is None or record.registry != reg.regk:
+                    raise ConfigurationError('ACDC v2 export requires an issued inventory credential')
+                acdc = wallet.issuedCredential(record.credential)
+                if args.chains or (args.full and acdc.sad.get('e')):
+                    raise ConfigurationError('ACDC v2 chained evidence must be exported from its accepted IPEX disclosure')
+                # Authenticate the exact historical opening before constructing
+                # output. A salt-derived Blinder is only a candidate until vet.
+                origin = (issuanceOrigin(wallet, acdc, record,
+                          opening=loadOpening(args.opening) if args.opening else None)
+                          if args.full else None)
+                stream = bytearray()
+                if args.kels or args.full:
+                    for msg in hby.db.clonePreIter(pre=record.controller, version=Vrsn_2_0):
+                        stream.extend(msg)
+                if args.full and record.bound and acdc.iseaid != record.controller:
+                    for msg in hby.db.clonePreIter(pre=acdc.iseaid, version=Vrsn_2_0):
+                        stream.extend(msg)
+                if args.tels or args.full:
+                    for raw in reg.store.cloneTelIter(reg.regk):
+                        event = SerderACDC(raw=raw)
+                        number, diger = reg.store.anchor(event.said)
+                        bonds = [SealSource(s=number.numh, d=diger.qb64)]
+                        # Public bup is public because every publication carries
+                        # its exact expanded opening. The wallet retains that
+                        # event evidence across restarts without retaining registry
+                        # custody or synthesizing an opening during export.
+                        if (opening := wallet.publicOpening(event)) is not None:
+                            bonds.insert(0, opening.data)
+                        stream.extend(messagize(event, bonds=bonds, gvrsn=Vrsn_2_0))
+                if args.full:
+                    stream.extend(origin)
+                elif not (args.tels or args.kels):
+                    stream.extend(acdc.raw)
+                with Path(args.output).open('xb') as output:
+                    output.write(stream)
     return [doing.doify(run)]

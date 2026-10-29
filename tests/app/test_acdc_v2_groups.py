@@ -8,7 +8,7 @@ from keri.acdc import Regery, acdcmap, grant, loadHandlers
 from keri.acdc.messaging import blindate, regcept
 from keri.app import openHby
 from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
-from keri.core import Blinder, Diger, Number, Parser, messagize
+from keri.core import Blinder, Diger, Number, Parser, messagize, eventing
 from keri.kering import Kinds, ValidationError, MissingSchemaError
 from keri.peer import Exchanger
 
@@ -957,3 +957,24 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
         assert not output.exists()
     finally:
         wallet.close()
+
+
+def memberAids(groups):
+    """Return the fixture's explicit trusted local member order."""
+    return [group.mhab.pre for group in groups]
+
+
+def rotateMembers(hbys, groups):
+    """Accept each member's independent rotation in every peer's local KEL."""
+    messages = [group.mhab.rotate(version=Vrsn_2_0, gvrsn=Vrsn_2_0) for group in groups]
+    for hby in hbys:
+        for message in messages:
+            Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(ims=bytearray(message), local=True)
+
+
+def groupRotation(hby, group, smids):
+    """Build a group rotation using supplied trusted member order and new keys."""
+    return eventing.rotate(pre=group.pre, sn=group.kever.sn + 1,
+        dig=group.kever.serder.said, isith='2', nsith='2',
+        keys=[hby.kevers[aid].verfers[0].qb64 for aid in smids],
+        ndigs=[hby.kevers[aid].ndigers[0].qb64 for aid in smids], version=Vrsn_2_0)

@@ -3,7 +3,6 @@
 import pytest
 
 from keri import Vrsn_1_0, Vrsn_2_0
-from keri.app.group_members import acceptedRoster
 from keri.cli.commands.multisig.rotate import GroupMultisigRotate
 from keri.core import SerderKERI, eventing
 from keri.kering import Kinds, ValidationError
@@ -23,7 +22,6 @@ def test_local_author_membership_replacement_survives_reopen(tmp_path, version, 
             allowPartiallySigned=True, gvrsn=version))
         hby.kvy.processEvent(serder=inception, sigers=[
             people[index].sign(inception.raw, indices=[index])[0] for index in (0, 1)])
-        old = acceptedRoster(hby, group.pre, original)
         for person in people[:2]:
             person.rotate(version=version, gvrsn=version)
         proposed = [people[1].pre, people[0].pre, people[3].pre]
@@ -59,9 +57,6 @@ def test_local_author_membership_replacement_survives_reopen(tmp_path, version, 
         assert group.smids == proposed and group.rmids == rotating
         record = hby.db.habs.get((group.pre,))
         assert record.smids == proposed and record.rmids == rotating
-        assert acceptedRoster(hby, group.pre, original) == old
-        with pytest.raises(ValidationError):
-            acceptedRoster(hby, group.pre, proposed)
         # Both retained members change signing index relative to the prior next-key list.
         first = hby.db.sigs.get((group.pre, rotation.said))[0]
         second = people[1].sign(rotation.raw, indices=[0], ondices=[1])[0]
@@ -69,14 +64,12 @@ def test_local_author_membership_replacement_survives_reopen(tmp_path, version, 
         assert (second.index, second.ondex) == (0, 1)
         hby.kvy.processEvent(serder=rotation, sigers=[first, second])
         assert group.kever.lastEst.d == rotation.said
-        assert [member.aid for member in acceptedRoster(hby, group.pre, proposed).members] == proposed
         pre = group.pre
     with openPersistentHabery(tmp_path) as reopened:
         loaded = reopened.habByName('group')
         assert loaded.pre == pre and loaded.kever.lastEst.d == rotation.said
         assert loaded.smids == proposed and loaded.rmids == rotating
         assert loaded.mhab.pre == people[0].pre
-        assert [member.aid for member in acceptedRoster(reopened, pre, loaded.smids).members] == proposed
 
 
 @pytest.mark.parametrize('version', [Vrsn_1_0, Vrsn_2_0])

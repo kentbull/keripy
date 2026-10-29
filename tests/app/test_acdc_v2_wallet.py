@@ -15,7 +15,7 @@ from keri.app.credentialing import Wallet, WalletBaser
 from keri.app.registry_custody import RegistryCustody
 from keri.app.configing import Configer
 from keri.app.habbing import openHby
-from keri.core import Kevery, Parser, Signer, Number, Diger, Compactor, Noncer, Blinder, messagize
+from keri.core import Encrypter, Kevery, Parser, Signer, Number, Diger, Compactor, Noncer, Blinder, messagize
 from keri.kering import AuthError, ConfigurationError, ValidationError, MissingSchemaError
 from keri.peer.exchanging import Exchanger, loadParsedNestedSubstreams
 
@@ -179,13 +179,11 @@ def test_encrypted_custody_future_derivation_after_reopen(tmp_path, capsys):
     assert case.salt not in captured.out + captured.err
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
-def test_protected_custody_handoff_and_explicit_rewrap_after_reopen(tmp_path, capsys):
-    """Enforce protected transfer, imported derivation continuity and explicit old-AEID rewrap."""
+def test_encrypted_custody_handoff_and_keeper_binding_after_reopen(tmp_path, capsys):
+    """Preserve encrypted transfer and derivation across reopen; changed Keepers fail closed."""
     case = _custody_issuance_case(tmp_path)
     issuerKey, holderKey, issuerInfo = case.issuerKey, case.holderKey, case.issuerInfo
     opening, update = case.opening, case.update
-    export = tmp_path / 'private-custody.json'
     with (encrypted('custody-issuer', tmp_path, issuerKey) as issuer,
           encrypted('custody-holder', tmp_path, holderKey) as holder):
         ihab, hhab = issuer.habByPre(case.controller), holder.habByPre(case.discloser)
@@ -195,20 +193,16 @@ def test_protected_custody_handoff_and_explicit_rewrap_after_reopen(tmp_path, ca
         iwallet.custody = RegistryCustody(issuer, irgy, db=iwallet.db)
         hwallet.custody = RegistryCustody(holder, hrgy, db=hwallet.db)
         try:
-            assert iwallet.custody.exportCustody(case.regid, export) == export
-            assert export.stat().st_mode & 0o777 == 0o600
-            salt = json.loads(export.read_text())['salt']
-            holderInfo = hwallet.custody.importCustody(export, regid=case.regid,
-                                               controller=ihab.pre, discloser=hhab.pre)
-            assert holderInfo == issuerInfo
+            verfer = hhab.kever.verfers[0]
+            cipher = iwallet.custody.sealRoot(case.regid, Encrypter(verkey=verfer.qb64))
+            root = hwallet.custody.openRoot(cipher, verfer)
+            salt = root.qb64
+            prepared = hwallet.custody.prepareRoot(issuerInfo, root)
+            with hwallet.db.env.begin(write=True) as txn:
+                hwallet.custody.retainPrepared(prepared, txn)
             assert hwallet.custody.derive(case.regid, 1, case.credential, 'issued').qb64 == opening.qb64
             future = iwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64
             assert hwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64 == future
-            issuerReplacement = Signer(transferable=False)
-            issuer.mgr.updateAeid(issuerReplacement.verfer.qb64, issuerReplacement.qb64)
-            assert iwallet.custody.importCustody(export, regid=case.regid, controller=ihab.pre,
-                                         discloser=hhab.pre, rewrap=True) == issuerInfo
-            assert iwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64 == future
             assert all(salt.encode() not in Path(baser.path, 'data.mdb').read_bytes()
                        for baser in (irgy.baser, hrgy.baser))
             regid, controller, discloser, credential = case.regid, ihab.pre, hhab.pre, case.credential
@@ -226,36 +220,10 @@ def test_protected_custody_handoff_and_explicit_rewrap_after_reopen(tmp_path, ca
             assert holder.habByPre(discloser)
             assert hrgy.store.head(regid).qb64 == update.said
             assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
-            assert wallet.custody.importCustody(export, regid=regid, controller=controller,
-                                        discloser=discloser) == holderInfo
-            with pytest.raises(ValidationError):
-                wallet.custody.importCustody(export, regid=regid, controller=discloser, discloser=discloser)
-            with pytest.raises(ValidationError):
-                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=controller)
-            export.chmod(0o644)
-            with pytest.raises(ValidationError, match='mode0600'):
-                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=discloser)
-            export.chmod(0o600)
-            link = tmp_path / 'link'
-            link.symlink_to(export)
-            with pytest.raises(OSError):
-                wallet.custody.importCustody(link, regid=regid, controller=controller, discloser=discloser)
-            with pytest.raises(FileExistsError):
-                wallet.custody.exportCustody(regid, export)
-            # Manager does not rewrap application records; identity mismatch is explicit and closed.
             replacement = Signer(transferable=False)
             holder.mgr.updateAeid(replacement.verfer.qb64, replacement.qb64)
             with pytest.raises(AuthError, match='AEID changed'):
                 wallet.custody.derive(regid, 18, credential, 'revoked')
-            with pytest.raises(AuthError, match='AEID changed'):
-                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=discloser)
-            assert wallet.custody.importCustody(export, regid=regid, controller=controller,
-                                         discloser=discloser, rewrap=True) == holderInfo
-            assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
-            assert wallet.db.custody.get((regid,)).aeid == replacement.verfer.qb64
-            wallet.db.close()
-            wallet.db.reopen()
-            assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
         finally:
             wallet.close()
             hrgy.close()

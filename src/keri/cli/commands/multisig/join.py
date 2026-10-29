@@ -25,10 +25,8 @@ from ....app import (GroupHab, HaberyDoer, MailboxDirector, WitnessInquisitor,
                      multisigRpyExn, multisigRegistryInceptExn, multisigIssueExn,
                      multisigRevokeExn)
 from ....app.grouping import loadHandlers, replyProposal, endorseReply
-from ....app.group_members import acceptedRoster
 from ....app.acdc_v2_grouping import RegistryApproval
 from ....app.forwarding import StreamPoster
-from ....app.registry_salt_delivery import SaltTransportAttempt
 from ....app.evidencing import ServiceConfig
 from ....acdc import Regery as NativeRegery
 from ....acdc.regeventing import Rever
@@ -53,7 +51,7 @@ parser.add_argument('--timeout', type=float, default=30.0,
 parser.add_argument('--version', default=None, required=False, type=parseVersion,
                     help='KERI protocol version for mailbox queries while joining, such as 1.0 or 2.0')
 parser.add_argument('--registry-salt', action='store_true',
-                    help='enable optional native registry-salt approval and durable member replication')
+                    help='enable optional encrypted registry-salt reply approval')
 
 def join(args):
     """ Wait for and provide interactive confirmation of group multisig inception, rotation or interaction events
@@ -104,8 +102,7 @@ class JoinDoer(doing.DoDoer):
         if registrySalt and not group:
             raise ConfigurationError('--registry-salt requires an explicit --group')
         self.registrySalt = registrySalt
-        self.saltWallet = self.saltService = self.saltWorker = None
-        self.saltEstablishment = None
+        self.saltWallet = self.saltService = None
         self.timeout = timeout
         self.group = group
         self.version = version
@@ -250,8 +247,7 @@ class JoinDoer(doing.DoDoer):
         """Compose optional salt work once the selected group is actually accepted.
 
         Existing join still owns KEL admission and one parser/mailbox lifecycle.
-        Local accepted member maps may refresh; remote maps must already have
-        been explicitly configured through the salt command. Return None. No
+        Current local GroupHab membership supplies recipient selection. No
         incoming request implies group approval or generates a private root.
         """
         hab = self.hby.habByName(self.group)
@@ -260,24 +256,15 @@ class JoinDoer(doing.DoDoer):
         if self.saltService is None:
             from ....app.credentialing import Wallet
             from ....app.registry_custody import RegistryCustody
-            from ....app.registry_salt_state import RegistrySaltState
             from ....app.registry_salt_service import RegistrySaltService, ROUTES
-            from ....app.registry_salt_delivery import RegistrySaltDelivery
             from ....app.essring import EssrReplyHandler
 
             self.saltWallet = Wallet(self.hby, self.rgyV2)
             custody = RegistryCustody(self.hby, self.rgyV2, db=self.saltWallet.db)
             self.saltWallet.custody = custody
-            self.saltService = RegistrySaltService(self.hby, self.rgyV2, self.saltWallet,
-                custody, RegistrySaltState(custody), self.psr, self.rvy, exc=self.exc, mux=self.mux)
+            self.saltService = RegistrySaltService(self.hby, self.rgyV2, custody, self.rvy)
             self.saltService.register()
             self.exc.addHandler(EssrReplyHandler(self.hby, hab.mhab, self.psr, ROUTES))
-            self.saltWorker = RegistrySaltDelivery(self.saltService, source=hab.pre)
-            self.extend([self.saltWorker])
-            self.toRemove.append(self.saltWorker)
-        if self.saltEstablishment != hab.kever.lastEst.d:
-            self.saltService.reconcileKnown(hab.pre)
-            self.saltEstablishment = hab.kever.lastEst.d
 
     def registryEscrowDo(self, tymth, tock=0.03125, **kwa):
         """Retry native TEL dependencies only while the join command is running."""
@@ -287,7 +274,7 @@ class JoinDoer(doing.DoDoer):
             if getattr(self, 'registrySalt', False):
                 self.enableRegistrySalt()
                 if self.saltService is not None:
-                    self.saltService.process()
+                    self.rvy.processEscrowReply()
             yield tock
 
     def registry(self, attrs):
@@ -316,6 +303,16 @@ class JoinDoer(doing.DoDoer):
             return None
 
         regid = event.said if event.ilk == Ilks.rip else event.sad['rd']
+        copies = wrapper.sad['a'].get('salts')
+        custody = None
+        if copies and ghab.mhab.pre in copies:
+            from ....app.credentialing import Wallet
+            from ....app.registry_custody import RegistryCustody
+            if self.saltWallet is None:
+                self.saltWallet = Wallet(self.hby, self.rgyV2)
+            custody = RegistryCustody(self.hby, self.rgyV2, db=self.saltWallet.db)
+            # Validate local decryption before human approval and KEL signing.
+            custody.openRoot(copies[ghab.mhab.pre], ghab.mhab.kever.verfers[0])
         print(f'\nGroup registry {event.ilk} proposed for {ghab.name} ({ghab.pre}):')
         print(f'    Registry: {regid}')
         print(f"    TEL event: {event.said} at ordinal {event.sad['n']}")
@@ -325,7 +322,8 @@ class JoinDoer(doing.DoDoer):
 
         # Borrow the existing group processors. Root custody and event openings
         # are not prerequisites for signing the exact proposed commitment.
-        proposed, attachments = approval.approve(event, anchor, opening=opening)
+        proposed, attachments = approval.approve(event, anchor, opening=opening,
+                                                   salts=wrapper.sad['a'].get('salts'))
         deliveries = []
         deadline = time.monotonic() + self.timeout
         try:
@@ -354,6 +352,8 @@ class JoinDoer(doing.DoDoer):
                 yield self.tock
         finally:
             self.remove(deliveries)
+        if custody is not None:
+            custody.retainMemberCopy(regid, ghab, copies)
         print(f'Registry event {event.said} accepted.')
         return True
 
@@ -860,7 +860,6 @@ class JoinDoer(doing.DoDoer):
             children = loadParsedNestedSubstreams(self.hby, wrapper.said)
             if len(children) == 1 and children[0].serder.route in ROUTES:
                 return (yield from self.rpySalt(wrapper.said))
-        roster = acceptedRoster(self.hby, hab.pre, hab.smids)
 
         def validateEndpoint(serder):
             """Validate the installed endpoint policy before prompt and before signing."""
@@ -879,7 +878,7 @@ class JoinDoer(doing.DoDoer):
 
         try:
             child = replyProposal(self.hby, self.exc, self.mux, wrapper.said,
-                ghab=hab, roster=roster, validate=validateEndpoint)
+                ghab=hab, validate=validateEndpoint)
         except ConfigurationError:
             print('Reply proposal pending: its domain approval policy is unavailable.')
             return None
@@ -891,20 +890,25 @@ class JoinDoer(doing.DoDoer):
         print(f'    Controller: {hab.name} ({cid})')
         print(f'    Role: {role.capitalize()}')
         print(f"    Endpoint Provider: {endpoint.get('alias', 'Unknown Endpoint')} ({eid})")
+        establishment = hab.kever.lastEst.d
         if not self.auto and input('\nApprove exact endpoint reply [Y|n]? ') not in ('', 'y', 'Y'):
             return False
 
+        # Approval applies to the signing establishment presented for review.
+        if hab.kever.lastEst.d != establishment:
+            raise ValidationError('group establishment changed during reply approval')
+
         signed, proposal, attachments = endorseReply(self.hby, hab, child,
-            roster=roster, validate=validateEndpoint)
+            validate=validateEndpoint)
         self.psr.parse(ims=bytearray(signed), local=True)
         self.psr.parse(ims=bytearray(proposal.raw + attachments), local=True)
         deliveries = []
         deadline = time.monotonic() + self.timeout
         try:
-            for member in roster.members:
-                if member.aid == hab.mhab.pre:
+            for member in hab.smids:
+                if member == hab.mhab.pre:
                     continue
-                poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member.aid,
+                poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member,
                                       topic='multisig', version=Vrsn_2_0)
                 poster.send(proposal, attachment=attachments, gvrsn=Vrsn_2_0)
                 children = poster.deliver()
@@ -930,64 +934,63 @@ class JoinDoer(doing.DoDoer):
         return True
 
     def rpySalt(self, said):
-        """Ask for explicit approval of one policy-checked native salt statement.
+        """Approve one encrypted salt reply through the existing group reply flow.
 
-        said names a retained member proposal. Return True after its exact
-        logical reply authenticates, False after refusal, or None while quorum
-        remains pending. Bounded fanout permits one healthy submission and
-        cancels optional remaining peers. Public metadata is shown; no private key/root is read
-        for display. The domain service owns all authority and consistency checks.
+        said identifies a retained multisig/rpy proposal. The member signs the
+        exact displayed reply and shares its contribution with current members.
+        Completion here means local approval and member submission, not recipient
+        custody or completed group signature collection.
         """
-        service = self.saltService
-        try:
-            body = service.inspectProposal(said)
-        except MissingEntryError:
-            print('Registry salt proposal pending: authenticated transcript or registry evidence is unavailable.')
-            return None
-        print(f'\nRegistry salt statement: {body.route}\n    Group: {body.pre}\n    SAID: {body.said}')
-        print(json.dumps(body.sad['a'], indent=2))
-        if not self.auto and input('\nApprove this exact registry salt statement [Y|n]? ') not in ('', 'y', 'Y'):
+        hab = self.hby.habByName(self.group)
+        child = replyProposal(self.hby, self.exc, self.mux, said,
+                              ghab=hab, validate=self.saltService.validate)
+        body = child.serder
+        print(f'\nRegistry salt reply: {body.said}\n    Group: {body.pre}')
+        for key in ('registry', 'recipient', 'target'):
+            print(f'    {key}: {body.sad["a"][key]}')
+        establishment = hab.kever.lastEst.d
+        if not self.auto and input('\nApprove this exact encrypted salt reply [Y|n]? ') not in ('', 'y', 'Y'):
             return False
-        outbound = service.approveReply(body, proposal=said)
-        hab = self.hby.habByPre(body.pre)
-        children, unavailable = [], 0
+        if hab.kever.lastEst.d != establishment:
+            raise ValidationError('group establishment changed during reply approval')
+        signed, proposal, attachments = endorseReply(self.hby, hab, child,
+                                                      validate=self.saltService.validate)
+        self.psr.parse(ims=bytearray(signed), local=True)
+        self.psr.parse(ims=bytearray(proposal.raw + attachments), local=True)
+        children = []
+        proposer = self.hby.db.exns.get((said,)).pre
+        returning = []
         deadline = time.monotonic() + self.timeout
         try:
-            for member in service.roster(body.pre).members:
-                if member.aid == hab.mhab.pre:
+            for member in hab.smids:
+                if member == hab.mhab.pre:
                     continue
-                try:
-                    poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member.aid,
-                                          topic='multisig', version=Vrsn_2_0)
-                    poster.send(outbound.proposal, attachment=outbound.attachments, gvrsn=Vrsn_2_0)
-                    pending = poster.deliver()
-                except (ConfigurationError, MissingEntryError, ValidationError):
-                    unavailable += 1
+                if not ({Roles.controller, Roles.agent, Roles.mailbox, Roles.witness}
+                        & set(hab.mhab.endsFor(member))):
+                    if member == proposer:
+                        raise ConfigurationError('registry salt proposer has no delivery route')
                     continue
-                if pending:
-                    attempt = SaltTransportAttempt(pending, self.timeout)
-                    children.append(attempt)
-                    self.extend([attempt])
-                else:
-                    unavailable += 1
-            while True:
-                service.process()
-                self.exc.processEscrow()
-                authenticated = service.state.proof(body.said) is not None
-                delivered = any(child.done and child.error is None for child in children)
-                if authenticated and (delivered or all(child.done for child in children)):
-                    break
+                poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member,
+                                      topic='multisig', version=Vrsn_2_0)
+                poster.send(proposal, attachment=attachments, gvrsn=Vrsn_2_0)
+                pending = poster.deliver() or []
+                if member == proposer:
+                    returning.extend(pending)
+                children.extend(pending)
+                self.extend(pending)
+            if not returning:
+                raise ConfigurationError('registry salt proposer has no delivery route')
+            # Return the cosignature to the proposer before closing finite I/O.
+            # An unavailable optional member is not an additional quorum requirement.
+            while not all(child.done for child in returning):
                 if time.monotonic() >= deadline:
-                    if not authenticated:
-                        print('Registry salt reply remains pending; retained approval is unchanged.')
-                        return None
-                    break
+                    raise TimeoutError('registry salt member submission timed out')
                 yield self.tock
+            if any(getattr(child, 'error', None) is not None for child in returning):
+                raise ConfigurationError('registry salt member submission failed')
         finally:
             self.remove(children)
-        print(f'Authenticated registry salt reply: {body.said}; member custody is tracked separately.')
-        if unavailable or any(not child.done or child.error is not None for child in children):
-            print('Dissemination to some members remains pending; the authenticated proof is retained.')
+        print(f'Approved registry salt reply: {body.said}; recipient acceptance is separate.')
         return True
 
     def vcp(self, attrs):

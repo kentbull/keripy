@@ -142,7 +142,7 @@ def _present_with_supplied_opening(case, tmp_path):
     names, prefixes, said, grant = case.names, case.prefixes, case.said, case.grant
     opening, refreshed, incoming = case.opening, case.refreshed, case.incoming
     # A supplied event opening is a narrower capability than a derivation salt.
-    # The holder can refresh and present it before any custody is imported.
+    # The holder can refresh and present it before any reusable salt is received.
     specific = tmp_path / 'event-opening.cesr'
     specific.write_bytes(opening.qb64b)
     suppliedPresentation = tmp_path / 'supplied-presentation.cesr'
@@ -161,19 +161,17 @@ def test_acdc_v2_cli_full_negotiation_and_holder_presentation(tmp_path):
     _present_with_supplied_opening(case, tmp_path)
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
-def test_cli_holder_refresh_derives_after_protected_custody_handoff(tmp_path):
-    """A designated holder imports protected custody before fresh derived presentation."""
+def test_cli_holder_refresh_derives_after_encrypted_salt_reply(tmp_path):
+    """A designated holder receives an encrypted salt before fresh derived presentation."""
     case = _negotiated_cli_case(tmp_path)
     _present_with_supplied_opening(case, tmp_path)
     names, prefixes, said, grant = case.names, case.prefixes, case.said, case.grant
     presented, refreshed, incoming = case.presented, case.refreshed, case.incoming
-    private = tmp_path / 'custody.json'
-    invoke(names['issuer'], 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
-        '--custody', '--output', str(private))
-    invoke(names['holder'], 'vc', 'import', '--acdc-v2', '--custody', '--registry', case.regid,
-        '--controller', prefixes['issuer'], '--discloser', prefixes['holder'],
-        '--file', str(private), '--passcode', PASSCODE)
+    encrypted = tmp_path / 'salt-reply.cesr'
+    invoke(names['issuer'], 'vc', 'registry', 'salt', 'send', '-a', 'issuer',
+        '--registry', case.regid, '--party', prefixes['holder'], '--output', str(encrypted))
+    invoke(names['holder'], 'vc', 'registry', 'salt', 'receive', '-a', 'holder',
+        '--input', str(encrypted))
     fresh = tmp_path / 'fresh-presentation.cesr'
     current = invoke(names['holder'], 'ipex', 'grant', '--acdc-v2', '-a', 'holder',
         '-r', prefixes['verifier'], '-s', said, '--from-grant', grant['exchange'],

@@ -8,7 +8,8 @@ from ..core import (Blinder, BlindState, BoundState, Codens, Counter, Diger,
 from ..kering import ConfigurationError, Ilks, MissingRegistryError, ValidationError
 from ..peer.exchanging import serializeParsedSubstream
 from .grouping import (Counselor, Multiplexor, loadHandlers,
-                       multisigExn, multisigRipExn, multisigBupExn, validateRegistryAnchor)
+                       multisigExn, multisigRipExn, multisigBupExn, validateRegistryAnchor,
+                       validateRegistrySalts)
 from .habbing import GroupHab
 from .indirecting import MailboxDirector
 from .forwarding import StreamPoster
@@ -21,7 +22,8 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
     GroupHab owns signing, Multiplexor retains member approvals, Counselor owns
     KEL threshold/delegation/receipts, and Rever owns ACDC v2 registry TEL acceptance.
     Incoming proposals are retained until this member approves the exact body.
-    No custody secret is generated, shared, or embedded by this coordinator.
+    Optional caller-encrypted salt copies travel in the signed proposal payload;
+    this coordinator never generates, decrypts, or stores plaintext salts.
     """
     def __init__(self, hby, rgy, ghab, exc, notifier, *, kramer=None, scy=None):
         """Compose group approval with shared registry and section evidence.
@@ -158,9 +160,9 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
         self.mux.validate(proposal.serder, nests=proposal.nests)
         return serializeParsedSubstream(proposal.nests[0])
 
-    def approveRegistry(self, event, anchor=None, *, opening=None):
+    def approveRegistry(self, event, anchor=None, *, opening=None, salts=None):
         """Explicitly approve one exact registry event through the shared signer."""
-        return self.registry.approve(event, anchor, opening=opening)
+        return self.registry.approve(event, anchor, opening=opening, salts=salts)
 
     def approveExchange(self, stream):
         """Add this member's signature to one exact group EXN and retain its view.
@@ -315,7 +317,7 @@ class RegistryApproval:
         self.validateEvent(children[0])
         return children + (opening,)
 
-    def approve(self, event, anchor=None, *, opening=None):
+    def approve(self, event, anchor=None, *, opening=None, salts=None):
         """Sign the exact proposed TEL anchor and start ordinary threshold completion.
 
             Args:
@@ -323,6 +325,7 @@ class RegistryApproval:
                 anchor (SerderKERI | None): Exact proposed group KEL event; None reuses
                     pending local work or authors a new suitable interaction/rotation.
                 opening (Blinder | None): Explicit opening published with a ``bup``.
+                salts (dict | None): Member-encrypted salt copies in the EXN payload.
 
             Returns:
                 tuple: Member proposal wrapper and detached attachments for fanout.
@@ -333,6 +336,7 @@ class RegistryApproval:
             Local retries reuse partial events rather than fork them. Acceptance still
             requires Counselor quorum/witness/delegation and normal Rever verification."""
         self.validateEvent(event)
+        validateRegistrySalts(salts, self.ghab.smids)
         if opening is not None:
             if event.ilk != Ilks.bup or not isinstance(opening, Blinder):
                 raise ValidationError('registry opening requires an exact bup proposal')
@@ -359,7 +363,7 @@ class RegistryApproval:
                event.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
         self.rever.processEvent(event)
         propose = multisigRipExn if event.ilk == Ilks.rip else multisigBupExn
-        wrapper, attachments = propose(self.ghab, tel, stream)
+        wrapper, attachments = propose(self.ghab, tel, stream, salts=salts)
         self.receive(wrapper.raw + attachments)  # explicit local approval
         self.counselor.start(self.ghab, Prefixer(qb64=self.ghab.pre),
                              Number(num=anchor.sn), Diger(qb64=anchor.said))

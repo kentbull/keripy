@@ -206,22 +206,17 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
             assert hby.habByName('self').kever.serder.said == kel_head
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
-def test_holder_opening_after_protected_custody_handoff(tmp_path):
-    """Only the designated recipient can import protected custody and derive the same opening."""
+def test_holder_opening_after_encrypted_salt_reply(tmp_path):
+    """An issuer-signed encrypted reply enables the holder's later opening command."""
     case = _public_blind_cli_case(tmp_path)
-    alice, bob, aid, bob_aid = case.alice, case.bob, case.aid, case.bob_aid
-    registry, latest, current = case.registry, case.latest, case.current
-    opening_args, held_opening = case.opening_args, case.held_opening
-    private = tmp_path / 'custody.json'
-    invoke(alice, 'vc', 'export', '--acdc-v2', '-a', 'self', '-r', 'r', '--custody', '--output', str(private))
-    invoke(bob, 'vc', 'import', '--acdc-v2', '--custody', '--registry', registry,
-        '--controller', aid, '--discloser', aid, '--file', str(private),
-        '--passcode', '0123456789abcdefghijk', okay=False)
-    invoke(bob, 'vc', 'import', '--acdc-v2', '--custody', '--registry', registry,
-        '--controller', aid, '--discloser', bob_aid, '--file', str(private))
-    derived = invoke(bob, *opening_args)[0]
-    assert derived['opening'] == latest['opening'] and held_opening.read_bytes() == current.read_bytes()
+    encrypted = tmp_path / 'salt-reply.cesr'
+    invoke(case.alice, 'vc', 'registry', 'salt', 'send', '-a', 'self',
+           '--registry', case.registry, '--party', case.bob_aid, '--output', str(encrypted))
+    invoke(case.bob, 'vc', 'registry', 'salt', 'receive', '-a', 'self', '--input', str(encrypted))
+    derived = invoke(case.bob, *case.opening_args)[0]
+    assert derived['opening'] == case.latest['opening']
+    assert case.held_opening.read_bytes() == case.current.read_bytes()
+
 
 
 def test_unencrypted_kel_operations_ignore_environment_passcode(tmp_path):

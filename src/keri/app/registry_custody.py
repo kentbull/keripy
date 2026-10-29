@@ -5,35 +5,21 @@ KERIpy ea3d8281 without changing the custody. database layout; their introducing
 local commit was d30395c1acbf609d9099f9ce34288d1d4c89233f. This extraction and
 explicit no-regeneration guard are local application changes.
 Manager.updateAeid migrates Keeper secrets only. These application records remain
-under their old AEID and fail closed until an explicit plaintext re-import under
-an authenticated current Keeper. There is no automatic migration or salt export.
+under their old AEID and require the original Keeper. There is no automatic
+migration or plaintext salt export/import.
 
 Supplied-root preparation and qualified sealed-box handoff are local application
 additions using the existing Encrypter and Keeper Manager. The domain caller
-owns authenticated assignment and membership policy; custody owns encrypted
+owns sender authentication and recipient authorization; custody owns encrypted
 root retention and never generates a replacement for a supplied root.
 
-Local candidate creation implements Kent Bull's 2026-10-29 choice to replace
-interactive DH with random salts and encrypted replication. Candidates reuse
-Keeper encryption but remain separate from active custody until the domain's
-issuer-assignment transaction activates them. This is local application policy.
 """
 from dataclasses import asdict, dataclass, field
 import json
-import os
-from pathlib import Path
-import stat
 
 from keri.core import (Blinder, Cipher, Encrypter, MtrDex, Number,
                        Prefixer, Salter, Verfer)
 from keri.kering import AuthError, ConfigurationError, ValidationError
-
-
-def _requirePosixHandoff():
-    """Require the existing protected plaintext file contract before secret access."""
-    if os.name != 'posix' or not all(hasattr(os, name) for name in
-            ('O_NOFOLLOW', 'O_NONBLOCK', 'fchmod', 'geteuid')):
-        raise ConfigurationError('protected plaintext custody handoff requires POSIX file protections')
 
 
 @dataclass
@@ -76,19 +62,6 @@ class PreparedCustody:
     encrypted: bytes = field(repr=False)
 
 
-@dataclass(frozen=True)
-class SaltCandidate:
-    """Unapproved local salt and encrypted row snapshot for guarded activation.
-
-    info binds the accepted issuer registry. root is secret and excluded from
-    repr; expected identifies the exact encrypted candidate to retire within
-    the same transaction that activates custody and records its authorization.
-    """
-    info: CustodyInfo
-    root: Salter = field(repr=False)
-    expected: bytes = field(repr=False)
-
-
 class RegistryCustody:
     """Explicit private capability; no inventory operation constructs or reads it.
 
@@ -123,19 +96,17 @@ class RegistryCustody:
             raise AuthError('private credential custody requires an authenticated encrypted Keeper')
         return mgr
 
-    def _binding(self, regid, controller, discloser, *, importing=False, rewrap=False):
+    def _binding(self, regid, controller, discloser):
         """Check explicit custody identities against accepted registry evidence.
 
         Args:
             regid (str): Accepted registry inception SAID.
             controller (str): Expected registry controller AID.
             discloser (str): Explicit designated recipient AID, with known KEL.
-            importing (bool): Require the local recipient rather than controller.
-            rewrap (bool): Permit local controller to re-import its plaintext copy.
 
         Returns:
-            None. Local checks are guardrails, not signed delegation or transfer
-            authentication; the provisioning operator supplies those assurances.
+            None. This guards local issuer creation only. Incoming encrypted
+            copies are authenticated separately by the ordinary reply handler.
 
         Raises:
             ValidationError: Identifier, registry, or local-role binding is invalid.
@@ -148,10 +119,7 @@ class RegistryCustody:
         rip = self.rgy.store.seqEvent(regid, 0)
         if rip is None or rip.sad['i'] != controller:
             raise ValidationError('custody must match the accepted registry controller')
-        actor = discloser if importing else controller
-        local = self.hby.habByPre(actor)
-        if rewrap:
-            local = local or self.hby.habByPre(controller)
+        local = self.hby.habByPre(controller)
         if local is None:
             raise ValidationError('custody operation requires the intended local identifier')
         if discloser not in self.hby.kevers:
@@ -181,11 +149,10 @@ class RegistryCustody:
 
         Parameters: regid is the expected registry; record is EncryptedCustody.
         Returns: the private payload. Raises: AuthError without disclosing data.
-        Both candidates and active custody use this same encryption contract.
         """
         mgr = self._manager()
         if record.aeid != mgr.aeid:
-            raise AuthError('custody encryption AEID changed; explicit operator rewrap is required')
+            raise AuthError('custody encryption AEID changed; original Keeper is required')
         try:
             payload = json.loads(mgr.decrypter.decrypt(qb64=record.cipher, bare=True))
             secret = _Custody(**payload)
@@ -197,82 +164,6 @@ class RegistryCustody:
             raise AuthError('unable to authenticate private registry custody') from None
         return secret
 
-    def candidate(self, registry):
-        """Open an existing unapproved salt without activating derivation custody.
-
-        Parameters: registry is the exact accepted inception SAID.
-        Returns: SaltCandidate containing the original salt and encrypted snapshot.
-        Raises: ConfigurationError if absent; AuthError for corrupt or old-AEID
-            state. Reading never regenerates or repairs a lost candidate.
-        """
-        self._manager()
-        try:
-            record = self.db.saltCandidates.get((registry,))
-        except (ValueError, TypeError, AttributeError, KeyError):
-            raise AuthError('unable to authenticate registry salt candidate') from None
-        if record is None:
-            raise ConfigurationError('registry salt candidate is not prepared')
-        secret = self._decode(registry, record)
-        info, root = CustodyInfo(**secret.info), Salter(qb64=secret.salt)
-        if info.discloser != info.controller or root.code != MtrDex.Salt_128:
-            raise AuthError('registry salt candidate has invalid creation bindings')
-        return SaltCandidate(info, root, self.db.saltCandidates._ser(record))
-
-    def createCandidate(self, registry):
-        """Create once for a local accepted issuer, or reopen its same candidate.
-
-        Parameters: registry is an accepted RIP SAID controlled by a local Hab.
-        Returns: durable encrypted SaltCandidate; this does not authorize an
-            assignment or enable opening derivation. Normal group approval is
-            still required, and the caller chooses the proposing member.
-        Raises: ValidationError for nonlocal/unaccepted control, ConfigurationError
-            if active custody already exists, or AuthError on Keeper/corruption.
-
-        Random salt generation uses existing CESR Salter. Concurrent attempts
-        retain the first encrypted candidate; no candidate replacement is implicit.
-        """
-        mgr = self._manager()
-        rip = self.rgy.store.seqEvent(registry, 0)
-        if (rip is None or rip.ilk != 'rip' or rip.said != registry
-                or self.hby.habByPre(rip.israid) is None):
-            raise ValidationError('salt creation requires the accepted local issuer registry')
-        if self.db.custody.get((registry,)) is not None:
-            raise ConfigurationError('registry already has custody; explicitly adopt its existing salt')
-        try:
-            previous = self.db.saltCandidates.get((registry,))
-        except (ValueError, TypeError, AttributeError, KeyError):
-            raise AuthError('unable to authenticate registry salt candidate') from None
-        if previous is not None:
-            return self.candidate(registry)
-        info = CustodyInfo(registry, rip.israid, rip.israid)
-        secret = _Custody(asdict(info), Salter().qb64)
-        cipher = mgr.encrypter.encrypt(ser=json.dumps(asdict(secret), separators=(',', ':')).encode())
-        record = EncryptedCustody(mgr.aeid, cipher.qb64)
-        with self.db.env.begin(write=True) as txn:
-            if self._manager().aeid != record.aeid:
-                raise AuthError('Keeper changed during registry salt creation')
-            if txn.get(self.db.custody._tokey((registry,)), db=self.db.custody.sdb) is not None:
-                raise ValidationError('custody was activated during salt creation')
-            txn.put(self.db.saltCandidates._tokey((registry,)),
-                    self.db.saltCandidates._ser(record), db=self.db.saltCandidates.sdb,
-                    overwrite=False)
-        return self.candidate(registry)
-
-    def retireCandidate(self, candidate, txn):
-        """Retire an exact candidate inside the caller's authorization transaction.
-
-        Parameters: candidate is the previously opened SaltCandidate; txn is the
-            wallet write transaction that activates the authorized root or records
-            an explicit abandonment. Returns: None. Raises: ValidationError when
-            its encrypted snapshot changed. Performs no decryption or approval.
-        """
-        if not isinstance(candidate, SaltCandidate):
-            raise ValidationError('registry salt retirement requires an exact candidate')
-        key = self.db.saltCandidates._tokey((candidate.info.registry,))
-        if txn.get(key, db=self.db.saltCandidates.sdb) != candidate.expected:
-            raise ValidationError('registry salt candidate changed during activation')
-        txn.delete(key, db=self.db.saltCandidates.sdb)
-
     def prepareRoot(self, info, root):
         """Prepare an encrypted supplied root without writing or generating one.
 
@@ -283,8 +174,7 @@ class RegistryCustody:
 
         Returns:
             PreparedCustody: Ciphertext and a previous-row snapshot. The caller
-                can commit this with assignment and outbox records in one wallet
-                transaction using retainPrepared.
+                commits it in its existing LMDB transaction using retainPrepared.
 
         Raises:
             AuthError: Keeper authentication or existing AEID binding fails.
@@ -292,7 +182,7 @@ class RegistryCustody:
                 or immutable existing root differs.
 
         The domain caller must first authenticate replies and authorize the
-        recipient's assignment and accepted membership. These structural checks
+        recipient. These structural checks
         establish neither network authority nor entitlement from a local discloser.
         Original discloser metadata must stay unchanged for later recipients.
         """
@@ -313,13 +203,11 @@ class RegistryCustody:
             raise ValidationError('registry root must be one Salt_128 Salter')
         return self._prepare(_Custody(asdict(info), root.qb64))
 
-    def _prepare(self, secret, *, rewrap=False):
+    def _prepare(self, secret):
         """Encrypt validated private data before entering the wallet transaction.
 
         Args:
             secret (_Custody): Original fixed-profile metadata and supplied root.
-            rewrap (bool): Explicit file-adapter authorization to replace an
-                old-AEID encrypted row without decrypting it.
 
         Returns:
             PreparedCustody: New ciphertext or the identical existing row, with
@@ -333,10 +221,8 @@ class RegistryCustody:
             if self._load(regid) != secret:
                 raise ValidationError('different registry custody is already retained')
             return PreparedCustody(regid, expected, expected)
-        if previous is not None and not rewrap:
-            raise AuthError('custody encryption AEID changed; explicit operator rewrap is required')
-        if previous is None and rewrap:
-            raise ValidationError('rewrap requires an existing custody record under a prior AEID')
+        if previous is not None:
+            raise AuthError('custody encryption AEID changed; original Keeper is required')
         cipher = mgr.encrypter.encrypt(ser=json.dumps(asdict(secret), separators=(',', ':')).encode())
         encrypted = self.db.custody._ser(EncryptedCustody(mgr.aeid, cipher.qb64))
         return PreparedCustody(regid, expected, encrypted)
@@ -357,7 +243,7 @@ class RegistryCustody:
             ValidationError: The previous row changed concurrently.
 
         This method never opens a transaction, decrypts, or emits a receipt. The
-        application commits root, assignment, and delivery work together, then
+        application commits the encrypted root in its existing transaction, then
         produces any notification or retention receipt after that commit succeeds.
         """
         mgr = self._manager()
@@ -372,21 +258,16 @@ class RegistryCustody:
         txn.put(key, prepared.encrypted, db=self.db.custody.sdb)
         return True
 
-    def _retain(self, secret, *, rewrap=False):
-        """Retain an explicit file-adapter payload through the same CAS write path.
-
-        Preparation authenticates or encrypts outside the transaction. The legacy
-        adapter keeps its explicit old-AEID operator rewrap; it never decrypts the
-        old row or claims atomicity with Keeper identity changes.
+    def _retain(self, secret):
+        """Encrypt and retain a generated salt in one existing store transaction.
 
         Args:
-            secret (_Custody): Explicitly validated file-adapter payload.
-            rewrap (bool): Operator authorization to replace old-AEID ciphertext.
+            secret (_Custody): Validated registry metadata and secret salt.
 
         Returns:
-            CustodyInfo: Public bindings after the wallet transaction commits.
+            CustodyInfo: Public bindings after the transaction commits.
         """
-        prepared = self._prepare(secret, rewrap=rewrap)
+        prepared = self._prepare(secret)
         with self.db.env.begin(write=True) as txn:
             self.retainPrepared(prepared, txn)
         return CustodyInfo(**secret.info)
@@ -408,7 +289,7 @@ class RegistryCustody:
             ValidationError: Recipient encryption primitive is unsupported.
 
         Sealed-box encryption supplies confidentiality, not sender authority. The
-        domain binds this cipher to the assignment, recipient, and key coordinates.
+        domain binds this cipher to the recipient and encryption key.
         """
         if not isinstance(encrypter, Encrypter) or encrypter.code != MtrDex.X25519:
             raise ValidationError('registry root requires an accepted X25519 recipient key')
@@ -433,7 +314,7 @@ class RegistryCustody:
 
         The domain verifies authority, recipient membership and historical key
         coordinates before calling, and checks the root commitment before retaining.
-        Successful decryption alone grants no assignment or signing authority.
+        Successful decryption alone grants no disclosure or signing authority.
         """
         mgr = self._manager()
         try:
@@ -454,6 +335,45 @@ class RegistryCustody:
             raise AuthError('unable to open encrypted registry root') from None
         return root
 
+    def sealMembers(self, group, root):
+        """Encrypt one supplied salt for the existing group's signing members.
+
+        group is a local accepted GroupHab; root is the issuer-generated Salter.
+        Return member AID to CESR cipher values for its signed rip/bup proposal.
+        No private candidate record or network operation is created here.
+        """
+        from .habbing import GroupHab
+        if (not isinstance(group, GroupHab) or self.hby.habByPre(group.pre) is not group
+                or not group.accepted or root.code != MtrDex.Salt_128):
+            raise ValidationError('salt copies require a local group and Salt_128 root')
+        copies = {}
+        for member in group.smids:
+            kever = self.hby.kevers.get(member)
+            if kever is None or len(kever.verfers) != 1:
+                raise ValidationError('salt copy requires a known individual member key')
+            copies[member] = Encrypter(verkey=kever.verfers[0].qb64).encrypt(prim=root).qb64
+        return copies
+
+    def retainMemberCopy(self, registry, group, copies):
+        """Retain this member's copy after its registry proposal has been accepted.
+
+        The caller authenticates the enclosing EXN and explicitly approves its
+        event. copies is that exact proposal's encrypted map. Normal accepted
+        registry checks precede persistence; decryption alone grants no authority.
+        Return the local custody bindings. No replay task or acknowledgement is
+        scheduled, and an existing different salt is never replaced.
+        """
+        from .grouping import validateRegistrySalts
+        validateRegistrySalts(copies, group.smids)
+        if not copies or group.mhab.pre not in copies:
+            raise ValidationError('registry proposal has no salt copy for this member')
+        root = self.openRoot(copies[group.mhab.pre], group.mhab.kever.verfers[0])
+        info = CustodyInfo(registry, group.pre, group.pre)
+        prepared = self.prepareRoot(info, root)
+        with self.db.env.begin(write=True) as txn:
+            self.retainPrepared(prepared, txn)
+        return info
+
     def createCustody(self, regid, discloser):
         """Explicitly provision derivation for an accepted controlled registry.
 
@@ -468,7 +388,7 @@ class RegistryCustody:
             AuthError: Keeper is unencrypted, unauthenticated, or uses another AEID.
             ValidationError: Registry or participant bindings are invalid.
             ConfigurationError: Accepted blinded history exists without custody;
-                restore an explicit plaintext handoff instead of recreating salt.
+                receive the existing salt through encrypted sharing instead of recreating it.
         """
         self._manager()
         rip = self.rgy.store.seqEvent(regid, 0)
@@ -532,86 +452,3 @@ class RegistryCustody:
         # metadata stays immutable and cannot stand in for current entitlement.
         return Blinder.blind(salt=secret.salt, sn=ordinal, tier=info.tier,
                              acdc=credential, state=state, bound=bound, bsn=bsn, bd=bd)
-
-    def exportCustody(self, regid, path):
-        """Create a POSIX-only owner-only plaintext handoff file, never overwrite it.
-
-        The operator transfers it over an authenticated private channel. This is
-        an owner-only plaintext artifact, not an IPEX payload or a new wire protocol.
-        Mode 0600 does not authenticate a sender, encrypt transit, or protect
-        against other processes running as the same user.
-
-        Args:
-            regid (str): Provisioned registry capability to export.
-            path (str | Path): New output path; existing files/symlinks are refused.
-
-        Returns:
-            Path: Owner-only plaintext file containing bindings, profile, and salt.
-
-        Raises:
-            AuthError: Existing custody cannot be authenticated/decrypted.
-            ConfigurationError: POSIX protections are unavailable or capability is not provisioned.
-            OSError: Safe exclusive creation, write, or durability operation fails.
-        """
-        _requirePosixHandoff()
-        secret = self._load(regid)
-        path = Path(path)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-        try:
-            with os.fdopen(fd, 'wb') as stream:
-                os.fchmod(stream.fileno(), 0o600)
-                stream.write(json.dumps(asdict(secret), separators=(',', ':')).encode())
-                stream.flush()
-                os.fsync(stream.fileno())
-        except BaseException:
-            path.unlink(missing_ok=True)
-            raise
-        return path
-
-    def importCustody(self, path, *, regid, controller, discloser, rewrap=False):
-        """Import a POSIX-only plaintext salt file; explicit rewrap replaces old-AEID custody.
-
-        Rewrap trusts the authenticated operator handoff, retains its original
-        salt/profile, and encrypts it under the currently authenticated Keeper.
-        A normal import never overwrites different custody. The operator must
-        authenticate the source and arrange private transfer; file permissions
-        and local binding checks are not a signed role delegation.
-
-        Args:
-            path (str | Path): Owner-only regular plaintext handoff file.
-            regid (str): Expected accepted registry inception SAID.
-            controller (str): Expected accepted registry controller AID.
-            discloser (str): Explicit intended recipient AID.
-            rewrap (bool): Explicit re-import under the current Keeper AEID.
-
-        Returns:
-            CustodyInfo: Public metadata for the retained encrypted capability.
-
-        Raises:
-            ConfigurationError: Required POSIX file protections are unavailable.
-            AuthError: Keeper/AEID authentication or replacement authorization fails.
-            ValidationError: File, profile, identity, registry, or local-role check fails.
-            OSError: Protected file opening/reading fails, including symlinks.
-        """
-        _requirePosixHandoff()
-        if not isinstance(rewrap, bool):
-            raise ValidationError('explicit rewrap must be a boolean')
-        self._manager()
-        self._binding(regid, controller, discloser, importing=True, rewrap=rewrap)
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as stream:
-            metadata = os.fstat(stream.fileno())
-            if (not stat.S_ISREG(metadata.st_mode) or stat.S_IMODE(metadata.st_mode) != 0o600
-                    or metadata.st_uid != os.geteuid() or metadata.st_nlink != 1):
-                raise ValidationError('custody file must be a regular owner-only mode0600 file')
-            raw = stream.read(16385)
-        if len(raw) > 16384:
-            raise ValidationError('custody file exceeds the supported size')
-        try:
-            secret = _Custody(**json.loads(raw))
-            if secret.info != asdict(CustodyInfo(regid, controller, discloser)):
-                raise ValueError('unexpected custody bindings or derivation parameters')
-            Salter(qb64=secret.salt)
-        except Exception:
-            raise ValidationError('custody file does not match the expected bindings and derivation profile') from None
-        return self._retain(secret, rewrap=rewrap)

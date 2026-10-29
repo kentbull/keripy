@@ -76,7 +76,7 @@ def test_join_v2_decline_adds_no_approval_or_group_signature(members, monkeypatc
 
 def test_join_group_rotation_during_prompt_prevents_stale_approval(members, monkeypatch):
     """Accepting a new real group establishment during review cannot select new signers silently."""
-    from tests.app.test_group_members import memberAids, rotateMembers, groupRotation
+    from tests.app.test_acdc_v2_groups import memberAids, rotateMembers, groupRotation
 
     hbys, groups, _, _ = members
     with joining(members, auto=False) as (command, _):
@@ -97,7 +97,7 @@ def test_join_group_rotation_during_prompt_prevents_stale_approval(members, monk
             return 'y'
 
         monkeypatch.setattr('builtins.input', rotateDuringPrompt)
-        with pytest.raises(ValidationError, match='stale or inconsistent'):
+        with pytest.raises(ValidationError, match='establishment changed during reply approval'):
             next(command.rpy(dict(r=wrapper.route, d=wrapper.said)))
         assert [member.qb64 for member in hbys[1].db.maids.get((body.said,))] == [groups[0].mhab.pre]
 

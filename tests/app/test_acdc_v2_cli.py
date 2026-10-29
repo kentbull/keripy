@@ -147,27 +147,6 @@ def test_acdc_v2_cli_authoring_reopen_and_public_export(tmp_path):
     assert invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'authority')[0]['sn'] == 2
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
-def test_cli_protected_custody_round_trip_preserves_export(tmp_path):
-    """Round-trip one protected salt file and retain it across actual authoring retries."""
-    case = _issued_cli_case('authority', '{"name":"Alice"}')
-    name, prefix, regid = case.name, case.prefix, case.regid
-    public = tmp_path / 'credential.json'
-    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
-           '--said', case.credential, '--output', str(public))
-    private = tmp_path / 'custody.json'
-    output = invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'authority',
-                    '--custody', '--output', str(private))[0]
-    assert 'salt' not in output
-    assert private.stat().st_mode & 0o777 == 0o600
-    custody = private.read_bytes()
-    invoke(name, 'vc', 'import', '--acdc-v2', '--custody', '--registry', regid,
-           '--controller', prefix, '--discloser', prefix, '--file', str(private), '--passcode', PASSCODE)
-
-    _revoke_and_retry_cli(case, public)
-    assert private.read_bytes() == custody
-
-
 def test_acdc_v2_option_is_explicit_and_v1_remains_default():
     """Select ACDC v2 explicitly and reject the removed experimental aliases.
 
@@ -689,32 +668,31 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
     assert supplied.read_bytes() == original
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
-def test_full_export_rejects_wrong_salt_after_protected_handoff(tmp_path):
-    """Importing an authenticated, bound but wrong salt cannot replace event proof."""
-    from keri.core import Salter
+def test_full_export_rejects_wrong_salt_after_encrypted_reply(tmp_path):
+    """An authenticated encrypted salt still has to reproduce the exact TEL commitment."""
+    from keri.core import Encrypter, Salter, reply
+    from keri.app.registry_salt_service import ROUTE
 
     case = _full_export_cli_case(tmp_path)
     name, regid, prefix, full = case.name, case.regid, case.prefix, case.full
-    # Import a well-formed wrong salt after explicitly losing only this test's
-    # row. Possession, encryption and bindings cannot replace event verification.
-    private = tmp_path / 'salt.json'
-    invoke(name, 'vc', 'export', '--acdc-v2', '-a', 'issuer', '-r', 'r',
-           '--custody', '--output', str(private))
-    payload = json.loads(private.read_text())
-    payload['salt'] = Salter().qb64
-    private.write_text(json.dumps(payload))
+    # Deliberately lose this test-owned row, then supply an issuer-signed wrong
+    # root. This checks event verification independently of immutable storage.
+    transfer = tmp_path / 'encrypted-salt.cesr'
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
             assert wallet.db.custody.rem((regid,))
+            hab = hby.habByName('issuer')
+            cipher = Encrypter(verkey=hab.kever.verfers[0].qb64).encrypt(prim=Salter())
+            body = reply(pre=prefix, route=ROUTE, version=Vrsn_2_0,
+                data=dict(registry=regid, recipient=prefix, target=prefix, cipher=cipher.qb64))
+            transfer.write_bytes(hab.endorse(body, gvrsn=Vrsn_2_0))
         finally:
             wallet.close()
             rgy.close()
-    invoke(name, 'vc', 'import', '--acdc-v2', '--custody', '--file', str(private),
-           '--registry', regid, '--controller', prefix, '--discloser', prefix)
+    invoke(name, 'vc', 'registry', 'salt', 'receive', '-a', 'issuer', '--input', str(transfer))
     wrongSalt = tmp_path / 'wrong-salt.cesr'
     refusal = command(name, *full, '--derive', '--output', str(wrongSalt))
     assert refusal.returncode != 0
@@ -722,21 +700,14 @@ def test_full_export_rejects_wrong_salt_after_protected_handoff(tmp_path):
 
 
 @pytest.mark.parametrize('tokens, message', [
-    (['vc', 'export', '-a', 'issuer', '--custody'], 'require --acdc-v2'),
     (['vc', 'export', '-a', 'issuer', '--derive'], 'require --acdc-v2'),
     (['vc', 'export', '-a', 'issuer', '--opening', 'absent'], 'require --acdc-v2'),
-    *[(['vc', 'export', '--acdc-v2', '-a', 'issuer', '--custody', *flag], 'cannot be combined')
-      for flag in (['--full'], ['--kels'], ['--tels'], ['--chains'], ['--files'],
-                   ['--said', 'credential'], ['--derive'], ['--opening', 'absent'])],
     (['vc', 'export', '--acdc-v2', '-a', 'issuer', '--derive'], 'require --acdc-v2 --full'),
     (['vc', 'export', '--acdc-v2', '-a', 'issuer', '--opening', 'absent'], 'require --acdc-v2 --full'),
     (['vc', 'export', '--acdc-v2', '-a', 'issuer', '--files'], 'uses --output'),
-    *[(['vc', 'import', '--file', 'absent', *flag], 'require --acdc-v2 --custody')
-      for flag in (['--custody'], ['--rewrap'], ['--registry', 'r'],
-                   ['--controller', 'i'], ['--discloser', 'h'])],
-    (['vc', 'import', '--acdc-v2', '--file', 'absent', '--said', 'credential'], 'not credentials'),
+    (['vc', 'import', '--acdc-v2', '--file', 'absent', '--said', 'credential'], 'Use IPEX intake'),
 ])
-def test_provisioning_options_fail_before_store_or_file_access(tokens, message):
+def test_evidence_options_fail_before_store_or_file_access(tokens, message):
     """Reject incompatible modes before touching nonexistent identity/file inputs.
 
     tokens selects a real parser/handler path; message identifies its boundary.

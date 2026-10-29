@@ -31,7 +31,6 @@ TEST_VERSION = Vrsn_1_0
 
 def test_group_reply_policy_gate_and_exact_endorsement():
     """Required domain policy gates exact retained reply signing without losing contributions."""
-    from keri.app.group_members import acceptedRoster
     from keri.core import reply
     from tests.app.test_acdc_v2_groups import groupMembers
 
@@ -40,7 +39,6 @@ def test_group_reply_policy_gate_and_exact_endorsement():
                      version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
         wrapper, atc = multisigRpyExn(groups[0], groups[0].endorse(body, gvrsn=Vrsn_2_0))
         owners[1].receive(wrapper.raw + atc)
-        roster = acceptedRoster(hbys[1], groups[1].pre, groups[1].smids)
         calls = []
 
         def policy(candidate):
@@ -49,19 +47,19 @@ def test_group_reply_policy_gate_and_exact_endorsement():
             calls.append(candidate.said)
 
         child = grouping.replyProposal(hbys[1], owners[1].exc, owners[1].mux,
-            wrapper.said, ghab=groups[1], roster=roster, validate=policy)
+            wrapper.said, ghab=groups[1], validate=policy)
         assert calls == [body.said]
         with pytest.raises(ValidationError, match='domain policy declined'):
-            grouping.endorseReply(hbys[1], groups[1], child, roster=roster,
+            grouping.endorseReply(hbys[1], groups[1], child,
                                   validate=lambda _: False)
         from copy import copy
         hidden = copy(child)
         hidden.nests = [child]
         with pytest.raises(ValidationError, match='signature attachments'):
-            grouping.endorseReply(hbys[1], groups[1], hidden, roster=roster, validate=policy)
+            grouping.endorseReply(hbys[1], groups[1], hidden, validate=policy)
         assert [member.qb64 for member in hbys[1].db.maids.get((body.said,))] == [groups[0].mhab.pre]
         stream, signed, atc = grouping.endorseReply(hbys[1], groups[1], child,
-                                                  roster=roster, validate=policy)
+                                                  validate=policy)
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False)[0]
         assert parsed.serder.raw == child.serder.raw == body.raw
         assert {siger.index for group in parsed.tsgs for siger in group[3]} == {0, 1}
@@ -72,25 +70,22 @@ def test_group_reply_policy_gate_and_exact_endorsement():
         assert calls == [body.said, body.said]
 
 
-def test_group_reply_rejects_nonmember_foreign_child_and_stale_roster():
+def test_group_reply_rejects_nonmember_foreign_child_and_invalid_group():
     """An authenticated wrapper cannot override current membership or logical group attribution."""
-    from dataclasses import replace
-    from keri.app.group_members import acceptedRoster
     from keri.core import reply
     from tests.app.test_acdc_v2_groups import groupMembers
 
     with groupMembers('reply-attribution') as (hbys, groups, _, owners):
-        roster = acceptedRoster(hbys[1], groups[1].pre, groups[1].smids)
         foreign = reply(pre=groups[0].mhab.pre, route='/test/reply-policy', data={},
                         version=Vrsn_2_0, gvrsn=Vrsn_2_0)
         wrapper, atc = multisigRpyExn(groups[0], groups[0].endorse(foreign, gvrsn=Vrsn_2_0))
         owners[1].receive(wrapper.raw + atc)
         with pytest.raises(ValidationError, match='one group reply'):
             grouping.replyProposal(hbys[1], owners[1].exc, owners[1].mux,
-                wrapper.said, ghab=groups[1], roster=roster, validate=lambda _: None)
-        with pytest.raises(ValidationError, match='stale or inconsistent'):
+                wrapper.said, ghab=groups[1], validate=lambda _: None)
+        with pytest.raises(ValidationError, match='accepted local signing group'):
             grouping.replyProposal(hbys[1], owners[1].exc, owners[1].mux,
-                wrapper.said, ghab=groups[1], roster=replace(roster, sn=99), validate=lambda _: None)
+                wrapper.said, ghab=groups[0], validate=lambda _: None)
         outsider = hbys[0].makeHab(name='outsider')
         Parser(kvy=hbys[1].kvy, version=Vrsn_2_0).parse(
             ims=bytearray(outsider.replay(gvrsn=Vrsn_2_0)), local=True)
@@ -110,7 +105,7 @@ def test_group_reply_rejects_nonmember_foreign_child_and_stale_roster():
         assert owners[1].exc.complete(wrapper.said)
         with pytest.raises(ValidationError, match='current group member wrapper'):
             grouping.replyProposal(hbys[1], owners[1].exc, owners[1].mux,
-                wrapper.said, ghab=groups[1], roster=roster, validate=lambda _: None)
+                wrapper.said, ghab=groups[1], validate=lambda _: None)
 
 
 def test_counselor_explicit_version_propagates_to_default_anchorer_and_delegator_queries(monkeypatch):
