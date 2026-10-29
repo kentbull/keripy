@@ -617,26 +617,29 @@ def read(args, operation):
         file-exclusivity, and custody failures propagate. The opened context closes
         wallet, registry, and identity owners even when the operation fails."""
         yield tock
-        # Plain inventory/status never composes derivation capability; only
-        # explicit derivation during credential export may request it.
-        with opened(args, custody=(operation == 'export' and args.derive)) as (hby, rgy, wallet):
-            if operation == 'registries':
-                for name, reg in rgy.names.items():
+        if operation in ('registries', 'status'):
+            # Public registry inspection owns no credential inventory or custody.
+            with openedRegistry(args) as (hby, rgy):
+                if operation == 'registries':
+                    for name, reg in rgy.names.items():
+                        head = reg.store.headEvent(reg.regk)
+                        print(json.dumps(dict(name=name, registry=reg.regk, controller=reg.hab.pre,
+                            accepted=head is not None, head=head.said if head else None, sn=reg.sn)))
+                elif operation == 'status':
+                    reg = registry(rgy, args.registry_name)
                     head = reg.store.headEvent(reg.regk)
-                    print(json.dumps(dict(name=name, registry=reg.regk, controller=reg.hab.pre,
-                        accepted=head is not None, head=head.said if head else None, sn=reg.sn)))
-            elif operation == 'status':
-                reg = registry(rgy, args.registry_name)
-                head = reg.store.headEvent(reg.regk)
-                pending = [dict(said=said, sn=sn, dependency=dependency)
-                           for escrow, dependency in ((rgy.baser.maes, 'anchor'), (rgy.baser.ooes, 'prior'))
-                           for _, sn, said in escrow.getTopItemIter(keys=reg.regk)]
-                print(json.dumps(dict(registry=reg.regk, controller=reg.hab.pre,
-                    accepted=head is not None, head=head.said if head else None, sn=reg.sn, pending=pending)))
-                if args.verbose:
-                    for raw in reg.store.cloneTelIter(reg.regk):
-                        print(raw.decode())
-            elif operation == 'inventory':
+                    pending = [dict(said=said, sn=sn, dependency=dependency)
+                               for escrow, dependency in ((rgy.baser.maes, 'anchor'), (rgy.baser.ooes, 'prior'))
+                               for _, sn, said in escrow.getTopItemIter(keys=reg.regk)]
+                    print(json.dumps(dict(registry=reg.regk, controller=reg.hab.pre,
+                        accepted=head is not None, head=head.said if head else None, sn=reg.sn, pending=pending)))
+                    if args.verbose:
+                        for raw in reg.store.cloneTelIter(reg.regk):
+                            print(raw.decode())
+
+            return
+        with opened(args, custody=(operation == 'export' and args.derive)) as (hby, rgy, wallet):
+            if operation == 'inventory':
                 if args.poll:
                     raise ConfigurationError('ACDC v2 IPEX admission uses accepted IPEX and explicit wallet consent')
                 hab = hby.habByName(args.alias) if args.alias else None

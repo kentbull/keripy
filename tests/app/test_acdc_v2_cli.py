@@ -718,3 +718,38 @@ def test_evidence_options_fail_before_store_or_file_access(tokens, message):
     args = multicommand.create_parser(commands).parse_args([*tokens, '--name', 'does-not-exist'])
     with pytest.raises(ConfigurationError, match=message):
         args.handler(args)
+
+
+def test_registry_reads_do_not_open_wallet(monkeypatch, capsys):
+    """Inspect accepted registry state with credential inventory unavailable.
+
+    The real read adapters reopen the identity and registry. Failing Wallet
+    construction distinguishes this boundary from merely avoiding salt access.
+    """
+    from keri.cli.common import acdc_v2
+
+    name = 'registry-read-' + uuid.uuid4().hex
+    base = 'acdc-v2-cli-test'
+    with openHby(name=name, base=base, temp=False, bran=PASSCODE, version=Vrsn_2_0) as hby:
+        issuer = hby.makeHab(name='issuer', version=Vrsn_2_0)
+        rgy = Regery(hby, name=name, base=base)
+        try:
+            reg = rgy.makeRegistry(name='authority', prefix=issuer.pre)
+            anchored(issuer, reg, reg.store.event(reg.regk))
+            expected = reg.regk
+        finally:
+            rgy.close()
+
+    def unavailable(*args, **kwa):
+        """Represent an absent application inventory without changing protocol owners."""
+        pytest.fail('registry inspection must not construct credential inventory')
+
+    monkeypatch.setattr(acdc_v2, 'Wallet', unavailable)
+    args = SimpleNamespace(name=name, base=base, bran=PASSCODE,
+                           registry_name='authority', verbose=False)
+    for operation in ('registries', 'status'):
+        for worker in acdc_v2.read(args, operation):
+            list(worker(tymth=lambda: 0.0))
+        result = json.loads(capsys.readouterr().out)
+        assert result['registry'] == expected
+        assert result['accepted'] is True
