@@ -7,6 +7,11 @@ explicit no-regeneration guard are local application changes.
 Manager.updateAeid migrates Keeper secrets only. These application records remain
 under their old AEID and fail closed until an explicit plaintext re-import under
 an authenticated current Keeper. There is no automatic migration or salt export.
+
+Supplied-root preparation and qualified sealed-box handoff are local application
+additions using the existing Encrypter and Keeper Manager. The domain caller
+owns authenticated assignment and membership policy; custody owns encrypted
+root retention and never generates a replacement for a supplied root.
 """
 from dataclasses import asdict, dataclass, field
 import json
@@ -14,7 +19,8 @@ import os
 from pathlib import Path
 import stat
 
-from keri.core import Blinder, Number, Prefixer, Salter
+from keri.core import (Blinder, Cipher, Encrypter, MtrDex, Number,
+                       Prefixer, Salter, Verfer)
 from keri.kering import AuthError, ConfigurationError, ValidationError
 
 
@@ -50,7 +56,19 @@ class _Custody:
 class EncryptedCustody:
     """Existing custody. row: Keeper encryption identity plus authenticated cipher."""
     aeid: str
-    cipher: str
+    cipher: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class PreparedCustody:
+    """Encrypted root row and exact previous-row snapshot for one wallet transaction.
+
+    Both serialized rows contain ciphertext, never a plaintext root. Excluding
+    them from repr also keeps ciphertext out of ordinary diagnostic output.
+    """
+    registry: str
+    expected: bytes | None = field(repr=False)
+    encrypted: bytes = field(repr=False)
 
 
 class RegistryCustody:
@@ -151,49 +169,186 @@ class RegistryCustody:
             raise AuthError('unable to authenticate private registry custody') from None
         return secret
 
-    def _retain(self, secret, *, rewrap=False):
-        """Encrypt one supplied payload in the existing application environment.
+    def prepareRoot(self, info, root):
+        """Prepare an encrypted supplied root without writing or generating one.
 
         Args:
-            secret (_Custody): Validated bindings, fixed profile, and private salt.
-            rewrap (bool): Explicit plaintext re-import replacing an old-AEID row.
+            info (CustodyInfo): Original registry/controller/discloser metadata
+                and this application's fixed derivation profile.
+            root (Salter): Supplied Salt_128 root, normally established by DH.
 
         Returns:
-            CustodyInfo: Public metadata only; the salt remains encrypted at rest.
+            PreparedCustody: Ciphertext and a previous-row snapshot. The caller
+                can commit this with assignment and outbox records in one wallet
+                transaction using retainPrepared.
 
         Raises:
-            AuthError: Keeper is unavailable or replacement was not authorized.
-            ValidationError: Different custody exists or guarded replacement races.
+            AuthError: Keeper authentication or existing AEID binding fails.
+            ValidationError: Accepted registry, metadata, profile, root type,
+                or immutable existing root differs.
 
-        Re-import never decrypts the old ciphertext and is not key migration.
-        Only this application environment participates in the row transaction.
+        The domain caller must first authenticate replies and authorize the
+        recipient's assignment and accepted membership. These structural checks
+        establish neither network authority nor entitlement from a local discloser.
+        Original discloser metadata must stay unchanged for later recipients.
+        """
+        self._manager()
+        if (not isinstance(info, CustodyInfo)
+                or info != CustodyInfo(info.registry, info.controller, info.discloser)):
+            raise ValidationError('registry root requires the fixed custody profile')
+        try:
+            for aid in (info.controller, info.discloser):
+                if Prefixer(qb64=aid).qb64 != aid:
+                    raise ValueError
+        except Exception:
+            raise ValidationError('registry root has invalid original party metadata') from None
+        rip = self.rgy.store.seqEvent(info.registry, 0)
+        if rip is None or rip.ilk != 'rip' or rip.sad['i'] != info.controller:
+            raise ValidationError('registry root must match the accepted registry controller')
+        if not isinstance(root, Salter) or root.code != MtrDex.Salt_128 or len(root.raw) != 16:
+            raise ValidationError('registry root must be one Salt_128 Salter')
+        return self._prepare(_Custody(asdict(info), root.qb64))
+
+    def _prepare(self, secret, *, rewrap=False):
+        """Encrypt validated private data before entering the wallet transaction.
+
+        Args:
+            secret (_Custody): Original fixed-profile metadata and supplied root.
+            rewrap (bool): Explicit file-adapter authorization to replace an
+                old-AEID encrypted row without decrypting it.
+
+        Returns:
+            PreparedCustody: New ciphertext or the identical existing row, with
+                its exact serialized previous value for guarded retention.
         """
         mgr = self._manager()
         regid = secret.info['registry']
         previous = self.db.custody.get((regid,))
+        expected = self.db.custody._ser(previous) if previous is not None else None
         if previous is not None and previous.aeid == mgr.aeid:
             if self._load(regid) != secret:
                 raise ValidationError('different registry custody is already retained')
-            return CustodyInfo(**secret.info)
+            return PreparedCustody(regid, expected, expected)
         if previous is not None and not rewrap:
             raise AuthError('custody encryption AEID changed; explicit operator rewrap is required')
         if previous is None and rewrap:
             raise ValidationError('rewrap requires an existing custody record under a prior AEID')
         cipher = mgr.encrypter.encrypt(ser=json.dumps(asdict(secret), separators=(',', ':')).encode())
-        if rewrap:
-            # Guard the exact old row in the same application-store transaction.
-            # This does not decrypt old custody or claim a cross-store transaction.
-            with self.db.env.begin(write=True) as txn:
-                key = self.db.custody._tokey((regid,))
-                if txn.get(key, db=self.db.custody.sdb) != self.db.custody._ser(previous):
-                    raise ValidationError('custody changed during explicit operator rewrap')
-                txn.put(key, self.db.custody._ser(EncryptedCustody(mgr.aeid, cipher.qb64)),
-                        db=self.db.custody.sdb)
-            return CustodyInfo(**secret.info)
-        if not self.db.custody.put((regid,), EncryptedCustody(mgr.aeid, cipher.qb64)):
-            if self._load(regid) != secret:
-                raise ValidationError('different registry custody was concurrently retained')
+        encrypted = self.db.custody._ser(EncryptedCustody(mgr.aeid, cipher.qb64))
+        return PreparedCustody(regid, expected, encrypted)
+
+    def retainPrepared(self, prepared, txn):
+        """CAS-retain a prepared row inside a caller-owned wallet write transaction.
+
+        Args:
+            prepared (PreparedCustody): Encrypted output of prepareRoot, prepared
+                before the caller opened its transaction.
+            txn (lmdb.Transaction): Active write transaction in this WalletBaser.
+
+        Returns:
+            bool: True when ciphertext changes, False for an identical retained row.
+
+        Raises:
+            AuthError: Keeper identity changed after preparation.
+            ValidationError: The previous row changed concurrently.
+
+        This method never opens a transaction, decrypts, or emits a receipt. The
+        application commits root, assignment, and delivery work together, then
+        produces any notification or retention receipt after that commit succeeds.
+        """
+        mgr = self._manager()
+        if (not isinstance(prepared, PreparedCustody)
+                or self.db.custody._des(prepared.encrypted).aeid != mgr.aeid):
+            raise AuthError('prepared custody does not match the authenticated Keeper')
+        key = self.db.custody._tokey((prepared.registry,))
+        if txn.get(key, db=self.db.custody.sdb) != prepared.expected:
+            raise ValidationError('custody changed during prepared retention')
+        if prepared.expected == prepared.encrypted:
+            return False
+        txn.put(key, prepared.encrypted, db=self.db.custody.sdb)
+        return True
+
+    def _retain(self, secret, *, rewrap=False):
+        """Retain an explicit file-adapter payload through the same CAS write path.
+
+        Preparation authenticates or encrypts outside the transaction. The legacy
+        adapter keeps its explicit old-AEID operator rewrap; it never decrypts the
+        old row or claims atomicity with Keeper identity changes.
+
+        Args:
+            secret (_Custody): Explicitly validated file-adapter payload.
+            rewrap (bool): Operator authorization to replace old-AEID ciphertext.
+
+        Returns:
+            CustodyInfo: Public bindings after the wallet transaction commits.
+        """
+        prepared = self._prepare(secret, rewrap=rewrap)
+        with self.db.env.begin(write=True) as txn:
+            self.retainPrepared(prepared, txn)
         return CustodyInfo(**secret.info)
+
+    def sealRoot(self, regid, encrypter):
+        """Seal an existing root to an externally authenticated recipient key.
+
+        Args:
+            regid (str): Exact retained registry root.
+            encrypter (Encrypter): Accepted recipient X25519 encryption key,
+                selected and authorized by the domain caller.
+
+        Returns:
+            Cipher: Qualified X25519_Cipher_Salt, suitable for a signed provision
+                body. The plaintext root never leaves this operation.
+
+        Raises:
+            AuthError: Keeper/custody authentication fails.
+            ValidationError: Recipient encryption primitive is unsupported.
+
+        Sealed-box encryption supplies confidentiality, not sender authority. The
+        domain binds this cipher to the assignment, recipient, and key coordinates.
+        """
+        if not isinstance(encrypter, Encrypter) or encrypter.code != MtrDex.X25519:
+            raise ValidationError('registry root requires an accepted X25519 recipient key')
+        secret = self._load(regid)
+        return encrypter.encrypt(prim=Salter(qb64=secret.salt))
+
+    def openRoot(self, cipher, verfer):
+        """Open a qualified root cipher with one exact locally retained signing key.
+
+        Args:
+            cipher (Cipher | str): Complete X25519_Cipher_Salt primitive.
+            verfer (Verfer): Exact local accepted Ed25519 key selected externally;
+                its retained private key remains inside the authenticated Keeper.
+
+        Returns:
+            Salter: Decrypted Salt_128 root for commitment verification before
+                prepareRoot. Callers must never log its raw or qualified values.
+
+        Raises:
+            AuthError: Keeper, retained private key, ciphertext, or root fails.
+            ValidationError: Cipher or recipient primitive is unsupported.
+
+        The domain verifies authority, recipient membership and historical key
+        coordinates before calling, and checks the root commitment before retaining.
+        Successful decryption alone grants no assignment or signing authority.
+        """
+        mgr = self._manager()
+        try:
+            sealed = cipher if isinstance(cipher, Cipher) else Cipher(qb64=cipher)
+            if (sealed.code != MtrDex.X25519_Cipher_Salt
+                    or (isinstance(cipher, str) and sealed.qb64 != cipher)
+                    or not isinstance(verfer, Verfer)
+                    or verfer.code not in (MtrDex.Ed25519, MtrDex.Ed25519N)):
+                raise ValueError
+        except Exception:
+            raise ValidationError('registry root cipher or recipient key is unsupported') from None
+        try:
+            raw = mgr.decrypt(qb64=sealed.raw, verfers=[verfer])
+            root = Salter(qb64b=raw)
+            if root.code != MtrDex.Salt_128 or root.qb64b != raw:
+                raise ValueError
+        except Exception:
+            raise AuthError('unable to open encrypted registry root') from None
+        return root
 
     def createCustody(self, regid, discloser):
         """Explicitly provision derivation for an accepted controlled registry.
