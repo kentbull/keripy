@@ -17,12 +17,14 @@ from .replying import parseReply
 
 
 def envelope(hab, msg, recipient, verfer, *, version=Version, kind=Kinds.json,
-             establishment=None):
+             establishment=None, scs=True):
     """Seal once to an authenticated individual key before choosing transport.
 
     The caller authenticates recipient/key membership. Optional establishment
     coordinates ``(sn, dig)`` bind the recipient's establishment event. Transport
-    must carry these returned bytes with ESSR wrapping disabled.
+    must carry these returned bytes with ESSR wrapping disabled. scs selects
+    whether this helper adds the SCS payload preamble; StreamPoster supplies
+    its already-framed payload with scs=False to avoid a second preamble.
     """
     if verfer.code not in (MtrDex.Ed25519, MtrDex.Ed25519N):
         raise ValidationError("Unsupported ESSR recipient key")
@@ -34,10 +36,11 @@ def envelope(hab, msg, recipient, verfer, *, version=Version, kind=Kinds.json,
         Diger(qb64=dig)
         q.update(sn=f'{sn:x}', dig=dig, key=verfer.qb64)
     pubkey = pysodium.crypto_sign_pk_to_box_pk(verfer.raw)
-    # Match StreamPoster._chunk: SCS type, authenticated source, and a complete
-    # padding primitive precede the ordinary CESR payload inside the ciphertext.
-    plain = (PayloadTyper(type=PayloadTypes.SCS).qb64b + hab.kever.prefixer.qb64b
-             + Bexter(bext='').qb64b + bytes(msg))
+    # Direct callers need one SCS preamble; StreamPoster owns it in _chunk.
+    plain = bytes(msg)
+    if scs:
+        plain = (PayloadTyper(type=PayloadTypes.SCS).qb64b + hab.kever.prefixer.qb64b
+                 + Bexter(bext='').qb64b + plain)
     raw = pysodium.crypto_box_seal(plain, pubkey)
     texter = Texter(raw=raw)
     essr, _ = specialExchange(sender=hab.pre, route='/essr/req', modifiers=q,

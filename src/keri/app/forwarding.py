@@ -425,7 +425,8 @@ class StreamPoster:
             rkever = self.hby.kevers[ctrl]
             verfer = rkever.verfers[0]
 
-        return envelope(hab, msg, ctrl, verfer, version=self.version, kind=self.kind)
+        # _chunk already frames SCS; preserve this wrapper's raw sealing contract.
+        return envelope(hab, msg, ctrl, verfer, version=self.version, kind=self.kind, scs=False)
 
     def createForward(self, hab, ends, serder, atc, topic, *, gvrsn=None):
         """Wrap a child with input attachment genus gvrsn in this poster's version."""
