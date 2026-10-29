@@ -89,7 +89,7 @@ def issuanceOrigin(wallet, acdc, record, *, opening=None):
     if accepted is None or accepted.said != record.update:
         raise ConfigurationError('retained issuance event is not accepted')
     if event.ilk == 'bup' and opening is None:
-        opening = wallet.publicOpening(event)
+        opening = wallet.rgy.store.verifiedOpening(event)
         if opening is None:
             if wallet.custody is None:
                 raise ConfigurationError('issuance opening unavailable; supply --opening or use --derive with provisioned custody')
@@ -188,7 +188,7 @@ def standing(wallet, reg, acdc, *, derive=False):
         return 'unknown'
     sn = Number(numh=head.sad['n']).num
     retained = wallet.issuedRecord(acdc.said)
-    opening = wallet.publicOpening(head)
+    opening = wallet.rgy.store.verifiedOpening(head)
     if opening is None and derive and wallet.custody is not None:
         bound = (dict(bound=True, bsn=retained.bound['bn'], bd=retained.bound['bd'])
                  if retained and retained.update == head.said and retained.bound else {})
@@ -327,7 +327,7 @@ class AcdcV2Author(doing.DoDoer):
 
         def acceptedOpening(event):
             """Read possessed public or private proof without reconstructing metadata."""
-            opening = wallet.publicOpening(event)
+            opening = wallet.rgy.store.verifiedOpening(event)
             return (opening, True) if opening is not None else (wallet.reger.privateOpening(event), False)
 
         if self.proposedEvent is not None:
@@ -340,7 +340,6 @@ class AcdcV2Author(doing.DoDoer):
                     raise ConfigurationError('public bup group proposal requires its explicit opening')
                 self.blinder = self.proposedBlinder
                 self.publishOpening = True
-                wallet.retainPublicOpening(event, self.blinder)
             else:
                 makeOpening(ordinal)
                 if (self.proposedBlinder is not None
@@ -352,10 +351,14 @@ class AcdcV2Author(doing.DoDoer):
                 wallet.reger.retainPrivateOpening(event, self.blinder)
             accepted = reg.store.seqEvent(reg.regk, ordinal)
             if accepted is not None and accepted.said == event.said:
+                if public:
+                    reg.store.retainOpening(event, self.blinder)
                 return event
             if event.sad.get('p') != head.said or ordinal != sn + 1:
                 raise ConfigurationError('group proposal does not extend this registry head')
             reg.processEvent(event)
+            if public:
+                reg.store.retainOpening(event, self.blinder)
             return event
 
         pending = [event for _, event in reg.store.baser.evts.getTopItemIter()
@@ -364,7 +367,7 @@ class AcdcV2Author(doing.DoDoer):
         if pending:
             event = pending[0]
             if public:
-                self.blinder = wallet.publicOpening(event)
+                self.blinder = wallet.rgy.store.verifiedOpening(event)
                 self.publishOpening = True
                 if self.blinder is None:
                     raise ConfigurationError('pending public bup is missing its retained opening')
@@ -394,11 +397,13 @@ class AcdcV2Author(doing.DoDoer):
         proof = makeOpening(sn + 1)
         event = messaging.blindate(reg.regk, head.said, proof.said,
                                    sn=sn + 1, stamp=self.args.time)
-        if public:
-            wallet.retainPublicOpening(event, proof)
-        else:
+        if not public:
             wallet.reger.retainPrivateOpening(event, proof)
+        # Store/validate the exact event through ordinary TEL processing before
+        # publishing its opening. Pending anchors remain ordinary TEL escrow.
         reg.processEvent(event)
+        if public:
+            reg.store.retainOpening(event, proof)
         return event
 
     def run(self, tymth, tock=0.03125, **kwa):
@@ -669,10 +674,10 @@ def read(args, operation):
                         number, diger = reg.store.anchor(event.said)
                         bonds = [SealSource(s=number.numh, d=diger.qb64)]
                         # Public bup is public because every publication carries
-                        # its exact expanded opening. The wallet retains that
+                        # its exact expanded opening. The registry store retains
                         # event evidence across restarts without retaining registry
                         # custody or synthesizing an opening during export.
-                        if (opening := wallet.publicOpening(event)) is not None:
+                        if (opening := wallet.rgy.store.verifiedOpening(event)) is not None:
                             bonds.insert(0, opening.data)
                         stream.extend(messagize(event, bonds=bonds, gvrsn=Vrsn_2_0))
                 if args.full:

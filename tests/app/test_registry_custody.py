@@ -42,7 +42,7 @@ def test_explicit_custody_provisioning_allows_public_prefix_but_never_recreates_
             public = blindate(registry.regk, rip.said, publicOpening.said)
             registry.processEvent(public)
             anchored(issuer, registry, public)
-            wallet.retainPublicOpening(public, publicOpening)
+            wallet.rgy.store.retainOpening(public, publicOpening)
             assert wallet.custody is None
             assert not list(wallet.hby.ks.custody.getTopItemIter())
             wallet.custody = RegistryCustody(hby, rgy)

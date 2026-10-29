@@ -226,7 +226,7 @@ def test_public_cli_lifecycle_never_provisions_or_encrypts_custody():
             assert rgy.registryByName('public').sn == 2
             head = rgy.registryByName('public').store.headEvent(reg['registry'])
             assert head.ilk == 'bup'
-            assert wallet.publicOpening(head).state == 'revoked'
+            assert wallet.rgy.store.verifiedOpening(head).state == 'revoked'
         finally:
             wallet.close()
             rgy.close()
@@ -355,8 +355,8 @@ def test_acdc_v2_cli_derived_issuance_then_public_revocation():
             issuance = reg.store.seqEvent(regid, 1)
             revocation = reg.store.seqEvent(regid, 2)
             assert issuance.said == issued['update']
-            assert wallet.publicOpening(issuance) is None
-            assert wallet.publicOpening(revocation).state == 'revoked'
+            assert wallet.rgy.store.verifiedOpening(issuance) is None
+            assert wallet.rgy.store.verifiedOpening(revocation).state == 'revoked'
             assert reg.store.headEvent(regid).said == revocation.said
         finally:
             wallet.close()
@@ -389,7 +389,7 @@ def test_acdc_v2_cli_public_request_after_same_state_derived_head_appends_openin
             assert reg.store.seqEvent(regid, 2).said == private['update']
             head = reg.store.headEvent(regid)
             assert head.sad['n'] == '3' and head.said == public['update']
-            assert wallet.publicOpening(head).state == 'revoked'
+            assert wallet.rgy.store.verifiedOpening(head).state == 'revoked'
         finally:
             wallet.close()
             rgy.close()
@@ -416,10 +416,10 @@ def test_acdc_v2_cli_public_update_after_different_derived_credential():
         try:
             reg = rgy.registryByName('mixed')
             assert reg.store.seqEvent(regid, 1).said == first['update']
-            assert wallet.publicOpening(reg.store.seqEvent(regid, 1)) is None
+            assert wallet.rgy.store.verifiedOpening(reg.store.seqEvent(regid, 1)) is None
             head = reg.store.headEvent(regid)
             assert head.said == second['update']
-            assert wallet.publicOpening(head).acdc == second['credential']
+            assert wallet.rgy.store.verifiedOpening(head).acdc == second['credential']
         finally:
             wallet.close()
             rgy.close()
@@ -452,7 +452,7 @@ def test_acdc_v2_cli_public_update_after_bound_derived_predecessor():
         try:
             marker = wallet.reger.privateOpening(rgy.store.event(revoked['update']))
             assert (marker.acdc, marker.state, marker.bsn, marker.bd) == (issued['credential'], 'revoked', 1, current)
-            assert wallet.publicOpening(rgy.registryByName('bound').store.headEvent(regid)) is None
+            assert wallet.rgy.store.verifiedOpening(rgy.registryByName('bound').store.headEvent(regid)) is None
         finally:
             wallet.close()
             rgy.close()
@@ -468,7 +468,7 @@ def test_acdc_v2_cli_public_update_after_bound_derived_predecessor():
             assert reg.store.seqEvent(regid, 2).said == revoked['update']
             head = reg.store.headEvent(regid)
             assert head.sad['n'] == '3' and head.said == public['update']
-            assert wallet.publicOpening(head).acdc == public['credential']
+            assert wallet.rgy.store.verifiedOpening(head).acdc == public['credential']
         finally:
             wallet.close()
             rgy.close()
@@ -539,7 +539,7 @@ def test_public_pending_bup_without_retained_opening_refuses_replacement():
             args = SimpleNamespace(public=True, bound_event=None, time=None)
             event = AcdcV2Author(args, 'create').update(wallet, reg, acdc, 'issued')
             raw = event.raw
-            assert wallet.publicOpening(event).state == 'issued'
+            assert wallet.rgy.store.verifiedOpening(event).state == 'issued'
             assert rgy.store.baser.openings.rem((event.said,))
 
             with pytest.raises(ConfigurationError,

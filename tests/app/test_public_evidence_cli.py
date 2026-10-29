@@ -157,7 +157,7 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         parameters = wallet.boundEvent(acdc, case.bound_args[1]) if bound else {}
         head = reg.store.headEvent(case.registry)
         assert wallet.reger.privateOpening(head).qb64 == case.proof.qb64
-        assert wallet.publicOpening(head) is None
+        assert wallet.rgy.store.verifiedOpening(head) is None
         # Ordinary unanchored staging models interruption before its opening was retained.
         proof = wallet.custody.derive(case.registry, 3, acdc.said, 'issued', **parameters)
         staged = messaging.blindate(case.registry, head.said, proof.said, sn=3)
@@ -170,7 +170,7 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         reg = rgy.registryByName('r')
         assert reg.store.headEvent(case.registry).raw == staged.raw
         assert wallet.reger.privateOpening(staged).qb64 == proof.qb64
-        assert wallet.publicOpening(staged) is None
+        assert wallet.rgy.store.verifiedOpening(staged) is None
     public = invoke(case.alice, 'vc', 'create', '--acdc-v2', '--public', '-a', 'self',
                     '-r', 'r', '--data', '{"status":"public successor"}')[0]
     with _owned_wallet(case.alice) as (_, rgy, wallet):
@@ -179,7 +179,7 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         assert head.sn == 4 and head.said == public['update']
         assert reg.store.seqEvent(case.registry, 2).said == case.next_event['update']
         assert reg.store.seqEvent(case.registry, 3).raw == staged.raw
-        assert wallet.publicOpening(head).acdc == public['credential']
+        assert wallet.rgy.store.verifiedOpening(head).acdc == public['credential']
 
     if not bound:
         # A rival pending state remains intact; Advance must not retain its coordinates.

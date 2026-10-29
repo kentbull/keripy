@@ -85,39 +85,6 @@ class Wallet:
             This public evidence lookup loads no custody and does not derive an opening."""
         return boundEvent(self.hby, acdc, said)
 
-    def retainPublicOpening(self, event, blinder):
-        """Retain one explicitly public event opening without creating custody.
-
-        The opening is authenticated against the exact ``bup`` commitment before
-        storage. Repeated identical publication is idempotent; a rival opening for
-        the same TEL event is refused. This table contains per-event public proof,
-        never a reusable derivation salt.
-        """
-        if event is None or event.ilk != 'bup' or not isinstance(blinder, Blinder):
-            raise ValidationError('public opening requires an ACDC v2 blinded update')
-        regeventing.vetBlind(blinder, blid=event.sad['b'])
-        old = self.rgy.store.opening(event.said)
-        if old is not None and old != blinder.qb64:
-            raise ValidationError('different public opening is already retained for this event')
-        # Authoring retains the opening before the event enters normal TEL
-        # processing. This row alone never establishes event acceptance.
-        self.rgy.store.baser.openings.pin((event.said,), blinder.qb64)
-        return blinder
-
-    def publicOpening(self, event):
-        """Return the authenticated retained public opening for ``event``, if any."""
-        if event is None or event.ilk != 'bup':
-            return None
-        qb64 = self.rgy.store.opening(event.said)
-        if qb64 is None:
-            return None
-        candidates = regeventing._blindCandidates(qb64)
-        if len(candidates) != 1:
-            raise ValidationError('retained public opening is ambiguous')
-        blinder = candidates[0]
-        regeventing.vetBlind(blinder, blid=event.sad['b'])
-        return blinder
-
     def recordIssued(self, acdc, update, *, blinder=None):
         """Record verified issuance, or return an identical historical record.
 
