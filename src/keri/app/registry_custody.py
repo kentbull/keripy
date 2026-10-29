@@ -12,6 +12,11 @@ Supplied-root preparation and qualified sealed-box handoff are local application
 additions using the existing Encrypter and Keeper Manager. The domain caller
 owns authenticated assignment and membership policy; custody owns encrypted
 root retention and never generates a replacement for a supplied root.
+
+Local candidate creation implements Kent Bull's 2026-10-29 choice to replace
+interactive DH with random salts and encrypted replication. Candidates reuse
+Keeper encryption but remain separate from active custody until the domain's
+issuer-assignment transaction activates them. This is local application policy.
 """
 from dataclasses import asdict, dataclass, field
 import json
@@ -69,6 +74,19 @@ class PreparedCustody:
     registry: str
     expected: bytes | None = field(repr=False)
     encrypted: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
+class SaltCandidate:
+    """Unapproved local salt and encrypted row snapshot for guarded activation.
+
+    info binds the accepted issuer registry. root is secret and excluded from
+    repr; expected identifies the exact encrypted candidate to retire within
+    the same transaction that activates custody and records its authorization.
+    """
+    info: CustodyInfo
+    root: Salter = field(repr=False)
+    expected: bytes = field(repr=False)
 
 
 class RegistryCustody:
@@ -152,10 +170,20 @@ class RegistryCustody:
             ConfigurationError: No registry capability was explicitly provisioned.
             AuthError: Keeper authentication, AEID binding, cipher, or profile fails.
         """
-        mgr = self._manager()
+        self._manager()
         record = self.db.custody.get((regid,))
         if record is None:
             raise ConfigurationError('registry custody is not provisioned')
+        return self._decode(regid, record)
+
+    def _decode(self, regid, record):
+        """Authenticate an encrypted fixed-profile row under the current Keeper.
+
+        Parameters: regid is the expected registry; record is EncryptedCustody.
+        Returns: the private payload. Raises: AuthError without disclosing data.
+        Both candidates and active custody use this same encryption contract.
+        """
+        mgr = self._manager()
         if record.aeid != mgr.aeid:
             raise AuthError('custody encryption AEID changed; explicit operator rewrap is required')
         try:
@@ -169,13 +197,89 @@ class RegistryCustody:
             raise AuthError('unable to authenticate private registry custody') from None
         return secret
 
+    def candidate(self, registry):
+        """Open an existing unapproved salt without activating derivation custody.
+
+        Parameters: registry is the exact accepted inception SAID.
+        Returns: SaltCandidate containing the original salt and encrypted snapshot.
+        Raises: ConfigurationError if absent; AuthError for corrupt or old-AEID
+            state. Reading never regenerates or repairs a lost candidate.
+        """
+        self._manager()
+        try:
+            record = self.db.saltCandidates.get((registry,))
+        except (ValueError, TypeError, AttributeError, KeyError):
+            raise AuthError('unable to authenticate registry salt candidate') from None
+        if record is None:
+            raise ConfigurationError('registry salt candidate is not prepared')
+        secret = self._decode(registry, record)
+        info, root = CustodyInfo(**secret.info), Salter(qb64=secret.salt)
+        if info.discloser != info.controller or root.code != MtrDex.Salt_128:
+            raise AuthError('registry salt candidate has invalid creation bindings')
+        return SaltCandidate(info, root, self.db.saltCandidates._ser(record))
+
+    def createCandidate(self, registry):
+        """Create once for a local accepted issuer, or reopen its same candidate.
+
+        Parameters: registry is an accepted RIP SAID controlled by a local Hab.
+        Returns: durable encrypted SaltCandidate; this does not authorize an
+            assignment or enable opening derivation. Normal group approval is
+            still required, and the caller chooses the proposing member.
+        Raises: ValidationError for nonlocal/unaccepted control, ConfigurationError
+            if active custody already exists, or AuthError on Keeper/corruption.
+
+        Random salt generation uses existing CESR Salter. Concurrent attempts
+        retain the first encrypted candidate; no candidate replacement is implicit.
+        """
+        mgr = self._manager()
+        rip = self.rgy.store.seqEvent(registry, 0)
+        if (rip is None or rip.ilk != 'rip' or rip.said != registry
+                or self.hby.habByPre(rip.israid) is None):
+            raise ValidationError('salt creation requires the accepted local issuer registry')
+        if self.db.custody.get((registry,)) is not None:
+            raise ConfigurationError('registry already has custody; explicitly adopt its existing salt')
+        try:
+            previous = self.db.saltCandidates.get((registry,))
+        except (ValueError, TypeError, AttributeError, KeyError):
+            raise AuthError('unable to authenticate registry salt candidate') from None
+        if previous is not None:
+            return self.candidate(registry)
+        info = CustodyInfo(registry, rip.israid, rip.israid)
+        secret = _Custody(asdict(info), Salter().qb64)
+        cipher = mgr.encrypter.encrypt(ser=json.dumps(asdict(secret), separators=(',', ':')).encode())
+        record = EncryptedCustody(mgr.aeid, cipher.qb64)
+        with self.db.env.begin(write=True) as txn:
+            if self._manager().aeid != record.aeid:
+                raise AuthError('Keeper changed during registry salt creation')
+            if txn.get(self.db.custody._tokey((registry,)), db=self.db.custody.sdb) is not None:
+                raise ValidationError('custody was activated during salt creation')
+            txn.put(self.db.saltCandidates._tokey((registry,)),
+                    self.db.saltCandidates._ser(record), db=self.db.saltCandidates.sdb,
+                    overwrite=False)
+        return self.candidate(registry)
+
+    def retireCandidate(self, candidate, txn):
+        """Retire an exact candidate inside the caller's authorization transaction.
+
+        Parameters: candidate is the previously opened SaltCandidate; txn is the
+            wallet write transaction that activates the authorized root or records
+            an explicit abandonment. Returns: None. Raises: ValidationError when
+            its encrypted snapshot changed. Performs no decryption or approval.
+        """
+        if not isinstance(candidate, SaltCandidate):
+            raise ValidationError('registry salt retirement requires an exact candidate')
+        key = self.db.saltCandidates._tokey((candidate.info.registry,))
+        if txn.get(key, db=self.db.saltCandidates.sdb) != candidate.expected:
+            raise ValidationError('registry salt candidate changed during activation')
+        txn.delete(key, db=self.db.saltCandidates.sdb)
+
     def prepareRoot(self, info, root):
         """Prepare an encrypted supplied root without writing or generating one.
 
         Args:
             info (CustodyInfo): Original registry/controller/discloser metadata
                 and this application's fixed derivation profile.
-            root (Salter): Supplied Salt_128 root, normally established by DH.
+            root (Salter): Explicitly supplied Salt_128 root.
 
         Returns:
             PreparedCustody: Ciphertext and a previous-row snapshot. The caller

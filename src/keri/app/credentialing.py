@@ -82,6 +82,7 @@ class WalletBaser(dbing.LMDBer):
         # Registry-salt state shares this transaction boundary; opening these
         # tables never decrypts or provisions an optional private capability.
         self.saltPending = koming.Komer(db=self, subkey='salt-pending.', klas=EncryptedCustody)
+        self.saltCandidates = koming.Komer(db=self, subkey='salt-candidates.', klas=EncryptedCustody)
         self.saltOrigins = koming.Komer(db=self, subkey='salt-origins.', klas=SaltOrigin)
         self.saltDeliveries = koming.Komer(db=self, subkey='salt-deliveries.', klas=SaltDelivery)
         self.saltRosters = koming.Komer(db=self, subkey='salt-rosters.', klas=SaltRoster)
