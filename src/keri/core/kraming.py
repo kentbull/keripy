@@ -1210,7 +1210,10 @@ class Kramer:
 
                     if kever.tholder.satisfy(indices=sigIndices):
                         self._rehydrateKwaFromEscrow(key, senderId, kwa)
-                        if msg.ilk == Ilks.exn:
+                        # Reply routing also verifies explicit establishment
+                        # groups. Forward the accepted aggregate before removing
+                        # partial state, not only the final packet's signatures.
+                        if msg.ilk in (Ilks.exn, Ilks.rpy):
                             self._setVerifiedSenderTsg(
                                 senderId, kever, allSigs, kwa)
                         # The cache remains as the replay marker. Partial state
