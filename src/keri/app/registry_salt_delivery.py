@@ -19,8 +19,13 @@ from ..kering import AuthError, ConfigurationError, KeriError, MissingEntryError
 from .forwarding import StreamPoster
 
 
-class _TransportAttempt(doing.DoDoer):
-    """Supervise finite stream messengers without failing the enclosing worker."""
+class SaltTransportAttempt(doing.DoDoer):
+    """Supervise one finite salt delivery without failing its caller's runtime.
+
+    The caller owns scheduling/cancellation and interprets ``done`` together
+    with ``error``. Success means TCP submission or HTTP 2xx, never protocol
+    acceptance, group consent or retained custody. This owner opens no store.
+    """
 
     def __init__(self, children, timeout, **kwa):
         """Own finite children for at most timeout scheduler seconds; open no store."""
@@ -194,7 +199,7 @@ class RegistrySaltDelivery(doing.DoDoer):
             return
         if launched is None:
             return
-        attempt = _TransportAttempt(children, min(self.timeout, remaining), tock=self.tock)
+        attempt = SaltTransportAttempt(children, min(self.timeout, remaining), tock=self.tock)
         self.active[key] = (attempt, launched, receipt)
         try:
             self.extend([attempt])

@@ -15,7 +15,7 @@ from keri import Vrsn_2_0
 from keri.app import openHby, registry_salt_replies as replies, registry_salts
 from keri.app.credentialing import Wallet
 from keri.app.evidencing import ServiceConfig
-from keri.app.registry_salt_delivery import RegistrySaltDelivery, _TransportAttempt
+from keri.app.registry_salt_delivery import RegistrySaltDelivery, SaltTransportAttempt
 from keri.app.registry_salt_service import RegistrySaltService
 from keri.app.registry_salt_state import RegistrySaltState, SaltDelivery, SaltOrigin
 from keri.core import Encrypter, Kramer, Parser, SerderKERI, Signer
@@ -252,7 +252,7 @@ def test_finite_transport_exception_is_failure_and_owned_doers_close():
             """Represent the finite messenger's actual cutoff failure contract."""
             raise ConnectionError('closed before stream delivery completed')
 
-    attempt = _TransportAttempt([Cutoff()], timeout=0.1, tock=0.01)
+    attempt = SaltTransportAttempt([Cutoff()], timeout=0.1, tock=0.01)
     doing.Doist(tock=0.01, real=True, limit=0.1).do(doers=[attempt])
     assert attempt.done and attempt.error == 'transport failure'
     assert attempt.deeds == [] or not attempt.deeds
