@@ -113,12 +113,12 @@ def _negotiated_cli_case(tmp_path):
     # credential view or original grant. Each test supplies its own opening capability.
     from keri.acdc import Regery
     from keri.acdc.messaging import blindate
-    from keri.app.credentialing import Wallet
+    from tests.app.native_owners import NativeOwners
     from keri.app.registry_custody import RegistryCustody
     with openHby(name=names['issuer'], base='acdc-v2-ipex-cli', temp=False,
                  bran=PASSCODE, version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=hby.name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             reg = rgy.registryByName('r')
             opening = RegistryCustody(hby, rgy).derive(reg.regk, 2, said, 'issued')

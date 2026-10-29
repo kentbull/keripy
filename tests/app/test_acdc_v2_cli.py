@@ -13,7 +13,7 @@ from keri import Vrsn_2_0
 from keri.acdc import Regery, Registrar, acdcmap
 from keri.acdc.regeventing import vet, vetBlind
 from keri.app import openHby
-from keri.app.credentialing import Wallet
+from tests.app.native_owners import NativeOwners
 from keri.app.evidencing import EvidenceContext
 from keri.cli import commands
 from keri.cli.common.acdc_v2 import AcdcV2Author
@@ -134,7 +134,7 @@ def test_acdc_v2_cli_authoring_reopen_and_public_export(tmp_path):
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             assert wallet.hby.ks.custody.rem((regid,))
         finally:
@@ -218,7 +218,7 @@ def test_public_cli_lifecycle_never_provisions_or_encrypts_custody():
     assert invoke(name, 'vc', 'list', '--acdc-v2', '--issued', '-a', 'issuer')[0]['state'] == 'revoked'
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             assert not hby.mgr.aeid
             assert wallet.custody is None
@@ -349,7 +349,7 @@ def test_acdc_v2_cli_derived_issuance_then_public_revocation():
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             reg = rgy.registryByName('mixed')
             issuance = reg.store.seqEvent(regid, 1)
@@ -383,7 +383,7 @@ def test_acdc_v2_cli_public_request_after_same_state_derived_head_appends_openin
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             reg = rgy.registryByName('mixed')
             assert reg.store.seqEvent(regid, 2).said == private['update']
@@ -412,7 +412,7 @@ def test_acdc_v2_cli_public_update_after_different_derived_credential():
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             reg = rgy.registryByName('mixed')
             assert reg.store.seqEvent(regid, 1).said == first['update']
@@ -448,7 +448,7 @@ def test_acdc_v2_cli_public_update_after_bound_derived_predecessor():
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             marker = wallet.reger.privateOpening(rgy.store.event(revoked['update']))
             assert (marker.acdc, marker.state, marker.bsn, marker.bd) == (issued['credential'], 'revoked', 1, current)
@@ -462,7 +462,7 @@ def test_acdc_v2_cli_public_update_after_bound_derived_predecessor():
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             reg = rgy.registryByName('bound')
             assert reg.store.seqEvent(regid, 2).said == revoked['update']
@@ -490,7 +490,7 @@ def test_public_transition_refuses_wrong_or_missing_local_opening():
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             marker = wallet.reger.privateOpening(rgy.store.event(revoked['update']))
             assert (marker.acdc, marker.state) == (issued['credential'], 'revoked')
@@ -509,7 +509,7 @@ def test_public_transition_refuses_wrong_or_missing_local_opening():
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             assert wallet.reger.blinds.rem((revoked['update'],))
         finally:
@@ -529,7 +529,7 @@ def test_public_pending_bup_without_retained_opening_refuses_replacement():
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name='issuer', version=Vrsn_2_0)
         rgy = Regery(hby=hby, name=hby.name)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             reg = Registrar(rgy=rgy).makeRegistry(name='public', prefix=hab.pre)
             rip = rgy.store.event(reg.regk)
@@ -537,14 +537,14 @@ def test_public_pending_bup_without_retained_opening_refuses_replacement():
             acdc = acdcmap(israid=hab.pre, regid=reg.regk,
                            attribute={'d': '', 'name': 'Pending'})
             args = SimpleNamespace(public=True, bound_event=None, time=None)
-            event = AcdcV2Author(args, 'create').update(wallet, reg, acdc, 'issued')
+            event = AcdcV2Author(args, 'create').update(wallet.hby, wallet.reger, reg, acdc, 'issued', custody=wallet.custody)
             raw = event.raw
             assert wallet.rgy.store.verifiedOpening(event).state == 'issued'
             assert rgy.store.baser.openings.rem((event.said,))
 
             with pytest.raises(ConfigurationError,
                                match='pending public bup is missing its retained opening'):
-                AcdcV2Author(args, 'create').update(wallet, reg, acdc, 'issued')
+                AcdcV2Author(args, 'create').update(wallet.hby, wallet.reger, reg, acdc, 'issued', custody=wallet.custody)
             pending = [item for _, item in reg.store.baser.evts.getTopItemIter()
                        if item.sad.get('rd') == reg.regk and item.sad.get('n') == '1']
             assert len(pending) == 1
@@ -644,7 +644,7 @@ def test_full_export_requires_explicit_verified_opening(tmp_path):
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             row = wallet.hby.ks.custody.get((regid,))
             row.cipher = 'invalid-ciphertext'
@@ -680,7 +680,7 @@ def test_full_export_rejects_wrong_salt_after_encrypted_reply(tmp_path):
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
-        wallet = Wallet(hby, rgy)
+        wallet = NativeOwners(hby, rgy)
         try:
             assert wallet.hby.ks.custody.rem((regid,))
             hab = hby.habByName('issuer')
@@ -722,7 +722,7 @@ def test_evidence_options_fail_before_store_or_file_access(tokens, message):
 def test_registry_reads_do_not_open_wallet(monkeypatch, capsys):
     """Inspect accepted registry state with credential inventory unavailable.
 
-    The real read adapters reopen the identity and registry. Failing Wallet
+    The real read adapters reopen the identity and registry. Failing Reger
     construction distinguishes this boundary from merely avoiding salt access.
     """
     from keri.cli.common import acdc_v2
@@ -743,7 +743,7 @@ def test_registry_reads_do_not_open_wallet(monkeypatch, capsys):
         """Represent an absent application inventory without changing protocol owners."""
         pytest.fail('registry inspection must not construct credential inventory')
 
-    monkeypatch.setattr(acdc_v2, 'Wallet', unavailable)
+    monkeypatch.setattr(acdc_v2, 'Reger', unavailable)
     args = SimpleNamespace(name=name, base=base, bran=PASSCODE,
                            registry_name='authority', verbose=False)
     for operation in ('registries', 'status'):
@@ -774,7 +774,7 @@ def test_registry_inception_does_not_open_wallet(monkeypatch, capsys, with_custo
         """Fail at the unwanted inventory boundary while retaining real stores."""
         pytest.fail('registry inception must not construct credential inventory')
 
-    monkeypatch.setattr(acdc_v2, 'Wallet', unavailable)
+    monkeypatch.setattr(acdc_v2, 'Reger', unavailable)
     tokens = ['vc', 'registry', 'incept', '--acdc-v2', '--name', name,
               '--base', base, '--passcode', PASSCODE, '-a', 'issuer', '-r', 'authority']
     if with_custody:

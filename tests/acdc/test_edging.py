@@ -637,7 +637,7 @@ def test_schema_authorized_edges_through_signed_grant(graph, shape, accepted):
 ])
 def test_authenticated_graph_retention_is_separate_from_wallet_use(graph, farTruth, operator, verdict):
     """Retain signed false/unknown graphs, but only explicit root True admits."""
-    from keri.app.credentialing import Wallet
+    from tests.app.native_owners import NativeOwners
     _, issuer, _, _ = graph
     with openHby(name='graph-use-receiver', version=Vrsn_2_0) as receiver:
         holder = receiver.makeHab(name='holder')
@@ -675,7 +675,7 @@ def test_authenticated_graph_retention_is_separate_from_wallet_use(graph, farTru
         reply, ratc = admit(holder, 'explicit local consent', exn)
         parser.parse(ims=bytearray(reply.raw + ratc))
         assert exc.complete(reply.said)
-        wallet = Wallet(receiver, None, exc=exc, verification=verification)
+        wallet = NativeOwners(receiver, None, exc=exc, verification=verification)
         try:
             if verdict is not True:
                 with pytest.raises(ValidationError, match='semantic acceptance'):

@@ -18,7 +18,7 @@ from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import GroupHab, Notifier
 from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from keri.app.credential_disclosing import boundEvent, registryProof
-from keri.app.credentialing import Wallet
+from keri.vdr.eventing import Reger
 from keri.app.registry_custody import RegistryCustody
 from keri.app.httping import CESR_CONTENT_TYPE, CESR_ATTACHMENT_HEADER
 from keri.app.indirecting import createHttpServer
@@ -36,7 +36,7 @@ class Notices:
     """Adapt core notification calls when retained evidence drives CLI results.
 
     This adapter owns no notification database. Receiving a notification is not
-    wallet consent, protocol acceptance, or transport acknowledgement."""
+    holder consent, protocol acceptance, or transport acknowledgement."""
     def add(self, attrs):
         """Ignore transient attrs; CLI decisions read the verified retained EXNs.
 
@@ -49,7 +49,7 @@ class Peer:
 
     The caller owns identity, registry, and independent section stores.
     The peer composes verification and escrow processing; it grants no automatic
-    wallet consent and does not weaken the ACDC v2 KRAM requirement."""
+    holder consent and does not weaken the ACDC v2 KRAM requirement."""
     def __init__(self, hby, rgy, sections, *, graphPolicy=None):
         """Share section evidence and ACDC v2 IPEX verification policy across intake and admission.
 
@@ -80,7 +80,7 @@ class Peer:
         only concrete retained dependency errors remain for escrow retry. Return a
         list of exchange SAIDs with their current core accepted flags. Incomplete
         framing raises ConfigurationError; other proof failures propagate. Neither
-        intake nor acceptance records wallet consent or claims delivery."""
+        intake nor acceptance records holder consent or claims delivery."""
         # Independent input streams retain the v2 default; their own GVCs may
         # select another genus without changing the next request's default.
         self.parser.version = Vrsn_2_0
@@ -137,7 +137,7 @@ def options(parser, *, send=False):
 class ExchangeDoer(doing.DoDoer):
     """Own one ACDC v2 IPEX action or a long-lived authenticated intake service.
 
-    Keep protocol acceptance, explicit wallet admission, and direct transport
+    Keep protocol acceptance, explicit holder admission, and direct transport
     completion distinct. Open only the capabilities required by the selected
     operation and cancel scheduled child work before their store contexts exit."""
     def __init__(self, args, verb):
@@ -185,10 +185,10 @@ class ExchangeDoer(doing.DoDoer):
             # Only authoring from a locally issued credential needs Reger.
             # Receive, negotiation, admission, retained presentation and proposal
             # approval use the peer's existing exchange evidence directly.
-            wallet = None
+            reger = None
             if self.verb in ('grant', 'offer') and not args.from_grant and not args.proposal:
-                wallet = Wallet(hby, rgy, verification=peer.verification)
-                activity.callback(wallet.close)
+                reger = activity.enter_context(openLMDB(cls=Reger, name=hby.name,
+                    base=hby.base, temp=hby.db.temp, headDirPath=hby.db.headDirPath))
             # This command owns KRAM maintenance, including when a group shares
             # the peer's Kramer. Stop child work before the stores leave scope.
             self.extend([peer.evidence])
@@ -245,7 +245,7 @@ class ExchangeDoer(doing.DoDoer):
                     credential = held['credential']
                     artifacts = held['artifacts']
                 else:
-                    credential = Registrar(wallet.rgy).issuedCredential(wallet.reger, args.said)
+                    credential = Registrar(rgy).issuedCredential(reger, args.said)
                     artifacts = []
                 if args.disclose:
                     if not isinstance(credential.sad.get('a'), dict):
@@ -282,9 +282,9 @@ class ExchangeDoer(doing.DoDoer):
                     origin = self.registryOrigin(hby, rgy, credential, regid, custody=custody,
                         retained=peer.exc.routes['/ipex/grant']._blindProofs(node))
                 elif regid := (issuerRegistry(credential) or
-                               Registrar(wallet.rgy).issuedRecord(wallet.reger, credential.said).registry):
+                               Registrar(rgy).issuedRecord(reger, credential.said).registry):
                     origin = self.registryOrigin(hby, rgy, credential, regid, custody=custody,
-                        issued=Registrar(wallet.rgy).issuedRecord(wallet.reger, credential.said))
+                        issued=Registrar(rgy).issuedRecord(reger, credential.said))
                 else:
                     if credential.israid != hab.pre:
                         raise ConfigurationError('credential issuer proof is unavailable')
@@ -432,7 +432,7 @@ class ExchangeDoer(doing.DoDoer):
 
         peer supplies its accepted EXNs and configured ACDC v2 IPEX handlers; said selects
         the exact prior. Missing acceptance, unknown routes, or failed semantic proof
-        raise ConfigurationError. This lookup does not imply wallet admission."""
+        raise ConfigurationError. This lookup does not imply holder admission."""
         message = peer.hby.db.exns.get((said,))
         if message is None or not peer.exc.complete(said):
             raise ConfigurationError('prior IPEX message is not accepted')
@@ -477,7 +477,7 @@ class Intake:
         req and rep are Falcon request/response objects. Require application/cesr
         or raise HTTPUnsupportedMediaType; malformed detached-header framing
         raises HTTPBadRequest and core proof errors propagate through the
-        framework. The JSON lists core exchange acceptance, not wallet consent
+        framework. The JSON lists core exchange acceptance, not holder consent
         or recipient delivery, and this adapter records no admission itself."""
         if (req.content_type or '').split(';')[0] != CESR_CONTENT_TYPE:
             raise falcon.HTTPUnsupportedMediaType()
@@ -490,5 +490,5 @@ class Intake:
         rep.status = falcon.HTTP_202
 
     # StreamPoster uses PUT at the recipient endpoint root. Both methods enter
-    # the same ACDC v2 verifier and neither implies wallet admission.
+    # the same ACDC v2 verifier and neither implies holder admission.
     on_put = on_post

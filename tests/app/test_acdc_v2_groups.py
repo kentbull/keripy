@@ -569,7 +569,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
         None. Assertions check the stated evidence boundary."""
     from keri.acdc import admit
     from keri.acdc.regeventing import vet
-    from keri.app.credentialing import Wallet
+    from tests.app.native_owners import NativeOwners
     from keri.core import Codens, Counter, Prefixer
     from keri.peer import serializeMessage
     from keri.peer.exchanging import serializeParsedSubstream
@@ -584,7 +584,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             for group in groups:
                 owner.receive(group.mhab.replay(gvrsn=Vrsn_2_0))
                 owner.receive(group.replay(gvrsn=Vrsn_2_0))
-        wallets = [Wallet(hby, rgy, exc=owner.exc) for hby, rgy, owner in zip(hbys, rgys, owners)]
+        wallets = [NativeOwners(hby, rgy, exc=owner.exc) for hby, rgy, owner in zip(hbys, rgys, owners)]
         for wallet in wallets:
             stack.callback(wallet.close)
         foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
@@ -837,7 +837,7 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
     """
     from hio.base import doing
     from keri.acdc import admit, apply
-    from keri.app.credentialing import Wallet
+    from tests.app.native_owners import NativeOwners
     from keri.cli.common import acdc_v2_ipex
     from keri.cli.commands.ipex.grant import parser as arguments
     from keri.kering import ConfigurationError
@@ -875,7 +875,7 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
         Number(num=group.kever.lastEst.s), Diger(qb64=group.kever.lastEst.d),
         [member.sign(reply.raw)[0] for member in groups[:2]])], gvrsn=Vrsn_2_0))
     assert exc.complete(reply.said)
-    wallet = Wallet(hby, rgy, exc=exc, verification=verification)
+    wallet = NativeOwners(hby, rgy, exc=exc, verification=verification)
     try:
         wallet.verification.validateAdmission(incoming.said, reply.said, consent=True)
         plan = [[near.schema['$id'], '/', []], [far.schema['$id'], '/e/proof/_/', []]]

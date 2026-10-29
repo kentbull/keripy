@@ -1,22 +1,16 @@
-"""Native credential operations over existing Reger and Habery protocol records.
+"""Test-only composition of existing native credential evidence owners.
 
-Private derivation custody is an optional registry_custody collaborator. Ordinary
-issued/admitted inventory and retained disclosure retrieval never load its salt.
-
-Protocol acceptance remains in KERIpy's registry and IPEX processors. Admissions
-are views of ordinary authenticated Grant/Admit pairs, not a separate ledger.
-The exns/erpy records are owned by the existing Exchanger.logEvent path.
-The original issued/admitted reference model was adapted from KERI Foundation Locksmith
-3a5ad9ebcf98b4ec03baf1bbb91d928d49c168e4 (Apache-2.0 LICENSE; its package metadata
-incorrectly declares MIT). No Locksmith runtime or GUI dependency is used.
+This fixture retains no application records or protocol behavior. Production
+commands compose the required stores directly. The original view design was
+adapted from Locksmith 3a5ad9ebcf98b4ec03baf1bbb91d928d49c168e4 (Apache-2.0).
 """
 from keri.acdc.registraring import Registrar
 from keri.acdc.ipexing import AcdcV2IpexVerification
 from keri.vdr.eventing import Reger
-from .credential_disclosing import boundEvent
+from keri.app.credential_disclosing import boundEvent
 
 
-class Wallet:
+class NativeOwners:
     """Issued records and authenticated retained IPEX disclosure retrieval.
 
     Optional RegistryCustody is an explicit collaborator for callers that derive

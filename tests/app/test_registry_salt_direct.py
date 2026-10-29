@@ -5,7 +5,7 @@ import pytest
 from keri import Vrsn_2_0
 from keri.acdc import Registrar
 from keri.acdc.regeventing import Rever
-from keri.app.credentialing import Wallet
+from tests.app.native_owners import NativeOwners
 from keri.app.evidencing import ServiceConfig
 from keri.app.registry_custody import RegistryCustody
 from keri.app.registry_salt_service import RegistrySaltService
@@ -36,7 +36,7 @@ def network(tmp_path, request):
         services, parsers = [], []
         for hby, rgy in zip(hbys, rgys):
             custody = RegistryCustody(hby, rgy)
-            wallet = Wallet(hby, rgy, custody=custody)
+            wallet = NativeOwners(hby, rgy, custody=custody)
             stack.callback(wallet.close)
             rvy = Revery(db=hby.db)
             kvy = Kevery(db=hby.db, rvy=rvy,

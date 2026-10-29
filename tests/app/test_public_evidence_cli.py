@@ -52,8 +52,10 @@ def _owned_wallet(name):
     """Reopen all five real owners under the parent/child test store root."""
     args = SimpleNamespace(name=name, base='public-evidence-cli',
                            bran='0123456789abcdefghijk')
-    with acdc_v2.opened(args, custody=True) as owners:
-        hby, rgy, wallet = owners
+    with acdc_v2.openedCredentials(args, derive=True) as (hby, rgy, reger, custody):
+        from tests.app.native_owners import NativeOwners
+        wallet = NativeOwners(hby, rgy, reger=reger, custody=custody)
+        owners = hby, rgy, wallet
         root = Path(os.environ['KERIPY_TEST_STORE_ROOT'])
         assert all(Path(owner.path).is_relative_to(root) for owner in
                    (hby.ks, hby.db, hby.cf, rgy.baser, wallet.reger))

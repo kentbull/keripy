@@ -13,7 +13,10 @@ from ...acdc import messaging, scheming
 from ...acdc.regeventing import issuerRegistry, _blindCandidates, vet
 from ...acdc.registraring import Regery, Registrar
 from ...app import GroupHab, HaberyDoer, Keeper, Notifier, Organizer, Receiptor
-from ...app.credentialing import Wallet
+from ...app.credential_disclosing import boundEvent as resolveBoundEvent
+from ...acdc.ipexing import AcdcV2IpexVerification
+from ...vdr.eventing import Reger
+from ...db import openLMDB
 from ...app.registry_custody import RegistryCustody
 from ...app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from ...core import (Blinder, Codens, Counter, Number, Prefixer, SealEvent,
@@ -66,10 +69,10 @@ def loadOpening(path):
     return candidates[0]
 
 
-def issuanceOrigin(wallet, acdc, record, *, opening=None):
+def issuanceOrigin(hby, rgy, acdc, record, *, opening=None, custody=None):
     """Compose exact historical issuance evidence after common core verification.
 
-    wallet supplies accepted TEL/KEL history and optional explicitly selected
+    hby and rgy supply accepted TEL/KEL history and explicitly selected
     custody; acdc and record identify the original issued credential/event.
     opening is a possessed event-specific Blinder and takes precedence over
     derivation. Return credential bytes with verified proof/source attachments.
@@ -80,7 +83,6 @@ def issuanceOrigin(wallet, acdc, record, *, opening=None):
     record.update. Later revocation or issuee rotation cannot substitute a newer
     event. This local CLI composition reuses regeventing.vet, not a new verifier.
     """
-    rgy = wallet.rgy
     event = rgy.store.event(record.update)
     if event is None or event.ilk not in ('upd', 'bup'):
         raise ConfigurationError('retained issuance event is unavailable')
@@ -89,18 +91,18 @@ def issuanceOrigin(wallet, acdc, record, *, opening=None):
     if accepted is None or accepted.said != record.update:
         raise ConfigurationError('retained issuance event is not accepted')
     if event.ilk == 'bup' and opening is None:
-        opening = wallet.rgy.store.verifiedOpening(event)
+        opening = rgy.store.verifiedOpening(event)
         if opening is None:
-            if wallet.custody is None:
+            if custody is None:
                 raise ConfigurationError('issuance opening unavailable; supply --opening or use --derive with provisioned custody')
             bound = (dict(bound=True, bsn=record.bound['bn'], bd=record.bound['bd'])
                      if record.bound else {})
-            opening = wallet.custody.derive(record.registry, sn, acdc.said, 'issued', **bound)
+            opening = custody.derive(record.registry, sn, acdc.said, 'issued', **bound)
     if event.ilk == 'upd' and opening is not None:
         raise ConfigurationError('public issuance does not use an --opening')
     updates = [rgy.store.seqEvent(record.registry, ordinal) for ordinal in range(1, sn + 1)]
     verified = vet(rgy.store.seqEvent(record.registry, 0), updates,
-                   db=wallet.hby.db, acdc=acdc, blinder=opening)
+                   db=hby.db, acdc=acdc, blinder=opening)
     if verified.state != 'issued':
         raise ConfigurationError('retained event does not establish issuance')
     bonds = [opening.data] if opening is not None else []
@@ -139,21 +141,17 @@ def openedRegistry(args):
 
 
 @contextmanager
-def opened(args, *, custody=False):
-    """Compose credential inventory only for commands that use its records.
+def openedCredentials(args, *, derive=False):
+    """Yield identity, registry, credential store and optional derivation provider.
 
-    Identity and registry ownership follows ``openedRegistry``. ``custody``
-    optionally supplies the Keeper-backed derivation collaborator; it does not
-    change where secrets live or the existing identity encryption policy.
+    ``args`` selects the existing identity. ``derive`` explicitly composes Keeper
+    custody; it never changes encryption policy. All stores close on context exit.
+    Use openedRegistry alone for operations that do not read issued credentials.
     """
-    with openedRegistry(args) as (hby, rgy):
-        wallet = Wallet(hby, rgy)
-        try:
-            if custody:
-                wallet.custody = RegistryCustody(hby, rgy)
-            yield hby, rgy, wallet
-        finally:
-            wallet.close()
+    with (openedRegistry(args) as (hby, rgy),
+          openLMDB(cls=Reger, name=hby.name, base=hby.base, temp=hby.db.temp,
+                   headDirPath=hby.db.headDirPath) as reger):
+        yield hby, rgy, reger, RegistryCustody(hby, rgy) if derive else None
 
 
 def registry(rgy, name, hab=None):
@@ -170,10 +168,10 @@ def registry(rgy, name, hab=None):
     return reg
 
 
-def standing(wallet, reg, acdc, *, derive=False):
+def standing(hby, rgy, reger, reg, acdc, *, custody=None, derive=False):
     """Return known current state, or unknown if the accepted head cannot be opened.
 
-    wallet supplies issued inventory and optionally explicit custody; reg supplies
+    reger supplies issued evidence and custody is optional; reg supplies
     accepted registry history; acdc is the exact credential being queried. A
     retained public opening needs no secret. derive permits event-specific
     derivation only when custody is composed; ordinary enumeration/historical
@@ -187,20 +185,20 @@ def standing(wallet, reg, acdc, *, derive=False):
     if head is None or head.ilk != 'bup':
         return 'unknown'
     sn = Number(numh=head.sad['n']).num
-    retained = Registrar(wallet.rgy).issuedRecord(wallet.reger, acdc.said)
-    opening = wallet.rgy.store.verifiedOpening(head)
-    if opening is None and derive and wallet.custody is not None:
+    retained = Registrar(rgy).issuedRecord(reger, acdc.said)
+    opening = rgy.store.verifiedOpening(head)
+    if opening is None and derive and custody is not None:
         bound = (dict(bound=True, bsn=retained.bound['bn'], bd=retained.bound['bd'])
                  if retained and retained.update == head.said and retained.bound else {})
         for state in ('issued', 'revoked'):
-            candidate = wallet.custody.derive(reg.regk, sn, acdc.said, state, **bound)
+            candidate = custody.derive(reg.regk, sn, acdc.said, state, **bound)
             if candidate.said == head.sad['b']:
                 opening = candidate
                 break
     if opening is None:
         return 'unknown'
     updates = [reg.store.seqEvent(reg.regk, ordinal) for ordinal in range(1, sn + 1)]
-    return vet(reg.store.seqEvent(reg.regk, 0), updates, db=wallet.hby.db,
+    return vet(reg.store.seqEvent(reg.regk, 0), updates, db=hby.db,
                acdc=acdc, blinder=opening).state or 'unknown'
 
 
@@ -290,7 +288,7 @@ class AcdcV2Author(doing.DoDoer):
                 raise TimeoutError(f'ACDC v2 event {event.said} is pending authenticated anchor receipts')
             yield self.tock
 
-    def update(self, wallet, reg, acdc, state):
+    def update(self, hby, reger, reg, acdc, state, *, custody=None):
         """Stage one idempotent ``bup`` under the public or derived profile.
 
         Public authoring creates and retains one random event opening, then
@@ -308,16 +306,16 @@ class AcdcV2Author(doing.DoDoer):
         boundEvent = getattr(self.args, 'bound_event', None)
         if public and boundEvent:
             raise ConfigurationError('--bound-event requires a private blinded update')
-        bound = wallet.boundEvent(acdc, boundEvent) if boundEvent else {}
+        bound = resolveBoundEvent(hby, acdc, boundEvent) if boundEvent else {}
 
         def makeOpening(ordinal):
             if public:
                 self.blinder = Blinder.blind(sn=ordinal, acdc=acdc.said, state=state)
                 self.publishOpening = True
             else:
-                if wallet.custody is None:
+                if custody is None:
                     raise ConfigurationError('derived authoring requires provisioned registry custody')
-                self.blinder = wallet.custody.derive(reg.regk, ordinal, acdc.said, state, **bound)
+                self.blinder = custody.derive(reg.regk, ordinal, acdc.said, state, **bound)
             return self.blinder
 
         def matches(event, proof):
@@ -327,8 +325,8 @@ class AcdcV2Author(doing.DoDoer):
 
         def acceptedOpening(event):
             """Read possessed public or private proof without reconstructing metadata."""
-            opening = wallet.rgy.store.verifiedOpening(event)
-            return (opening, True) if opening is not None else (wallet.reger.privateOpening(event), False)
+            opening = reg.store.verifiedOpening(event)
+            return (opening, True) if opening is not None else (reger.privateOpening(event), False)
 
         if self.proposedEvent is not None:
             event = self.proposedEvent
@@ -348,7 +346,7 @@ class AcdcV2Author(doing.DoDoer):
             if event.sad.get('rd') != reg.regk or not matches(event, self.blinder):
                 raise ConfigurationError('group proposal does not bind the requested credential and state')
             if not public:
-                wallet.reger.retainPrivateOpening(event, self.blinder)
+                reger.retainPrivateOpening(event, self.blinder)
             accepted = reg.store.seqEvent(reg.regk, ordinal)
             if accepted is not None and accepted.said == event.said:
                 if public:
@@ -367,7 +365,7 @@ class AcdcV2Author(doing.DoDoer):
         if pending:
             event = pending[0]
             if public:
-                self.blinder = wallet.rgy.store.verifiedOpening(event)
+                self.blinder = reg.store.verifiedOpening(event)
                 self.publishOpening = True
                 if self.blinder is None:
                     raise ConfigurationError('pending public bup is missing its retained opening')
@@ -376,7 +374,7 @@ class AcdcV2Author(doing.DoDoer):
             if len(pending) != 1 or not matches(event, self.blinder) or event.sad['p'] != head.said:
                 raise ConfigurationError('registry has a different pending update; resolve it first')
             if not public:
-                wallet.reger.retainPrivateOpening(event, self.blinder)
+                reger.retainPrivateOpening(event, self.blinder)
             return event
 
         if sn and head.ilk == 'bup':
@@ -389,16 +387,16 @@ class AcdcV2Author(doing.DoDoer):
                 makeOpening(sn)
             if matches(head, self.blinder) and (not public or self.publishOpening):
                 if not public:
-                    wallet.reger.retainPrivateOpening(head, self.blinder)
+                    reger.retainPrivateOpening(head, self.blinder)
                 return head
 
-        if bound and wallet.hby.kevers[acdc.iseaid].serder.said != boundEvent:
+        if bound and hby.kevers[acdc.iseaid].serder.said != boundEvent:
             raise ConfigurationError('new bound update must reference the known current issuee event')
         proof = makeOpening(sn + 1)
         event = messaging.blindate(reg.regk, head.said, proof.said,
                                    sn=sn + 1, stamp=self.args.time)
         if not public:
-            wallet.reger.retainPrivateOpening(event, proof)
+            reger.retainPrivateOpening(event, proof)
         # Store/validate the exact event through ordinary TEL processing before
         # publishing its opening. Pending anchors remain ordinary TEL escrow.
         reg.processEvent(event)
@@ -426,11 +424,11 @@ class AcdcV2Author(doing.DoDoer):
                         else not args.public)
         with openedRegistry(args) as (hby, rgy), ExitStack() as inventory:
             custody = RegistryCustody(hby, rgy) if wantsCustody else None
-            # RIP creates registry state, not a credential. Only issuance and
-            # revocation still need the application inventory pending its removal.
+            # RIP has no credential bytes. Issuance/revocation borrow Reger for
+            # exact credential/source evidence, with no wallet owner in between.
             if self.operation != 'incept':
-                wallet = Wallet(hby, rgy, custody=custody)
-                inventory.callback(wallet.close)
+                reger = inventory.enter_context(openLMDB(cls=Reger, name=hby.name,
+                    base=hby.base, temp=hby.db.temp, headDirPath=hby.db.headDirPath))
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('ACDC v2 authoring requires a local alias')
@@ -555,23 +553,23 @@ class AcdcV2Author(doing.DoDoer):
                     if not acdc.verify() or acdc.sad.get('i') != hab.pre or issuerRegistry(acdc) not in (None, reg.regk):
                         raise ConfigurationError('ACDC v2 credential does not match issuer and registry')
                     scheming.validateSchema(acdc, hby.db)
-                    old = Registrar(wallet.rgy).issuedRecord(wallet.reger, acdc.said)
-                    event = reg.store.event(old.update) if old else self.update(wallet, reg, acdc, 'issued')
+                    old = Registrar(rgy).issuedRecord(reger, acdc.said)
+                    event = reg.store.event(old.update) if old else self.update(hby, reger, reg, acdc, 'issued', custody=custody)
                     yield from self.anchor(hby, reg, event, receiptor)
                     # An exact Reger-source retry reports retained history. Do not
                     # re-derive an old opening or require healthy salt custody.
-                    record = Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, event.said,
+                    record = Registrar(rgy).recordIssued(reger, acdc, event.said,
                                                  blinder=self.blinder if event.ilk == 'bup' else None)
                     print(json.dumps(dict(credential=acdc.said, registry=reg.regk, update=record.update,
-                                          accepted=True, state=standing(wallet, reg, acdc, derive=old is None))))
+                                          accepted=True, state=standing(hby, rgy, reger, reg, acdc, custody=custody, derive=old is None))))
                 else:
                     if args.send:
                         raise ConfigurationError('ACDC v2 revocation publication uses the registrar service')
-                    record = Registrar(wallet.rgy).issuedRecord(wallet.reger, args.said)
+                    record = Registrar(rgy).issuedRecord(reger, args.said)
                     if record is None or record.registry != reg.regk:
                         raise ConfigurationError('credential is not in this ACDC v2 issued inventory')
-                    acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, record.credential)
-                    event = self.update(wallet, reg, acdc, 'revoked')
+                    acdc = Registrar(rgy).issuedCredential(reger, record.credential)
+                    event = self.update(hby, reger, reg, acdc, 'revoked', custody=custody)
                     yield from self.anchor(hby, reg, event, receiptor)
                     print(json.dumps(dict(credential=acdc.said, registry=reg.regk, update=event.said,
                                           accepted=True, state='revoked')))
@@ -596,7 +594,7 @@ def read(args, operation):
         the enclosing read adapter. Print JSON inventory/evidence results or write the
         explicit export file; return None on completion. Validation, authentication,
         file-exclusivity, and custody failures propagate. The opened context closes
-        wallet, registry, and identity owners even when the operation fails."""
+        credential, registry, and identity owners even when the operation fails."""
         yield tock
         if operation in ('registries', 'status'):
             # Public registry inspection owns no credential inventory or custody.
@@ -619,21 +617,27 @@ def read(args, operation):
                             print(raw.decode())
 
             return
-        with opened(args, custody=(operation == 'export' and args.derive)) as (hby, rgy, wallet):
+        with openedRegistry(args) as (hby, rgy), ExitStack() as stores:
+            reger = None
+            if operation == 'export' or args.issued:
+                reger = stores.enter_context(openLMDB(cls=Reger, name=hby.name,
+                    base=hby.base, temp=hby.db.temp, headDirPath=hby.db.headDirPath))
+            custody = RegistryCustody(hby, rgy) if operation == 'export' and args.derive else None
             if operation == 'inventory':
                 if args.poll:
-                    raise ConfigurationError('ACDC v2 IPEX admission uses accepted IPEX and explicit wallet consent')
+                    raise ConfigurationError('ACDC v2 IPEX admission uses accepted IPEX and explicit holder consent')
                 hab = hby.habByName(args.alias) if args.alias else None
                 if args.alias and hab is None:
                     raise ConfigurationError('unknown ACDC v2 inventory alias')
                 if args.schema and not args.issued:
                     raise ConfigurationError('ACDC v2 held inventory lists admitted references; schema filtering requires the accepted disclosure')
-                records = wallet.inventory()['issued' if args.issued else 'held']
+                records = (Registrar(rgy).issuedRecords(reger) if args.issued
+                           else AcdcV2IpexVerification(hby, rgy).admissions())
                 for record in records:
                     owner = record.controller if args.issued else record.holder
                     if hab and owner != hab.pre:
                         continue
-                    acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, record.credential) if args.issued else None
+                    acdc = Registrar(rgy).issuedCredential(reger, record.credential) if args.issued else None
                     if args.schema and (acdc is None or acdc.sad['s'] != args.schema):
                         continue
                     if args.said:
@@ -643,22 +647,22 @@ def read(args, operation):
                         if not args.verbose:
                             result.pop('raw', None)
                         if acdc:
-                            result['state'] = standing(wallet, rgy.regs[record.registry], acdc)
+                            result['state'] = standing(hby, rgy, reger, rgy.regs[record.registry], acdc)
                         print(json.dumps(result))
             elif operation == 'export':
                 hab = hby.habByName(args.alias)
                 if hab is None:
                     raise ConfigurationError('unknown ACDC v2 export alias')
                 reg = registry(rgy, args.registry_name, hab)
-                record = Registrar(wallet.rgy).issuedRecord(wallet.reger, args.said)
+                record = Registrar(rgy).issuedRecord(reger, args.said)
                 if record is None or record.registry != reg.regk:
                     raise ConfigurationError('ACDC v2 export requires an issued inventory credential')
-                acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, record.credential)
+                acdc = Registrar(rgy).issuedCredential(reger, record.credential)
                 if args.chains or (args.full and acdc.sad.get('e')):
                     raise ConfigurationError('ACDC v2 chained evidence must be exported from its accepted IPEX disclosure')
                 # Authenticate the exact historical opening before constructing
                 # output. A salt-derived Blinder is only a candidate until vet.
-                origin = (issuanceOrigin(wallet, acdc, record,
+                origin = (issuanceOrigin(hby, rgy, acdc, record, custody=custody,
                           opening=loadOpening(args.opening) if args.opening else None)
                           if args.full else None)
                 stream = bytearray()
@@ -677,7 +681,7 @@ def read(args, operation):
                         # its exact expanded opening. The registry store retains
                         # event evidence across restarts without retaining registry
                         # custody or synthesizing an opening during export.
-                        if (opening := wallet.rgy.store.verifiedOpening(event)) is not None:
+                        if (opening := rgy.store.verifiedOpening(event)) is not None:
                             bonds.insert(0, opening.data)
                         stream.extend(messagize(event, bonds=bonds, gvrsn=Vrsn_2_0))
                 if args.full:

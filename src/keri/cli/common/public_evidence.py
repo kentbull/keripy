@@ -1,8 +1,9 @@
 """Operator adapters for public CESR evidence and explicit registry openings.
 
 These commands expose ordinary processors and signed service requests. They do
-not inject accepted KEL/TEL rows, wallet consent, or optional custody records.
+not inject accepted KEL/TEL rows, holder consent, or optional custody records.
 """
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 import hashlib
 import ipaddress
@@ -16,6 +17,9 @@ from hio.core import http
 
 from keri import Vrsn_2_0, Kinds
 from keri.acdc.registraring import Registrar
+from keri.app.credential_disclosing import boundEvent
+from keri.app.registry_custody import RegistryCustody
+from keri.vdr.eventing import Reger
 from keri.acdc import messaging
 from keri.acdc.regeventing import vetBlind, vetBound
 from keri.app import Receiptor, HaberyDoer, Keeper
@@ -293,7 +297,7 @@ class Request(doing.DoDoer):
             OSError, ValueError: File, ASCII evidence, or response JSON decoding fails.
 
         Owns the scheduled HTTP client and evidence context; removes both children and
-        closes the socket before the surrounding registry and wallet stores exit. Transmission/HTTP
+        closes the socket before the surrounding registry and identity stores exit. Transmission/HTTP
         202 alone never supplies an application acceptance claim."""
         self.wind(tymth)
         yield tock
@@ -304,7 +308,7 @@ class Request(doing.DoDoer):
         target = urlsplit(args.endpoint)
         if target.scheme not in ('http', 'https') or not target.hostname:
             raise ConfigurationError('public evidence requests require an HTTP(S) endpoint')
-        with acdc_v2.opened(args) as (hby, rgy, wallet):
+        with acdc_v2.openedRegistry(args) as (hby, rgy):
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('unknown signing alias')
@@ -382,8 +386,10 @@ def opening(args):
         from keri.acdc.sectioning import SectionBaser
         from keri.cli.common.acdc_v2_ipex import Peer
         from keri.db import openLMDB
-        with (acdc_v2.opened(args, custody=True) as (hby, rgy, wallet),
-              openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections):
+        with (acdc_v2.openedRegistry(args) as (hby, rgy),
+              openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections,
+              ExitStack() as stores):
+            custody = RegistryCustody(hby, rgy)
             regid = args.registry or acdc_v2.registry(rgy, args.registry_name).regk
             if args.from_grant:
                 # Reuse the same retained semantic context as ordinary holder
@@ -393,12 +399,14 @@ def opening(args):
                 if acdc.said != args.said:
                     raise ConfigurationError('admitted grant does not bind the requested credential')
             else:
-                acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, args.said)
+                reger = stores.enter_context(openLMDB(cls=Reger, name=hby.name,
+                    base=hby.base, temp=hby.db.temp, headDirPath=hby.db.headDirPath))
+                acdc = Registrar(rgy).issuedCredential(reger, args.said)
             event = rgy.store.seqEvent(regid, args.ordinal)
             if event is None or event.ilk != 'bup':
                 raise ConfigurationError('opening requires an accepted blinded event')
-            parameters = wallet.boundEvent(acdc, args.bound_event) if args.bound_event else {}
-            proof = wallet.custody.derive(regid, args.ordinal, acdc.said, args.state, **parameters)
+            parameters = boundEvent(hby, acdc, args.bound_event) if args.bound_event else {}
+            proof = custody.derive(regid, args.ordinal, acdc.said, args.state, **parameters)
             vetBlind(proof, blid=event.sad['b'])
             vetBound(proof, acdc=acdc, db=hby.db)
             digest = write(args.output, proof.qb64b)
@@ -450,7 +458,7 @@ class Advance(acdc_v2.AcdcV2Author):
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
         self.auths = acdc_v2.readWitnessAuth(getattr(args, 'witness_auth_file', None))
-        with acdc_v2.opened(args, custody=True) as (hby, rgy, wallet):
+        with acdc_v2.openedCredentials(args, derive=True) as (hby, rgy, reger, custody):
             from keri.app import GroupHab
             hab = hby.habByName(args.alias)
             reg = acdc_v2.registry(rgy, args.registry_name, hab)
@@ -458,25 +466,25 @@ class Advance(acdc_v2.AcdcV2Author):
                 raise ConfigurationError('advance currently requires an individual registry controller')
             if set(self.auths) - set(hab.kever.wits):
                 raise ConfigurationError('witness authentication names a noncurrent witness')
-            acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, args.said)
+            acdc = Registrar(rgy).issuedCredential(reger, args.said)
             head = reg.store.headEvent(reg.regk)
             if head is None or head.ilk != 'bup':
                 raise ConfigurationError('advance requires an accepted blinded state')
-            bound = wallet.boundEvent(acdc, args.bound_event) if args.bound_event else {}
-            old = wallet.custody.derive(reg.regk, head.sn, acdc.said, args.state, **bound)
+            bound = boundEvent(hby, acdc, args.bound_event) if args.bound_event else {}
+            old = custody.derive(reg.regk, head.sn, acdc.said, args.state, **bound)
             vetBlind(old, blid=head.sad['b'])
             vetBound(old, acdc=acdc, db=hby.db)
-            nextproof = wallet.custody.derive(reg.regk, head.sn + 1, acdc.said, args.state, **bound)
+            nextproof = custody.derive(reg.regk, head.sn + 1, acdc.said, args.state, **bound)
             staged = [event for _, event in rgy.baser.evts.getTopItemIter()
                       if event.sad.get('rd') == reg.regk and event.sad.get('n') == f'{head.sn + 1:x}']
             if staged:
                 if len(staged) != 1 or staged[0].sad.get('b') != nextproof.said or staged[0].sad.get('p') != head.said:
                     raise ConfigurationError('registry has different pending authoring work')
                 event = staged[0]
-                wallet.reger.retainPrivateOpening(event, nextproof)
+                reger.retainPrivateOpening(event, nextproof)
             else:
                 event = messaging.blindate(reg.regk, head.said, nextproof.said, sn=head.sn + 1)
-                wallet.reger.retainPrivateOpening(event, nextproof)
+                reger.retainPrivateOpening(event, nextproof)
                 reg.processEvent(event)
             workers = [HaberyDoer(habery=hby), Receiptor(hby=hby)]
             self.extend(workers)
@@ -562,7 +570,7 @@ def exportRegistry(args):
         the exact output digest after writing. Protocol and file errors propagate.
         """
         yield tock
-        with acdc_v2.opened(args, custody=False) as (hby, rgy, _):
+        with acdc_v2.openedRegistry(args) as (hby, rgy):
             if rgy.store.seqEvent(args.registry, 0) is None:
                 raise ConfigurationError('public registry export requires an accepted registry inception')
             evidence = EvidenceContext(hby, reger=rgy.baser)
