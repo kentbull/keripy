@@ -452,7 +452,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, gvrsn=Vrsn_1_0)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -531,7 +531,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, gvrsn=Vrsn_1_0)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -672,7 +672,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, gvrsn=Vrsn_1_0)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -826,7 +826,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
             while not hab.loadEndRole(cid=cid, role=role, eid=eid):
                 self.rgy.processEscrows()
@@ -1063,7 +1063,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
             while not self.registrar.complete(vserder.pre, sn=0):
                 self.rgy.processEscrows()
@@ -1174,7 +1174,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
             while not self.credentialer.complete(said=creder.said):
                 self.rgy.processEscrows()
@@ -1279,7 +1279,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
             while not self.registrar.complete(creder.said, sn=1):
                 self.rgy.processEscrows()

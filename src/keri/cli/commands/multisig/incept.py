@@ -189,7 +189,7 @@ class GroupMultisigIncept(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, gvrsn=Vrsn_1_0)
 
             logger.info(f"Group identifier inception initialized for {ghab.pre}")
             prefixer = Prefixer(qb64=ghab.pre)

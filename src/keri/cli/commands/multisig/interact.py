@@ -135,7 +135,8 @@ class GroupMultisigInteract(doing.DoDoer):
         others.remove(ghab.mhab.pre)
 
         for recpt in others:  # send notification to other participants as a signalling mechanism
-            self.postman.send(src=ghab.mhab.pre, dest=recpt, topic="multisig", serder=exn, attachment=ims)
+            self.postman.send(src=ghab.mhab.pre, dest=recpt, topic="multisig", serder=exn,
+                              attachment=ims, gvrsn=Vrsn_1_0)
 
         prefixer = Prefixer(qb64=ghab.pre)
         number = Number(sn=serder.sn)
