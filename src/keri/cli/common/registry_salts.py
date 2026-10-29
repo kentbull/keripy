@@ -23,6 +23,7 @@ from ...app.evidencing import KEL_DEPENDENCIES, ServiceConfig
 from ...app.forwarding import StreamPoster
 from ...app.grouping import Multiplexor, loadHandlers, replyProposal, endorseReply, multisigRpyExn
 from ...app.indirecting import createHttpServer
+from ...app.registry_custody import RegistryCustody
 from ...app.registry_salt_service import RegistrySaltService, ROUTES
 from ...core import Kramer, Parser, Pruner, Diger, messagize
 from ...db import fetchTsgs
@@ -36,10 +37,10 @@ from .public_evidence import write
 class SaltPeer:
     """Borrow stores and share one live processor set across file/mailbox/HTTP intake."""
 
-    def __init__(self, hby, rgy, wallet, hab, notifier):
+    def __init__(self, hby, rgy, custody, hab, notifier):
         """Compose the selected local member's optional salt service.
 
-        Args: hby/rgy/wallet are caller-owned open stores, hab is the selected
+        Args: hby/rgy are caller-owned open stores; custody uses their Keeper, hab is the selected
             logical local habitat, notifier is the ordinary persistent notifier.
         Returns: an unscheduled peer. Its pruner and process method must run for
             the listener lifetime. No root is read or generated on construction.
@@ -55,7 +56,7 @@ class SaltPeer:
         self.parser = Parser(kvy=self.mux.kvy, rvy=self.mux.rvy, rgy=self.rever,
                              exc=self.exc, version=Vrsn_2_0, local=False)
         loadHandlers(self.exc, self.mux)
-        self.service = RegistrySaltService(hby, rgy, wallet.custody, self.mux.rvy)
+        self.service = RegistrySaltService(hby, rgy, custody, self.mux.rvy)
         self.service.register()
         self.exc.addHandler(EssrReplyHandler(hby, self.member, self.parser, ROUTES))
 
@@ -155,13 +156,13 @@ class SaltDoer(doing.DoDoer):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
-        with acdc_v2.opened(args, custody=True) as (hby, rgy, wallet), ExitStack() as activity:
+        with acdc_v2.openedRegistry(args) as (hby, rgy), ExitStack() as activity:
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('registry-salt requires an existing local alias')
             notifier = Notifier(hby=hby)
             activity.callback(notifier.noter.close)
-            peer = SaltPeer(hby, rgy, wallet, hab, notifier)
+            peer = SaltPeer(hby, rgy, RegistryCustody(hby, rgy), hab, notifier)
             mailbox = MailboxDirector(hby=hby, topics=['/receipt', '/multisig', '/replay', '/credential'],
                 kvy=peer.mux.kvy, rvy=peer.mux.rvy, exc=peer.exc,
                 version=Vrsn_2_0, gvrsn=Vrsn_2_0)
@@ -179,7 +180,7 @@ class SaltDoer(doing.DoDoer):
             if args.operation == 'status':
                 self._require('registry')
                 print(json.dumps(dict(registry=args.registry,
-                    custody_present=wallet.hby.ks.custody.get((args.registry,)) is not None)))
+                    custody_present=hby.ks.custody.get((args.registry,)) is not None)))
                 return
             if args.operation == 'receive':
                 self._require('input')

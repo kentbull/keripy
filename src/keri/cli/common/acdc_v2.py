@@ -111,12 +111,11 @@ def issuanceOrigin(wallet, acdc, record, *, opening=None):
 
 
 @contextmanager
-def opened(args, *, custody=False):
-    """Yield ACDC v2 evidence/inventory owners without changing Keeper encryption.
+def openedRegistry(args):
+    """Yield identity and registry owners without opening credential inventory.
 
-    ``args`` supplies existing identity name/base/passcode. ``custody`` explicitly
-    composes the optional registry derivation owner; ordinary operations leave it
-    absent. Encrypted identities still authenticate through setupHby. A passcode
+    ``args`` supplies existing identity name/base/passcode.
+    Encrypted identities still authenticate through setupHby. A passcode
     supplied for an unencrypted identity is ignored, preventing implicit AEID
     migration. All opened stores close when this context exits.
     """
@@ -129,19 +128,32 @@ def opened(args, *, custody=False):
         keeper.close()
     hby = setupHby(name=args.name, base=args.base,
                    bran=args.bran if aeid else None, version=Vrsn_2_0)
-    rgy = wallet = None
+    rgy = None
     try:
         rgy = Regery(hby=hby, name=args.name, base=args.base)
-        wallet = Wallet(hby, rgy)
-        if custody:
-            wallet.custody = RegistryCustody(hby, rgy)
-        yield hby, rgy, wallet
+        yield hby, rgy
     finally:
-        if wallet is not None:
-            wallet.close()
         if rgy is not None:
             rgy.close()
         hby.close()
+
+
+@contextmanager
+def opened(args, *, custody=False):
+    """Compose credential inventory only for commands that use its records.
+
+    Identity and registry ownership follows ``openedRegistry``. ``custody``
+    optionally supplies the Keeper-backed derivation collaborator; it does not
+    change where secrets live or the existing identity encryption policy.
+    """
+    with openedRegistry(args) as (hby, rgy):
+        wallet = Wallet(hby, rgy)
+        try:
+            if custody:
+                wallet.custody = RegistryCustody(hby, rgy)
+            yield hby, rgy, wallet
+        finally:
+            wallet.close()
 
 
 def registry(rgy, name, hab=None):

@@ -6,7 +6,6 @@ import uuid
 from keri import Vrsn_2_0
 from keri.acdc import Regery
 from keri.app import openHby
-from keri.app.credentialing import Wallet
 from keri.app.registry_custody import RegistryCustody
 from keri.core import Diger, SealSource, messagize
 from tests.app.test_acdc_v2_cli import PASSCODE, command, invoke
@@ -62,8 +61,6 @@ def test_installed_kli_encrypted_salt_survives_every_command_exit(tmp_path):
                      bran=PASSCODE, version=Vrsn_2_0) as hby, ExitStack() as stack:
             rgy = Regery(hby=hby, name=hby.name, base=hby.base)
             stack.callback(rgy.close)
-            wallet = Wallet(hby, rgy)
-            stack.callback(wallet.close)
             custody = RegistryCustody(hby, rgy)
             openings.append(custody.derive(registry, 1, Diger(ser=b'credential').qb64, 'issued').qb64)
             roots.append(custody._load(registry).salt)
@@ -126,8 +123,6 @@ def test_installed_group_inception_reuses_encrypted_proposal_after_exit(tmp_path
                      bran=PASSCODE, version=Vrsn_2_0) as hby, ExitStack() as stack:
             rgy = Regery(hby=hby, name=hby.name, base=hby.base)
             stack.callback(rgy.close)
-            wallet = Wallet(hby, rgy)
-            stack.callback(wallet.close)
             custody = RegistryCustody(hby, rgy)
             roots.append(custody._load(accepted['registry']).salt)
     assert roots[0] == roots[1]
