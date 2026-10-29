@@ -9,9 +9,10 @@ import re
 
 import pysodium
 
-from ..core import Counter, Codens, Diger, MtrDex, Texter, messagize
-from ..kering import DecryptError, Ilks, Kinds, ValidationError, Version, Vrsn_1_0
+from ..core import Counter, Codens, Diger, MtrDex, Texter
+from ..kering import DecryptError, Kinds, ValidationError, Version, Vrsn_1_0
 from ..peer import specialExchange
+from .replying import parseReply
 
 
 def envelope(hab, msg, recipient, verfer, *, version=Version, kind=Kinds.json,
@@ -134,35 +135,8 @@ class EssrReplyHandler:
             verfer = self._verfer(serder)
             if self.hab.mgr.aeid and self.hab.mgr.decrypter is None:
                 raise DecryptError("ESSR recipient keystore is locked")
-            plain = bytearray(self.hab.mgr.decrypt(qb64=essr, verfers=[verfer]))
-            original = bytes(plain)
-            version = self.parser.version
-            generator = self.parser.msgParsator(ims=plain, framed=True, local=False)
-            try:
-                try:
-                    next(generator)
-                except StopIteration as done:
-                    parsed = done.value
-                    frameVersion = self.parser.version
-                else:
-                    raise ValidationError("Incomplete ESSR inner reply")
-            finally:
-                generator.close()
-                self.parser.version = version
-            # Strictly one reply, carrying only its ordinary reply signatures.
-            if (plain or parsed.serder.ilk != Ilks.rpy or
-                    parsed.serder.ked['r'] not in self.allowedRoutes or
-                    not (parsed.cigars or parsed.tsgs) or
-                    any(value for key, value in vars(parsed).items()
-                        if key not in ('serder', 'cigars', 'tsgs', 'local'))):
-                raise ValidationError("Invalid ESSR inner reply")
-            # Parser can discard misplaced attachment groups. Require exact
-            # reconstruction so discarded material cannot hide a second frame.
-            if not any(original == messagize(parsed.serder, cigars=parsed.cigars,
-                                              tsgs=parsed.tsgs, framed=framed,
-                                              gvrsn=frameVersion)
-                       for framed in (True, False)):
-                raise ValidationError("Noncanonical ESSR inner reply")
+            plain = self.hab.mgr.decrypt(qb64=essr, verfers=[verfer])
+            parsed = parseReply(self.parser, plain, self.allowedRoutes)
         except DecryptError:
             raise ValidationError("ESSR recipient keystore is locked") from None
         except ValueError as ex:
