@@ -423,8 +423,9 @@ class RegistryCustody:
             raise ValidationError('update ordinal must be a positive integer')
         secret = self._load(regid)
         info = CustodyInfo(**secret.info)
-        if not (self.hby.habByPre(info.controller) or self.hby.habByPre(info.discloser)):
-            raise AuthError('this wallet is not a designated custody participant')
+        # Authenticated encrypted possession is the derivation capability. The
+        # provisioning domain authorizes later parties; original transcript
+        # metadata stays immutable and cannot stand in for current entitlement.
         return Blinder.blind(salt=secret.salt, sn=ordinal, tier=info.tier,
                              acdc=credential, state=state, bound=bound, bsn=bsn, bd=bd)
 
