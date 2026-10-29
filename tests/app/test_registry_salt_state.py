@@ -37,7 +37,7 @@ def negotiation(roots):
                  for hab in (issuer, discloser))
     yield SimpleNamespace(state=state, custody=custody, info=info, issuer=issuer,
         discloser=discloser, init=init, bind=bind, root=root, origin=origin,
-        private=leftPrivate, otherPrivate=rightPrivate, jobs=jobs)
+        private=leftPrivate, otherPrivate=rightPrivate, jobs=jobs, confirm=confirm)
 
 
 def retainPending(case):

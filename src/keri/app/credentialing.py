@@ -19,7 +19,8 @@ from keri.help import helping
 from keri.kering import ConfigurationError, ValidationError
 from keri.peer import exchanging
 from .registry_custody import EncryptedCustody
-from .registry_salt_state import SaltOrigin, SaltDelivery, SaltRoster
+from .registry_salt_state import (SaltOrigin, SaltDelivery, SaltRoster, SaltProof,
+                                  SaltAssignment, SaltReceiptIntent, SaltAttempt)
 from .credential_disclosing import boundEvent
 
 
@@ -84,6 +85,10 @@ class WalletBaser(dbing.LMDBer):
         self.saltOrigins = koming.Komer(db=self, subkey='salt-origins.', klas=SaltOrigin)
         self.saltDeliveries = koming.Komer(db=self, subkey='salt-deliveries.', klas=SaltDelivery)
         self.saltRosters = koming.Komer(db=self, subkey='salt-rosters.', klas=SaltRoster)
+        self.saltProofs = koming.Komer(db=self, subkey='salt-proofs.', klas=SaltProof)
+        self.saltAssignments = koming.Komer(db=self, subkey='salt-assignments.', klas=SaltAssignment)
+        self.saltReceipts = koming.Komer(db=self, subkey='salt-receipts.', klas=SaltReceiptIntent)
+        self.saltAttempts = koming.Komer(db=self, subkey='salt-attempts.', klas=SaltAttempt)
         self.issued = koming.Komer(db=self, subkey='issued.', klas=IssuedCredential)
         self.openings = subing.Suber(db=self, subkey='public-openings.')
         self.derivations = koming.Komer(db=self, subkey='derived-updates.', klas=DerivedUpdate)
