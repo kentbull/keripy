@@ -813,8 +813,17 @@ class RegistrySaltService:
         if registry_salts.commitment(root, init.raw, bind.raw).qb64 != confirm.sad['a']['commitment']:
             raise ValidationError('registry-salt provision root differs from the confirmed commitment')
         origin = self._origin(init, bind, confirm)
+        pendingKey = None
+        if data['party'] in confirm.sad['a']['entitled']:
+            own = init if init.pre == data['party'] else bind
+            if own.sad['a']['rep'] == local.pre and self.state.hasPending(init.said, local.pre):
+                pending = self.state.openPending(init.said, local.pre)
+                if pending.body != own.raw:
+                    raise ValidationError('registry-salt pending local approval differs from the transcript')
+                pendingKey = init.said, local.pre
         # Public evidence can be archived independently. Private custody, new
-        # entitlement indexes, jobs and receipt intent share one transaction.
+        # entitlement indexes, jobs, receipt intent and exact pending cleanup
+        # share one transaction. Historical DH needs no current representative.
         for name, body in (('init', init), ('bind', bind), ('confirm', confirm)):
             self.state.retainProof(body, streams[name])
         grants = tuple(zip(assignments, streams['assignments']))
@@ -823,7 +832,7 @@ class RegistrySaltService:
             data['admission']['d'], provision.pre, b64encode(provision.raw).decode('ascii'))
         self.state.retainEstablished(CustodyInfo(origin.registry, origin.issuer, origin.discloser),
             root, origin, self._jobs(origin, data['party'], assignment),
-            receiptIntent=intent, assignments=grants)
+            pendingKey=pendingKey, receiptIntent=intent, assignments=grants)
 
     def _source(self, party):
         """Select a currently accepted locally controlled sending member, without a lease."""
