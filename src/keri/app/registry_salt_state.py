@@ -757,7 +757,7 @@ class RegistrySaltState:
         return self._progress(expected, now=now, deadline=deadline, launch=True)
 
     def failAttempt(self, expected, now, delay):
-        """Schedule backoff after failure/readiness wait without counting a send."""
+        """Back off a launched transport failure without counting another send."""
         return self._progress(expected, now=now, delay=delay)
 
     def blockDelivery(self, expected):
