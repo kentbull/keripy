@@ -11,7 +11,7 @@ from hio.base import doing
 from .existing import setupHby
 from ...acdc import messaging, scheming
 from ...acdc.regeventing import issuerRegistry, _blindCandidates, vet
-from ...acdc.registraring import Regery
+from ...acdc.registraring import Regery, Registrar
 from ...app import GroupHab, HaberyDoer, Keeper, Notifier, Organizer, Receiptor
 from ...app.credentialing import Wallet
 from ...app.registry_custody import RegistryCustody
@@ -187,7 +187,7 @@ def standing(wallet, reg, acdc, *, derive=False):
     if head is None or head.ilk != 'bup':
         return 'unknown'
     sn = Number(numh=head.sad['n']).num
-    retained = wallet.issuedRecord(acdc.said)
+    retained = Registrar(wallet.rgy).issuedRecord(wallet.reger, acdc.said)
     opening = wallet.rgy.store.verifiedOpening(head)
     if opening is None and derive and wallet.custody is not None:
         bound = (dict(bound=True, bsn=retained.bound['bn'], bd=retained.bound['bd'])
@@ -555,22 +555,22 @@ class AcdcV2Author(doing.DoDoer):
                     if not acdc.verify() or acdc.sad.get('i') != hab.pre or issuerRegistry(acdc) not in (None, reg.regk):
                         raise ConfigurationError('ACDC v2 credential does not match issuer and registry')
                     scheming.validateSchema(acdc, hby.db)
-                    old = wallet.issuedRecord(acdc.said)
+                    old = Registrar(wallet.rgy).issuedRecord(wallet.reger, acdc.said)
                     event = reg.store.event(old.update) if old else self.update(wallet, reg, acdc, 'issued')
                     yield from self.anchor(hby, reg, event, receiptor)
                     # An exact Reger-source retry reports retained history. Do not
                     # re-derive an old opening or require healthy salt custody.
-                    record = wallet.recordIssued(acdc, event.said,
+                    record = Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, event.said,
                                                  blinder=self.blinder if event.ilk == 'bup' else None)
                     print(json.dumps(dict(credential=acdc.said, registry=reg.regk, update=record.update,
                                           accepted=True, state=standing(wallet, reg, acdc, derive=old is None))))
                 else:
                     if args.send:
                         raise ConfigurationError('ACDC v2 revocation publication uses the registrar service')
-                    record = wallet.issuedRecord(args.said)
+                    record = Registrar(wallet.rgy).issuedRecord(wallet.reger, args.said)
                     if record is None or record.registry != reg.regk:
                         raise ConfigurationError('credential is not in this ACDC v2 issued inventory')
-                    acdc = wallet.issuedCredential(record.credential)
+                    acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, record.credential)
                     event = self.update(wallet, reg, acdc, 'revoked')
                     yield from self.anchor(hby, reg, event, receiptor)
                     print(json.dumps(dict(credential=acdc.said, registry=reg.regk, update=event.said,
@@ -633,7 +633,7 @@ def read(args, operation):
                     owner = record.controller if args.issued else record.holder
                     if hab and owner != hab.pre:
                         continue
-                    acdc = wallet.issuedCredential(record.credential) if args.issued else None
+                    acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, record.credential) if args.issued else None
                     if args.schema and (acdc is None or acdc.sad['s'] != args.schema):
                         continue
                     if args.said:
@@ -650,10 +650,10 @@ def read(args, operation):
                 if hab is None:
                     raise ConfigurationError('unknown ACDC v2 export alias')
                 reg = registry(rgy, args.registry_name, hab)
-                record = wallet.issuedRecord(args.said)
+                record = Registrar(wallet.rgy).issuedRecord(wallet.reger, args.said)
                 if record is None or record.registry != reg.regk:
                     raise ConfigurationError('ACDC v2 export requires an issued inventory credential')
-                acdc = wallet.issuedCredential(record.credential)
+                acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, record.credential)
                 if args.chains or (args.full and acdc.sad.get('e')):
                     raise ConfigurationError('ACDC v2 chained evidence must be exported from its accepted IPEX disclosure')
                 # Authenticate the exact historical opening before constructing

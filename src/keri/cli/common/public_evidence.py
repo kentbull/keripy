@@ -15,6 +15,7 @@ from hio.base import doing
 from hio.core import http
 
 from keri import Vrsn_2_0, Kinds
+from keri.acdc.registraring import Registrar
 from keri.acdc import messaging
 from keri.acdc.regeventing import vetBlind, vetBound
 from keri.app import Receiptor, HaberyDoer, Keeper
@@ -392,7 +393,7 @@ def opening(args):
                 if acdc.said != args.said:
                     raise ConfigurationError('admitted grant does not bind the requested credential')
             else:
-                acdc = wallet.issuedCredential(args.said)
+                acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, args.said)
             event = rgy.store.seqEvent(regid, args.ordinal)
             if event is None or event.ilk != 'bup':
                 raise ConfigurationError('opening requires an accepted blinded event')
@@ -457,7 +458,7 @@ class Advance(acdc_v2.AcdcV2Author):
                 raise ConfigurationError('advance currently requires an individual registry controller')
             if set(self.auths) - set(hab.kever.wits):
                 raise ConfigurationError('witness authentication names a noncurrent witness')
-            acdc = wallet.issuedCredential(args.said)
+            acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, args.said)
             head = reg.store.headEvent(reg.regk)
             if head is None or head.ilk != 'bup':
                 raise ConfigurationError('advance requires an accepted blinded state')

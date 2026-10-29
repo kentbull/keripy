@@ -11,6 +11,7 @@ from hio.base import doing
 from hio.core import http
 
 from keri import Vrsn_1_0, Vrsn_2_0, Kinds
+from keri.acdc.registraring import Registrar
 from keri.acdc import ipexing
 from keri.acdc.regeventing import issuerRegistry
 from keri.acdc.sectioning import SectionBaser, Sectioner
@@ -244,7 +245,7 @@ class ExchangeDoer(doing.DoDoer):
                     credential = held['credential']
                     artifacts = held['artifacts']
                 else:
-                    credential = wallet.issuedCredential(args.said)
+                    credential = Registrar(wallet.rgy).issuedCredential(wallet.reger, args.said)
                     artifacts = []
                 if args.disclose:
                     if not isinstance(credential.sad.get('a'), dict):
@@ -281,9 +282,9 @@ class ExchangeDoer(doing.DoDoer):
                     origin = self.registryOrigin(hby, rgy, credential, regid, custody=custody,
                         retained=peer.exc.routes['/ipex/grant']._blindProofs(node))
                 elif regid := (issuerRegistry(credential) or
-                               wallet.issuedRecord(credential.said).registry):
+                               Registrar(wallet.rgy).issuedRecord(wallet.reger, credential.said).registry):
                     origin = self.registryOrigin(hby, rgy, credential, regid, custody=custody,
-                        issued=wallet.issuedRecord(credential.said))
+                        issued=Registrar(wallet.rgy).issuedRecord(wallet.reger, credential.said))
                 else:
                     if credential.israid != hab.pre:
                         raise ConfigurationError('credential issuer proof is unavailable')

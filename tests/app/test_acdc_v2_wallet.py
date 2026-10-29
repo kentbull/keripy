@@ -124,7 +124,7 @@ def _custody_issuance_case(tmp_path):
             update = blindate(regid=registry.regk, prior=rip.said, blid=opening.said)
             registry.processEvent(update)
             anchored(ihab, registry, update)
-            assert iwallet.recordIssued(acdc, update.said, blinder=opening).credential == acdc.said
+            assert Registrar(iwallet.rgy).recordIssued(iwallet.reger, acdc, update.said, blinder=opening).credential == acdc.said
             salt = iwallet.custody._load(registry.regk).salt
             retained = iwallet.hby.ks.custody.get((registry.regk,))
             assert retained.aeid == issuer.mgr.aeid and salt not in retained.cipher
@@ -447,11 +447,11 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
                                 data={'kind': 'legacy'}, version=Vrsn_1_0)
             wallet.reger.logCred(legacy, hab.kever.prefixer, Number(num=0), Diger(qb64=hab.pre))
             wallet.reger.issus.add((hab.pre,), Saider(qb64=legacy.said))
-            record = wallet.recordIssued(acdc, head.said, blinder=opening)
-            assert [item.credential for item in wallet.issuedRecords()] == [acdc.said]
+            record = Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, head.said, blinder=opening)
+            assert [item.credential for item in Registrar(wallet.rgy).issuedRecords(wallet.reger)] == [acdc.said]
             assert wallet.reger.cloneCred(legacy.said)[0].raw == legacy.raw
             assert record.encoding == 'base64'
-            assert wallet.issuedCredential(acdc.said).raw == acdc.raw
+            assert Registrar(wallet.rgy).issuedCredential(wallet.reger, acdc.said).raw == acdc.raw
             raw, said, regid, head = acdc.raw, acdc.said, registry.regk, head.said
         finally:
             wallet.close()
@@ -461,11 +461,11 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
         wallet = Wallet(issuer, rgy)
         try:
             assert rgy.store.head(regid).qb64 == head
-            assert wallet.issuedCredential(said).raw == raw
-            assert wallet.issuedCredential(said).kind == kind
+            assert Registrar(wallet.rgy).issuedCredential(wallet.reger, said).raw == raw
+            assert Registrar(wallet.rgy).issuedCredential(wallet.reger, said).kind == kind
             assert wallet.reger.cloneCred(legacy.said)[0].raw == legacy.raw
-            assert wallet.issuedRecord(legacy.said) is None
-            assert wallet.recordIssued(wallet.issuedCredential(said), head) == record
+            assert Registrar(wallet.rgy).issuedRecord(wallet.reger, legacy.said) is None
+            assert Registrar(wallet.rgy).recordIssued(wallet.reger, Registrar(wallet.rgy).issuedCredential(wallet.reger, said), head) == record
         finally:
             wallet.close()
             rgy.close()
@@ -498,7 +498,7 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
             update = blindate(regid=registry.regk, prior=rip.said, blid=opening.said)
             registry.processEvent(update)
             anchored(issuer, registry, update)
-            record = wallet.recordIssued(acdc, update.said, blinder=opening)
+            record = Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, update.said, blinder=opening)
             assert record.bound == dict(bn=selected.sn, bd=selected.said)
             issuee.rotate()
             assert issuee.kever.serder.said != selected.said
@@ -509,12 +509,12 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
         rgy = regery(hby, tmp_path)
         wallet = Wallet(hby, rgy)
         try:
-            assert wallet.recordIssued(acdc, update.said) == record
+            assert Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, update.said) == record
             wallet.custody = RegistryCustody(hby, rgy)
             wrong = wallet.custody.derive(registry.regk, 1, acdc.said, 'issued',
                 **wallet.boundEvent(acdc, hby.habByName('issuee').kever.serder.said))
             with pytest.raises(ValidationError):
-                wallet.recordIssued(acdc, update.said, blinder=wrong)
+                Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, update.said, blinder=wrong)
         finally:
             wallet.close()
             rgy.close()

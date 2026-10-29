@@ -92,12 +92,12 @@ def test_fresh_blinded_issuance_requires_supplied_common_verifier_opening(tmp_pa
             anchored(issuer, registry, event)
             assert wallet.custody is None
             with pytest.raises(ConfigurationError, match='explicit event opening'):
-                wallet.recordIssued(credential, event.said)
+                Registrar(wallet.rgy).recordIssued(wallet.reger, credential, event.said)
             with pytest.raises(ValidationError):
-                wallet.recordIssued(credential, event.said,
+                Registrar(wallet.rgy).recordIssued(wallet.reger, credential, event.said,
                                     blinder=Blinder.blind(acdc=credential.said, state='revoked'))
-            record = wallet.recordIssued(credential, event.said, blinder=proof)
-            assert wallet.recordIssued(credential, event.said) == record
+            record = Registrar(wallet.rgy).recordIssued(wallet.reger, credential, event.said, blinder=proof)
+            assert Registrar(wallet.rgy).recordIssued(wallet.reger, credential, event.said) == record
             assert not list(wallet.hby.ks.custody.getTopItemIter())
         finally:
             wallet.close()

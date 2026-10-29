@@ -1,4 +1,5 @@
 """Real independent group members, ACDC v2 registry TELs and IPEX approval thresholds."""
+from keri.acdc.registraring import Registrar
 from contextlib import ExitStack, contextmanager
 
 import pytest
@@ -660,7 +661,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             approveRegistry(issuerTeam, issued, issuedOpening)
             synchronize()
             for wallet in wallets[:3]:
-                wallet.recordIssued(credential, issued.said, blinder=issuedOpening)
+                Registrar(wallet.rgy).recordIssued(wallet.reger, credential, issued.said, blinder=issuedOpening)
 
             # First create the immutable grant, then have the holder group
             # authorize that exact grant through its declared presentation TEL.

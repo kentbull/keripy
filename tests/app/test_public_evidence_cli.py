@@ -1,4 +1,5 @@
 """Operator commands expose public evidence without lifecycle fixture writes."""
+from keri.acdc.registraring import Registrar
 from contextlib import contextmanager
 import json
 import os
@@ -153,7 +154,7 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
     # Each CLI invocation and each context closes Keeper/Baser/Configer/registry/wallet.
     with _owned_wallet(case.alice) as (hby, rgy, wallet):
         reg = rgy.registryByName('r')
-        acdc = wallet.issuedCredential(case.issued['credential'])
+        acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, case.issued['credential'])
         parameters = wallet.boundEvent(acdc, case.bound_args[1]) if bound else {}
         head = reg.store.headEvent(case.registry)
         assert wallet.reger.privateOpening(head).qb64 == case.proof.qb64
