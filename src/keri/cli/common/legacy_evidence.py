@@ -168,12 +168,12 @@ class Source(doing.DoDoer):
         return len(pending)
 
     def deliver(self, tymth, tock=0.03125, **kwa):
-        """Deliver queued proof bytes to the fixed destination with finite attempts.
+        """Attempt each queued reply once through the ordinary finite sender.
 
-        tymth/tock are HIO scheduling inputs. Yield delays and transport work;
-        return only on cancellation. Each message gets at most three bounded
-        attempts; failures are logged without claiming acceptance. Cancellation
-        unwinds the shared sender's HTTP owner. No credential state is authored.
+        ``tymth`` and ``tock`` supply HIO scheduling. Transport failure is reported
+        without requeueing or interpreting it as receiver acceptance. A subsequent
+        authenticated query may request evidence again through the normal path.
+        Cancellation unwinds the sender's HTTP owner; no retry policy is added.
         """
         self.wind(tymth)
         yield tock
@@ -182,15 +182,12 @@ class Source(doing.DoDoer):
                 yield tock
                 continue
             raw = self.outbox.pop(0)
-            for attempt in range(3):
-                try:
-                    yield from cesr_sending.send(self, self.replyTo, raw, self.timeout)
-                    print(json.dumps(dict(evidenceTransmitted=True, bytes=len(raw))), flush=True)
-                    break
-                except (OSError, TimeoutError, ConfigurationError) as error:
-                    if attempt == 2:
-                        print(json.dumps(dict(evidenceTransmitted=False, error=str(error))), flush=True)
-                    yield tock
+            try:
+                yield from cesr_sending.send(self, self.replyTo, raw, self.timeout)
+                print(json.dumps(dict(evidenceTransmitted=True, bytes=len(raw))), flush=True)
+            except (OSError, TimeoutError, ConfigurationError) as error:
+                print(json.dumps(dict(evidenceTransmitted=False, error=str(error))), flush=True)
+            yield tock
 
 
 class QueryEnd:

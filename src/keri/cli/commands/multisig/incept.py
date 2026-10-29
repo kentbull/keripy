@@ -88,6 +88,7 @@ def inceptMultisig(args):
 
 class GroupMultisigIncept(doing.DoDoer):
 
+    """Coordinate explicit member approval of a group inception with existing doers."""
     def __init__(self, name, base, alias, bran, group, wait, version=None, **kwa):
         self.name = name
         self.version = version
@@ -189,7 +190,7 @@ class GroupMultisigIncept(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, gvrsn=Vrsn_1_0)
 
             logger.info(f"Group identifier inception initialized for {ghab.pre}")
             prefixer = Prefixer(qb64=ghab.pre)

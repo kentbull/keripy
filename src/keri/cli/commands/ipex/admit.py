@@ -50,7 +50,7 @@ def handler(args):
     existing mailbox/group worker remains the default otherwise."""
     if args.acdc_v2:
         return [acdc_v2_ipex.ExchangeDoer(args, 'admit')]
-    acdc_v2_ipex.ObserverPolicy.fromArgs(args, None)
+    acdc_v2_ipex.ObserverConnection.fromArgs(args, None)
     if args.input or args.output or args.endpoint:
         return [legacy_negotiation.Negotiation(args, 'admit')]
     ed = AdmitDoer(name=args.name,

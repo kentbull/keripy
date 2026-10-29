@@ -43,7 +43,7 @@ def advance(doist, predicate):
         time.sleep(0.002)
 
 
-def test_signed_legacy_source_queries_and_core_state_replies(monkeypatch):
+def test_signed_legacy_source_queries_and_core_state_replies(monkeypatch, capsys):
     """Require real source-authenticated TSNs/replay and reject hostile requests.
 
     monkeypatch injects one operationally oversized signed reply; return None.
@@ -71,13 +71,14 @@ def test_signed_legacy_source_queries_and_core_state_replies(monkeypatch):
             issued = reg.issue(said=target)
             anchor(ihab, rgy, reg, issued)
             replies = []
+            reply_status = falcon.HTTP_202
 
             class Capture:
                 """Capture bytes actually delivered over the independent socket."""
                 def on_post(self, req, rep):
                     """Append req bytes, acknowledge via rep; return None, I/O errors fail."""
                     replies.append(req.bounded_stream.read())
-                    rep.status = falcon.HTTP_202
+                    rep.status = reply_status
 
             app = falcon.App()
             app.add_route('/proof', Capture())
@@ -194,6 +195,16 @@ def test_signed_legacy_source_queries_and_core_state_replies(monkeypatch):
             for _ in range(10):
                 doist.recur()
             assert len(replies) == 5 and not source.outbox
+            # A real receiver refusal ends this send. Only another authenticated
+            # query creates another delivery; the source has no retry policy.
+            reply_status = falcon.HTTP_503
+            request(query(route='tels'), 202)
+            advance(doist, lambda: '"evidenceTransmitted": false' in capsys.readouterr().out)
+            assert len(replies) == 6 and not source.outbox
+            reply_status = falcon.HTTP_202
+            request(query(route='tels'), 202)
+            advance(doist, lambda: len(replies) == 7)
+            assert not source.outbox
         finally:
             if doist is not None:
                 doist.exit()

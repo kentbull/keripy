@@ -209,7 +209,7 @@ class GroupMultisigRotate(doing.DoDoer):
         prefixer = Prefixer(qb64=ghab.pre)
         number = Number(sn=ghab.kever.sn+1)
         kwa = dict(version=self.version, gvrsn=self.version) if self.version is not None else {}
-        rot = ghab.rotate(isith=self.isith, nsith=self.nsith,
+        rot = ghab.rotate(smids=smids, rmids=rmids, isith=self.isith, nsith=self.nsith,
                           toad=self.toad, cuts=list(self.cuts), adds=list(self.adds), data=self.data,
                           verfers=merfers, digers=migers, framed=True, **kwa)
 
@@ -237,7 +237,7 @@ class GroupMultisigRotate(doing.DoDoer):
                               dest=recpt,
                               topic="multisig",
                               serder=exn,
-                              attachment=bytearray(ims))
+                              attachment=bytearray(ims), gvrsn=Vrsn_1_0)
 
         self.counselor.start(ghab=ghab, prefixer=prefixer, number=number, diger=Diger(qb64=rserder.said))
 

@@ -1,8 +1,9 @@
 """Operator adapters for public CESR evidence and explicit registry openings.
 
 These commands expose ordinary processors and signed service requests. They do
-not inject accepted KEL/TEL rows, wallet consent, or optional custody records.
+not inject accepted KEL/TEL rows, holder consent, or optional custody records.
 """
+from contextlib import ExitStack
 from dataclasses import asdict, dataclass
 import hashlib
 import ipaddress
@@ -15,6 +16,10 @@ from hio.base import doing
 from hio.core import http
 
 from keri import Vrsn_2_0, Kinds
+from keri.acdc.registraring import Registrar
+from keri.app.credential_disclosing import boundEvent
+from keri.app.registry_custody import RegistryCustody
+from keri.vdr.eventing import Reger
 from keri.acdc import messaging
 from keri.acdc.regeventing import vetBlind, vetBound
 from keri.app import Receiptor, HaberyDoer, Keeper
@@ -23,7 +28,6 @@ from keri.app.evidencing import EvidenceContext, KEL_DEPENDENCIES, signedQuery
 from keri.cli.common import acdc_v2, setupHby
 from keri.core import Parser, SerderKERI, Number
 from keri.kering import ConfigurationError
-from keri.help import helping
 from keri.peer import exchanging
 
 
@@ -167,43 +171,32 @@ def kel(args, operation):
 
 
 def observerOptions(parser):
-    """Add explicit configured-source trust and observation-age options."""
-    parser.add_argument('--require-fresh', action='store_true',
-                        help='require a recent observation from the authenticated HTTPS source')
-    parser.add_argument('--max-age', type=float, help='maximum observation age in seconds; requires --require-fresh')
+    """Add TLS trust settings for the configured query source."""
     parser.add_argument('--observer-ca-file', help='absolute CA bundle path for the queried HTTPS source')
     parser.add_argument('--observer-cert-name', help='expected DNS certificate name for an IP source URL')
 
 
 @dataclass(frozen=True)
-class ObserverPolicy:
-    """One configured query source and optional observation-age requirement.
+class ObserverConnection:
+    """TLS settings for one configured query source.
 
     TLS authenticates this service connection, while ordinary processors verify
     issuer evidence. Neither establishes global latest state. These settings
     never configure the independent recipient delivery endpoint.
     """
     url: str | None
-    maximumAge: float | None = None
     cafilepath: str | None = None
     certedhost: str | None = None
 
     @classmethod
     def fromArgs(cls, args, url):
         """Validate source-only options before stores or sockets are opened."""
-        required = getattr(args, 'require_fresh', False)
-        maximum = getattr(args, 'max_age', None)
         ca = getattr(args, 'observer_ca_file', None)
         name = getattr(args, 'observer_cert_name', None)
         if url is None:
-            if required or maximum is not None or ca is not None or name is not None:
+            if ca is not None or name is not None:
                 raise ConfigurationError('observer policy requires an actual registry query source')
             return cls(None)
-        if required:
-            if maximum is None or not math.isfinite(maximum) or maximum <= 0:
-                raise ConfigurationError('--require-fresh needs an explicit positive finite --max-age')
-        elif maximum is not None:
-            raise ConfigurationError('--max-age requires --require-fresh')
         try:
             target = urlsplit(url)
             target.port
@@ -212,8 +205,8 @@ class ObserverPolicy:
         if (target.scheme not in ('http', 'https') or not target.hostname
                 or target.username is not None or target.password is not None or target.fragment):
             raise ConfigurationError('observer source requires an uncredentialed HTTP(S) URL without a fragment')
-        if (required or ca is not None or name is not None) and target.scheme != 'https':
-            raise ConfigurationError('observer trust and freshness options require HTTPS')
+        if (ca is not None or name is not None) and target.scheme != 'https':
+            raise ConfigurationError('observer TLS options require HTTPS')
         if ca is not None:
             path = Path(ca).expanduser()
             if not path.is_absolute() or not path.is_file():
@@ -233,7 +226,7 @@ class ObserverPolicy:
                         raise ConfigurationError('observer certificate name must be a non-empty DNS name')
                 else:
                     raise ConfigurationError('observer certificate name must be a DNS name')
-        return cls(url, maximum if required else None, ca, name)
+        return cls(url, ca, name)
 
     def clientOptions(self):
         """Pass only selected trust settings through HIO's existing TLS contract."""
@@ -242,57 +235,25 @@ class ObserverPolicy:
             options['cafilepath'] = self.cafilepath
         if self.certedhost is not None:
             options['certedhost'] = self.certedhost
-        if self.maximumAge is not None:
-            options['redirectable'] = False
         return options
-
-    def observedAt(self, response):
-        """Return an aware observation only when explicit freshness is required."""
-        if self.maximumAge is None:
-            return None
-        try:
-            stamp = helping.fromIso8601(response.get('headers', {}).get('observer-observed-at'))
-            if stamp.utcoffset() is None:
-                raise ValueError('observation timestamp has no timezone')
-        except (TypeError, ValueError) as error:
-            raise ConfigurationError('observer response requires an aware observed-at timestamp') from error
-        self.checkAge(stamp)
-        return stamp
-
-    def checkAge(self, stamp):
-        """Check wall-clock age at the decision, without inferring issuer freshness."""
-        age = (helping.nowUTC() - stamp).total_seconds()
-        if age < 0 or age > self.maximumAge:
-            raise ConfigurationError('observer observation is future-dated or stale')
-
-    def recheck(self, evidence, observations):
-        """Recheck transient facts after all syncs and before authoring or consent."""
-        for regid, said, stamp in observations:
-            self.checkAge(stamp)
-            head = evidence.store.headEvent(regid)
-            if head is None or head.said != said:
-                raise ConfigurationError('observer observation no longer names the local registry head')
 
 
 def verifiedRegistryResponse(evidence, regid, response):
-    """Ingest once and require the exact advertised/requested registry result.
+    """Ingest CESR evidence and require acceptance for the requested registry.
 
     ``evidence`` is the caller's existing EvidenceContext. Its ordinary processors
     authenticate the body; this CLI postcondition neither authenticates the HTTP
-    source nor establishes observation freshness. A declared fresh CESR response
-    must have no pending/rejected work and its returned, local and advertised
-    requested heads must agree, or ConfigurationError is raised.
+    source nor establishes globally latest state. Returned registry evidence must
+    be accepted by the ordinary processors and agree with the local registry head.
     """
     if response.get('status') != 200:
         raise ConfigurationError(f"observer HTTP status {response.get('status')}")
     headers = response.get('headers', {})
-    if (headers.get('observer-evidence-state') != 'fresh'
-            or headers.get('content-type', '').split(';')[0] != CESR_CONTENT_TYPE):
-        raise ConfigurationError('observer response requires declared fresh CESR evidence')
+    if headers.get('content-type', '').split(';')[0] != CESR_CONTENT_TYPE:
+        raise ConfigurationError('registry response requires CESR evidence')
     result = evidence.ingest(response['body'])
     head = evidence.store.headEvent(regid)
     if (result['pending'] or result['rejected'] or head is None
-            or head.said != headers.get('observer-registry-head')
             or result['heads'].get(regid) != head.said):
         raise ConfigurationError('observer evidence failed exact registry synchronization')
     return head
@@ -336,18 +297,18 @@ class Request(doing.DoDoer):
             OSError, ValueError: File, ASCII evidence, or response JSON decoding fails.
 
         Owns the scheduled HTTP client and evidence context; removes both children and
-        closes the socket before the surrounding registry and wallet stores exit. Transmission/HTTP
+        closes the socket before the surrounding registry and identity stores exit. Transmission/HTTP
         202 alone never supplies an application acceptance claim."""
         self.wind(tymth)
         yield tock
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
-        policy = ObserverPolicy.fromArgs(args, args.endpoint if self.operation == 'query' else None)
+        policy = ObserverConnection.fromArgs(args, args.endpoint if self.operation == 'query' else None)
         target = urlsplit(args.endpoint)
         if target.scheme not in ('http', 'https') or not target.hostname:
             raise ConfigurationError('public evidence requests require an HTTP(S) endpoint')
-        with acdc_v2.opened(args) as (hby, rgy, wallet):
+        with acdc_v2.openedRegistry(args) as (hby, rgy):
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('unknown signing alias')
@@ -378,9 +339,8 @@ class Request(doing.DoDoer):
                     print(json.dumps(dict(accepted=True, result=result)))
                 else:
                     head = verifiedRegistryResponse(evidence, args.registry, response)
-                    policy.observedAt(response)
                     digest = write(args.output, bytes(response['body']))
-                    print(json.dumps(dict(accepted=True, fresh=policy.maximumAge is not None, registry=args.registry,
+                    print(json.dumps(dict(accepted=True, registry=args.registry,
                         head=head.said, sn=head.sn, output=args.output, sha256=digest)))
             finally:
                 self.remove([owner, evidence])
@@ -426,23 +386,27 @@ def opening(args):
         from keri.acdc.sectioning import SectionBaser
         from keri.cli.common.acdc_v2_ipex import Peer
         from keri.db import openLMDB
-        with (acdc_v2.opened(args, custody=True) as (hby, rgy, wallet),
-              openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections):
+        with (acdc_v2.openedRegistry(args) as (hby, rgy),
+              openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections,
+              ExitStack() as stores):
+            custody = RegistryCustody(hby, rgy)
             regid = args.registry or acdc_v2.registry(rgy, args.registry_name).regk
             if args.from_grant:
                 # Reuse the same retained semantic context as ordinary holder
                 # presentation; possession of a grant reference is not consent.
-                peer = Peer(hby, rgy, wallet, sections)
-                acdc = wallet.heldCredential(args.from_grant)['credential']
+                peer = Peer(hby, rgy, sections)
+                acdc = peer.verification.heldCredential(args.from_grant)['credential']
                 if acdc.said != args.said:
                     raise ConfigurationError('admitted grant does not bind the requested credential')
             else:
-                acdc = wallet.issuedCredential(args.said)
+                reger = stores.enter_context(openLMDB(cls=Reger, name=hby.name,
+                    base=hby.base, temp=hby.db.temp, headDirPath=hby.db.headDirPath))
+                acdc = Registrar(rgy).issuedCredential(reger, args.said)
             event = rgy.store.seqEvent(regid, args.ordinal)
             if event is None or event.ilk != 'bup':
                 raise ConfigurationError('opening requires an accepted blinded event')
-            parameters = wallet.boundEvent(acdc, args.bound_event) if args.bound_event else {}
-            proof = wallet.custody.derive(regid, args.ordinal, acdc.said, args.state, **parameters)
+            parameters = boundEvent(hby, acdc, args.bound_event) if args.bound_event else {}
+            proof = custody.derive(regid, args.ordinal, acdc.said, args.state, **parameters)
             vetBlind(proof, blid=event.sad['b'])
             vetBound(proof, acdc=acdc, db=hby.db)
             digest = write(args.output, proof.qb64b)
@@ -494,7 +458,7 @@ class Advance(acdc_v2.AcdcV2Author):
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
         self.auths = acdc_v2.readWitnessAuth(getattr(args, 'witness_auth_file', None))
-        with acdc_v2.opened(args, custody=True) as (hby, rgy, wallet):
+        with acdc_v2.openedCredentials(args, derive=True) as (hby, rgy, reger, custody):
             from keri.app import GroupHab
             hab = hby.habByName(args.alias)
             reg = acdc_v2.registry(rgy, args.registry_name, hab)
@@ -502,25 +466,25 @@ class Advance(acdc_v2.AcdcV2Author):
                 raise ConfigurationError('advance currently requires an individual registry controller')
             if set(self.auths) - set(hab.kever.wits):
                 raise ConfigurationError('witness authentication names a noncurrent witness')
-            acdc = wallet.issuedCredential(args.said)
+            acdc = Registrar(rgy).issuedCredential(reger, args.said)
             head = reg.store.headEvent(reg.regk)
             if head is None or head.ilk != 'bup':
                 raise ConfigurationError('advance requires an accepted blinded state')
-            bound = wallet.boundEvent(acdc, args.bound_event) if args.bound_event else {}
-            old = wallet.custody.derive(reg.regk, head.sn, acdc.said, args.state, **bound)
+            bound = boundEvent(hby, acdc, args.bound_event) if args.bound_event else {}
+            old = custody.derive(reg.regk, head.sn, acdc.said, args.state, **bound)
             vetBlind(old, blid=head.sad['b'])
             vetBound(old, acdc=acdc, db=hby.db)
-            nextproof = wallet.custody.derive(reg.regk, head.sn + 1, acdc.said, args.state, **bound)
+            nextproof = custody.derive(reg.regk, head.sn + 1, acdc.said, args.state, **bound)
             staged = [event for _, event in rgy.baser.evts.getTopItemIter()
                       if event.sad.get('rd') == reg.regk and event.sad.get('n') == f'{head.sn + 1:x}']
             if staged:
                 if len(staged) != 1 or staged[0].sad.get('b') != nextproof.said or staged[0].sad.get('p') != head.said:
                     raise ConfigurationError('registry has different pending authoring work')
                 event = staged[0]
-                wallet.retainDerivedUpdate(event, nextproof)
+                reger.retainPrivateOpening(event, nextproof)
             else:
                 event = messaging.blindate(reg.regk, head.said, nextproof.said, sn=head.sn + 1)
-                wallet.retainDerivedUpdate(event, nextproof)
+                reger.retainPrivateOpening(event, nextproof)
                 reg.processEvent(event)
             workers = [HaberyDoer(habery=hby), Receiptor(hby=hby)]
             self.extend(workers)
@@ -561,15 +525,15 @@ def inspect(args):
             ConfigurationError: Exchange is unknown, route is unavailable, or fresh ACDC v2
             semantic revalidation refuses it. Missing/invalid proof errors propagate.
 
-        Registry, wallet, and section store contexts own cleanup; inspection creates no admission,
+        Registry and section store contexts own cleanup; inspection creates no admission,
         observer freshness, or private derivation authority."""
         yield tock
         from keri.acdc.sectioning import SectionBaser
         from keri.cli.common.acdc_v2_ipex import Peer
         from keri.db import openLMDB
-        with (acdc_v2.opened(args) as (hby, rgy, wallet),
+        with (acdc_v2.openedRegistry(args) as (hby, rgy),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections):
-            peer = Peer(hby, rgy, wallet, sections)
+            peer = Peer(hby, rgy, sections)
             event = hby.db.exns.get((args.said,))
             if event is None:
                 raise ConfigurationError('exchange is not accepted')
@@ -582,4 +546,39 @@ def inspect(args):
             print(json.dumps(dict(exchange=event.said, accepted=True, sender=event.pre,
                 recipient=event.sad.get('ri'), prior=event.sad['p'], thread=event.sad.get('x'),
                 route=event.route, nodes=nodes)))
+    return [doing.doify(run)]
+
+
+def exportRegistry(args):
+    """Return a read-only public registry export operation using shared evidence cloning.
+
+    Args:
+        args (Namespace): Existing identity/passcode, exact registry SAID and a
+            new public output path. No credential or custody capability is selected.
+
+    Returns:
+        list[Doer]: One operation producing accepted controller/delegation KEL,
+            selected accepted TEL history and only explicitly public openings.
+
+    Unknown registries and unsupported history fail before exclusive file
+    creation. RegistryCustody is never constructed or used to derive an opening.
+    """
+    def run(tymth, tock=0.0, **kwa):
+        """Clone one accepted scope and close caller-owned stores on every exit.
+
+        HIO supplies tymth/tock/kwa. Yield once, then print public identifiers and
+        the exact output digest after writing. Protocol and file errors propagate.
+        """
+        yield tock
+        with acdc_v2.openedRegistry(args) as (hby, rgy):
+            if rgy.store.seqEvent(args.registry, 0) is None:
+                raise ConfigurationError('public registry export requires an accepted registry inception')
+            evidence = EvidenceContext(hby, reger=rgy.baser)
+            # Read-only cloning needs no scheduler/pruner lifecycle and reuses the
+            # shared accepted-history/opening contract instead of serializing TELs here.
+            raw = evidence.clone([args.registry])
+            head = rgy.store.headEvent(args.registry)
+            digest = write(args.output, raw)
+            print(json.dumps(dict(registry=args.registry, accepted=True, head=head.said,
+                                  sn=head.sn, output=args.output, sha256=digest)))
     return [doing.doify(run)]

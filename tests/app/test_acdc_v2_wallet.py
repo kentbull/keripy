@@ -11,11 +11,11 @@ from keri import Vrsn_2_0, Kinds
 from keri.acdc import Regery, Registrar, acdcmap, blindate, grant, admit, loadHandlers
 from keri.acdc.regbasing import RegBaser
 from keri.acdc.regeventing import Rever
-from keri.app.credentialing import Wallet, WalletBaser
+from tests.app.native_owners import NativeOwners
 from keri.app.registry_custody import RegistryCustody
 from keri.app.configing import Configer
 from keri.app.habbing import openHby
-from keri.core import Kevery, Parser, Signer, Number, Diger, Compactor, Noncer, Blinder, messagize
+from keri.core import Encrypter, Kevery, Parser, Signer, Number, Diger, Compactor, Noncer, Blinder, messagize
 from keri.kering import AuthError, ConfigurationError, ValidationError, MissingSchemaError
 from keri.peer.exchanging import Exchanger, loadParsedNestedSubstreams
 
@@ -108,10 +108,10 @@ def _custody_issuance_case(tmp_path):
         receive(issuer, hhab.replay(gvrsn=Vrsn_2_0))
         receive(holder, ihab.replay(gvrsn=Vrsn_2_0))
         irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
-        iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
-        hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
-        iwallet.custody = RegistryCustody(issuer, irgy, db=iwallet.db)
-        hwallet.custody = RegistryCustody(holder, hrgy, db=hwallet.db)
+        iwallet = NativeOwners(issuer, irgy)
+        hwallet = NativeOwners(holder, hrgy)
+        iwallet.custody = RegistryCustody(issuer, irgy)
+        hwallet.custody = RegistryCustody(holder, hrgy)
         try:
             registry = Registrar(rgy=irgy).makeRegistry(name='credential', prefix=ihab.pre)
             rip = irgy.store.event(registry.regk)
@@ -124,11 +124,11 @@ def _custody_issuance_case(tmp_path):
             update = blindate(regid=registry.regk, prior=rip.said, blid=opening.said)
             registry.processEvent(update)
             anchored(ihab, registry, update)
-            assert iwallet.recordIssued(acdc, update.said, blinder=opening).credential == acdc.said
+            assert Registrar(iwallet.rgy).recordIssued(iwallet.reger, acdc, update.said, blinder=opening).credential == acdc.said
             salt = iwallet.custody._load(registry.regk).salt
-            retained = iwallet.db.custody.get((registry.regk,))
+            retained = iwallet.hby.ks.custody.get((registry.regk,))
             assert retained.aeid == issuer.mgr.aeid and salt not in retained.cipher
-            assert salt.encode() not in Path(iwallet.db.path, 'data.mdb').read_bytes()
+            assert salt.encode() not in Path(iwallet.reger.path, 'data.mdb').read_bytes()
             # Receiver accepts normal signed KEL and foreign ACDC v2 registry events, never copied accepted rows.
             receive(holder, ihab.replay(gvrsn=Vrsn_2_0))
             receiver = Rever(db=holder.db, reger=hrgy.baser)
@@ -150,15 +150,15 @@ def _custody_issuance_case(tmp_path):
 
 
 def test_encrypted_custody_future_derivation_after_reopen(tmp_path, capsys):
-    """Encrypted derivation, real receiver history and AEID refusal need no file handoff."""
+    """Encrypted derivation, real receiver history and Keeper rotation need no file handoff."""
     case = _custody_issuance_case(tmp_path)
     with (encrypted('custody-issuer', tmp_path, case.issuerKey) as issuer,
           encrypted('custody-holder', tmp_path, case.holderKey) as holder):
         irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
-        iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
-        hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
-        iwallet.custody = RegistryCustody(issuer, irgy, db=iwallet.db)
-        hwallet.custody = RegistryCustody(holder, hrgy, db=hwallet.db)
+        iwallet = NativeOwners(issuer, irgy)
+        hwallet = NativeOwners(holder, hrgy)
+        iwallet.custody = RegistryCustody(issuer, irgy)
+        hwallet.custody = RegistryCustody(holder, hrgy)
         try:
             assert holder.habByPre(case.discloser)
             assert hrgy.store.head(case.regid).qb64 == case.update.said
@@ -168,8 +168,7 @@ def test_encrypted_custody_future_derivation_after_reopen(tmp_path, capsys):
                 hwallet.custody.derive(case.regid, 17, case.credential, 'revoked')
             replacement = Signer(transferable=False)
             issuer.mgr.updateAeid(replacement.verfer.qb64, replacement.qb64)
-            with pytest.raises(AuthError, match='AEID changed'):
-                iwallet.custody.derive(case.regid, 18, case.credential, 'revoked')
+            assert iwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64 == case.future
         finally:
             iwallet.close()
             hwallet.close()
@@ -179,36 +178,30 @@ def test_encrypted_custody_future_derivation_after_reopen(tmp_path, capsys):
     assert case.salt not in captured.out + captured.err
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
-def test_protected_custody_handoff_and_explicit_rewrap_after_reopen(tmp_path, capsys):
-    """Enforce protected transfer, imported derivation continuity and explicit old-AEID rewrap."""
+def test_encrypted_custody_handoff_and_keeper_binding_after_reopen(tmp_path, capsys):
+    """Preserve encrypted transfer and derivation across reopen; changed Keepers fail closed."""
     case = _custody_issuance_case(tmp_path)
     issuerKey, holderKey, issuerInfo = case.issuerKey, case.holderKey, case.issuerInfo
     opening, update = case.opening, case.update
-    export = tmp_path / 'private-custody.json'
     with (encrypted('custody-issuer', tmp_path, issuerKey) as issuer,
           encrypted('custody-holder', tmp_path, holderKey) as holder):
         ihab, hhab = issuer.habByPre(case.controller), holder.habByPre(case.discloser)
         irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
-        iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
-        hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
-        iwallet.custody = RegistryCustody(issuer, irgy, db=iwallet.db)
-        hwallet.custody = RegistryCustody(holder, hrgy, db=hwallet.db)
+        iwallet = NativeOwners(issuer, irgy)
+        hwallet = NativeOwners(holder, hrgy)
+        iwallet.custody = RegistryCustody(issuer, irgy)
+        hwallet.custody = RegistryCustody(holder, hrgy)
         try:
-            assert iwallet.custody.exportCustody(case.regid, export) == export
-            assert export.stat().st_mode & 0o777 == 0o600
-            salt = json.loads(export.read_text())['salt']
-            holderInfo = hwallet.custody.importCustody(export, regid=case.regid,
-                                               controller=ihab.pre, discloser=hhab.pre)
-            assert holderInfo == issuerInfo
+            verfer = hhab.kever.verfers[0]
+            cipher = iwallet.custody.sealRoot(case.regid, Encrypter(verkey=verfer.qb64))
+            root = hwallet.custody.openRoot(cipher, verfer)
+            salt = root.qb64
+            prepared = hwallet.custody.prepareRoot(issuerInfo, root)
+            with hwallet.custody.db.env.begin(write=True) as txn:
+                hwallet.custody.retainPrepared(prepared, txn)
             assert hwallet.custody.derive(case.regid, 1, case.credential, 'issued').qb64 == opening.qb64
             future = iwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64
             assert hwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64 == future
-            issuerReplacement = Signer(transferable=False)
-            issuer.mgr.updateAeid(issuerReplacement.verfer.qb64, issuerReplacement.qb64)
-            assert iwallet.custody.importCustody(export, regid=case.regid, controller=ihab.pre,
-                                         discloser=hhab.pre, rewrap=True) == issuerInfo
-            assert iwallet.custody.derive(case.regid, 17, case.credential, 'revoked').qb64 == future
             assert all(salt.encode() not in Path(baser.path, 'data.mdb').read_bytes()
                        for baser in (irgy.baser, hrgy.baser))
             regid, controller, discloser, credential = case.regid, ihab.pre, hhab.pre, case.credential
@@ -220,41 +213,14 @@ def test_protected_custody_handoff_and_explicit_rewrap_after_reopen(tmp_path, ca
     # Reopen actual encrypted Habery, RegBaser and wallet from disk with the same private key.
     with encrypted('custody-holder', tmp_path, holderKey) as holder:
         hrgy = regery(holder, tmp_path)
-        wallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
-        wallet.custody = RegistryCustody(holder, hrgy, db=wallet.db)
+        wallet = NativeOwners(holder, hrgy)
+        wallet.custody = RegistryCustody(holder, hrgy)
         try:
             assert holder.habByPre(discloser)
             assert hrgy.store.head(regid).qb64 == update.said
             assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
-            assert wallet.custody.importCustody(export, regid=regid, controller=controller,
-                                        discloser=discloser) == holderInfo
-            with pytest.raises(ValidationError):
-                wallet.custody.importCustody(export, regid=regid, controller=discloser, discloser=discloser)
-            with pytest.raises(ValidationError):
-                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=controller)
-            export.chmod(0o644)
-            with pytest.raises(ValidationError, match='mode0600'):
-                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=discloser)
-            export.chmod(0o600)
-            link = tmp_path / 'link'
-            link.symlink_to(export)
-            with pytest.raises(OSError):
-                wallet.custody.importCustody(link, regid=regid, controller=controller, discloser=discloser)
-            with pytest.raises(FileExistsError):
-                wallet.custody.exportCustody(regid, export)
-            # Manager does not rewrap application records; identity mismatch is explicit and closed.
             replacement = Signer(transferable=False)
             holder.mgr.updateAeid(replacement.verfer.qb64, replacement.qb64)
-            with pytest.raises(AuthError, match='AEID changed'):
-                wallet.custody.derive(regid, 18, credential, 'revoked')
-            with pytest.raises(AuthError, match='AEID changed'):
-                wallet.custody.importCustody(export, regid=regid, controller=controller, discloser=discloser)
-            assert wallet.custody.importCustody(export, regid=regid, controller=controller,
-                                         discloser=discloser, rewrap=True) == holderInfo
-            assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
-            assert wallet.db.custody.get((regid,)).aeid == replacement.verfer.qb64
-            wallet.db.close()
-            wallet.db.reopen()
             assert wallet.custody.derive(regid, 17, credential, 'revoked').qb64 == future
         finally:
             wallet.close()
@@ -294,8 +260,7 @@ def test_real_partial_and_full_grants_retain_separate_explicit_admissions(tmp_pa
         notices = Notices()
         exc = Exchanger(hby=holder, handlers=[])
         loadHandlers(holder, exc, notices, rgy=hrgy)
-        wallet = Wallet(holder, hrgy, exc=exc,
-                        db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        wallet = NativeOwners(holder, hrgy, exc=exc)
         try:
             full = acdcmap(israid=ihab.pre, uuid=Noncer().qb64, iseaid=hhab.pre,
                 attribute={'d': '', 'u': Noncer().qb64,
@@ -313,41 +278,49 @@ def test_real_partial_and_full_grants_retain_separate_explicit_admissions(tmp_pa
                     origin=signed(credential, ihab))
                 receive(holder, gexn.raw + gatc, rgy=hrgy, exc=exc)
                 assert exc.complete(gexn.said)
-                assert wallet.inventory()['held'] == [record for record in wallet.admissions(full.said)]
+                with pytest.raises(ValidationError, match='no signed local admission'):
+                    wallet.verification.heldCredential(gexn.said)
+                assert wallet.inventory()['held'] == [record for record in wallet.verification.admissions(full.said)]
                 aexn, aatc = admit(hhab, 'I consent to retain this disclosure', gexn)
                 receive(holder, aexn.raw + aatc, rgy=hrgy, exc=exc)
                 assert exc.complete(aexn.said)
+                # Signed protocol consent is sufficient; no second wallet write
+                # may be needed to recover the exact disclosure after restart.
+                assert wallet.verification.heldCredential(gexn.said)['admit'] == aexn.said
                 with pytest.raises(ValidationError, match='consent'):
-                    wallet.recordAdmission(gexn.said, aexn.said)
-                record = wallet.recordAdmission(gexn.said, aexn.said, consent=True)
-                assert wallet.recordAdmission(gexn.said, aexn.said, consent=True) == record
+                    wallet.verification.validateAdmission(gexn.said, aexn.said)
+                record = wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True)
+                assert wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True) == record
                 pairs.append((gexn.said, aexn.said))
             assert pairs[0][0] != pairs[1][0]
-            assert len(wallet.admissions(full.said)) == 2
+            assert len(wallet.verification.admissions(full.said)) == 2
             assert {record.grant for record in wallet.inventory()['held']} == {pair[0] for pair in pairs}
-            assert isinstance(wallet.heldCredential(pairs[0][0])['credential'].sad['a']['private'], str)
-            assert wallet.heldCredential(pairs[1][0])['credential'].sad['a']['private']['value'] == 'hidden-first'
+            assert isinstance(wallet.verification.heldCredential(pairs[0][0])['credential'].sad['a']['private'], str)
+            assert wallet.verification.heldCredential(pairs[1][0])['credential'].sad['a']['private']['value'] == 'hidden-first'
             # Missing/synthetic protocol IDs and bare notifications never create inventory.
             notices.add({'r': '/exn/ipex/grant', 'd': 'synthetic'})
             with pytest.raises(ValidationError):
-                wallet.recordAdmission('synthetic', pairs[0][1], consent=True)
+                wallet.verification.validateAdmission('synthetic', pairs[0][1], consent=True)
         finally:
+            # Discard only this test-owned issuer credential store. The next process
+            # must recover both admissions from Habery exchange evidence alone.
+            wallet.reger.close(clear=True)
             wallet.close()
             hrgy.close()
     with encrypted('inventory-holder', tmp_path, holderKey) as holder:
+        from keri.acdc.ipexing import AcdcV2IpexVerification
+
         hrgy = regery(holder, tmp_path)
-        exc = Exchanger(hby=holder, handlers=[])
-        loadHandlers(holder, exc, Notices(), rgy=hrgy)
-        wallet = Wallet(holder, hrgy, exc=exc,
-                        db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        # Retained consent and disclosure need only Habery/Regery. Do not open
+        # issuer credential storage or construct an application Wallet on restart.
+        verification = AcdcV2IpexVerification(holder, hrgy)
         try:
-            assert len(wallet.admissions(full.said)) == 2
-            assert {record.admit for record in wallet.inventory()['held']} == {pair[1] for pair in pairs}
-            assert wallet.recordAdmission(*pairs[0], consent=True).grant == pairs[0][0]
-            assert isinstance(wallet.heldCredential(pairs[0][0])['credential'].sad['a']['private'], str)
-            assert wallet.heldCredential(pairs[1][0])['credential'].sad['a']['private']['value'] == 'hidden-first'
+            assert len(verification.admissions(full.said)) == 2
+            assert {record.admit for record in verification.admissions()} == {pair[1] for pair in pairs}
+            assert verification.validateAdmission(*pairs[0], consent=True).grant == pairs[0][0]
+            assert isinstance(verification.heldCredential(pairs[0][0])['credential'].sad['a']['private'], str)
+            assert verification.heldCredential(pairs[1][0])['credential'].sad['a']['private']['value'] == 'hidden-first'
         finally:
-            wallet.close()
             hrgy.close()
 
 
@@ -361,8 +334,8 @@ def test_unencrypted_keeper_cannot_create_private_custody(tmp_path):
         None. Assertions check the stated evidence boundary."""
     with openHby(name='unencrypted-custody', temp=True, version=Vrsn_2_0) as hby:
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
-        wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
+        wallet = NativeOwners(hby, rgy)
+        wallet.custody = RegistryCustody(hby, rgy)
         try:
             with pytest.raises(AuthError, match='encrypted Keeper'):
                 wallet.custody.createCustody('unprovisioned', 'not-an-identifier')
@@ -399,12 +372,11 @@ def test_handlerless_retention_cannot_become_wallet_admission_after_registration
         rgy = regery(holder, tmp_path)
         exc = Exchanger(hby=holder, handlers=[])
         loadHandlers(holder, exc, Notices(), rgy=rgy)
-        wallet = Wallet(holder, rgy, exc=exc,
-                        db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        wallet = NativeOwners(holder, rgy, exc=exc)
         try:
             assert exc.complete(gexn.said) and exc.complete(aexn.said)
             with pytest.raises(ValidationError, match='semantic acceptance'):
-                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
+                wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True)
             class AcceptsEverything:
                 """Counterexample: route registration claims acceptance without proof."""
                 resource = '/ipex/grant'
@@ -415,12 +387,9 @@ def test_handlerless_retention_cannot_become_wallet_admission_after_registration
 
             exc.routes['/ipex/grant'] = AcceptsEverything()
             with pytest.raises(ValidationError, match='semantic acceptance'):
-                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
-            wallet.verification = True
-            with pytest.raises(ConfigurationError, match='concrete ACDC v2 IPEX verification'):
-                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
+                wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True)
             assert wallet.inventory()['held'] == []
-            assert wallet.admissions(credential.said) == []
+            assert wallet.verification.admissions(credential.said) == []
         finally:
             wallet.close()
             rgy.close()
@@ -443,7 +412,7 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
     with encrypted(name, tmp_path, key) as issuer:
         hab = issuer.makeHab(name='issuer')
         rgy = regery(issuer, tmp_path)
-        wallet = Wallet(issuer, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = NativeOwners(issuer, rgy)
         try:
             registry = Registrar(rgy=rgy).makeRegistry(name='binary', prefix=hab.pre)
             rip = rgy.store.event(registry.regk)
@@ -451,7 +420,7 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
             acdc = acdcmap(israid=hab.pre, regid=registry.regk, kind=kind,
                            attribute={'d': '', 'entitlement': 'read'})
             if history == 'blinded':
-                wallet.custody = RegistryCustody(issuer, rgy, db=wallet.db)
+                wallet.custody = RegistryCustody(issuer, rgy)
                 wallet.custody.createCustody(registry.regk, hab.pre)
                 opening = wallet.custody.derive(registry.regk, 1, acdc.said, 'issued')
             else:
@@ -467,22 +436,36 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
                 registry.processEvent(head)
                 anchored(hab, registry, head)
             if history != 'blinded':
-                assert wallet.db.custody.get((registry.regk,)) is None
-            record = wallet.recordIssued(acdc, head.said, blinder=opening)
+                assert wallet.hby.ks.custody.get((registry.regk,)) is None
+            # Use the same existing Reger for a legacy credential. Native
+            # issuance must preserve its bytes and source and exclude it from
+            # the native issuer view, rather than create another inventory DB.
+            from keri import Vrsn_1_0
+            from keri.core import Saider
+            from keri.vc.proving import credential
+            legacy = credential(schema=acdc.said, issuer=hab.pre,
+                                data={'kind': 'legacy'}, version=Vrsn_1_0)
+            wallet.reger.logCred(legacy, hab.kever.prefixer, Number(num=0), Diger(qb64=hab.pre))
+            wallet.reger.issus.add((hab.pre,), Saider(qb64=legacy.said))
+            record = Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, head.said, blinder=opening)
+            assert [item.credential for item in Registrar(wallet.rgy).issuedRecords(wallet.reger)] == [acdc.said]
+            assert wallet.reger.cloneCred(legacy.said)[0].raw == legacy.raw
             assert record.encoding == 'base64'
-            assert wallet.issuedCredential(acdc.said).raw == acdc.raw
+            assert Registrar(wallet.rgy).issuedCredential(wallet.reger, acdc.said).raw == acdc.raw
             raw, said, regid, head = acdc.raw, acdc.said, registry.regk, head.said
         finally:
             wallet.close()
             rgy.close()
     with encrypted(name, tmp_path, key) as issuer:
         rgy = regery(issuer, tmp_path)
-        wallet = Wallet(issuer, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = NativeOwners(issuer, rgy)
         try:
             assert rgy.store.head(regid).qb64 == head
-            assert wallet.issuedCredential(said).raw == raw
-            assert wallet.issuedCredential(said).kind == kind
-            assert wallet.recordIssued(wallet.issuedCredential(said), head) == record
+            assert Registrar(wallet.rgy).issuedCredential(wallet.reger, said).raw == raw
+            assert Registrar(wallet.rgy).issuedCredential(wallet.reger, said).kind == kind
+            assert wallet.reger.cloneCred(legacy.said)[0].raw == legacy.raw
+            assert Registrar(wallet.rgy).issuedRecord(wallet.reger, legacy.said) is None
+            assert Registrar(wallet.rgy).recordIssued(wallet.reger, Registrar(wallet.rgy).issuedCredential(wallet.reger, said), head) == record
         finally:
             wallet.close()
             rgy.close()
@@ -500,12 +483,12 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
     with encrypted('bound-wallet', tmp_path, key) as hby:
         issuer, issuee = hby.makeHab(name='issuer'), hby.makeHab(name='issuee')
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
+        wallet = NativeOwners(hby, rgy)
         try:
             registry = Registrar(rgy=rgy).makeRegistry(name='bound', prefix=issuer.pre)
             rip = rgy.store.event(registry.regk)
             anchored(issuer, registry, rip)
-            wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
+            wallet.custody = RegistryCustody(hby, rgy)
             wallet.custody.createCustody(registry.regk, issuer.pre)
             acdc = acdcmap(israid=issuer.pre, iseaid=issuee.pre, regid=registry.regk,
                            attribute=dict(d='', status='authorized'))
@@ -515,7 +498,7 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
             update = blindate(regid=registry.regk, prior=rip.said, blid=opening.said)
             registry.processEvent(update)
             anchored(issuer, registry, update)
-            record = wallet.recordIssued(acdc, update.said, blinder=opening)
+            record = Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, update.said, blinder=opening)
             assert record.bound == dict(bn=selected.sn, bd=selected.said)
             issuee.rotate()
             assert issuee.kever.serder.said != selected.said
@@ -524,14 +507,14 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
             rgy.close()
     with encrypted('bound-wallet', tmp_path, key) as hby:
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
+        wallet = NativeOwners(hby, rgy)
         try:
-            assert wallet.recordIssued(acdc, update.said) == record
-            wallet.custody = RegistryCustody(hby, rgy, db=wallet.db)
+            assert Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, update.said) == record
+            wallet.custody = RegistryCustody(hby, rgy)
             wrong = wallet.custody.derive(registry.regk, 1, acdc.said, 'issued',
                 **wallet.boundEvent(acdc, hby.habByName('issuee').kever.serder.said))
             with pytest.raises(ValidationError):
-                wallet.recordIssued(acdc, update.said, blinder=wrong)
+                Registrar(wallet.rgy).recordIssued(wallet.reger, acdc, update.said, blinder=wrong)
         finally:
             wallet.close()
             rgy.close()
@@ -543,7 +526,7 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
     """Use actual Peer parsing for schema-before/schema-after Grant arrival and retained revalidation without widening the partial view.
 
     Parameters:
-        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+        tmp_path: Pytest-owned persistent identity, registry, and section directories.
         arrival: Whether the independent schema arrives before or after the Grant.
         schemaUse: Whether the schema constrains the node itself or a disclosed edge.
 
@@ -562,10 +545,9 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
     with encrypted(name, tmp_path, key) as hby:
         issuer, holder = hby.makeHab(name='issuer'), hby.makeHab(name='holder')
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
         try:
             with openLMDB(**sectionOpts) as sections:
-                peer = Peer(hby, rgy, wallet, sections)
+                peer = Peer(hby, rgy, sections)
                 # This non-default schema exists only in the independent section.
                 section = messaging.sectschema({'$id': '', 'version': '1.0.0',
                     'title': 'independent own or edge constraint', 'type': 'object'})
@@ -619,42 +601,40 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
                         assert peer.exc.complete(gexn.said)
                         assert hby.db.emse.get((gexn.said, schema)) is None
                         with pytest.raises(MissingSchemaError):
-                            wallet.verification.evaluateGrant(gexn.said)
+                            peer.verification.evaluateGrant(gexn.said)
                 if arrival == 'after':
                     peer.ingest(wire(section))
                 if arrival != 'restart':
                     assert peer.exc.complete(gexn.said)
-                    assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
+                    assert peer.verification.verifyAccepted(gexn.said, '/ipex/grant')
             # Reopen the section owner and construct the peer again. The delayed
             # case also reopens the Habery below before receiving its dependency.
         finally:
-            wallet.close()
             rgy.close()
     with encrypted(name, tmp_path, key) as hby:
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
         try:
             with openLMDB(**sectionOpts) as sections:
-                peer = Peer(hby, rgy, wallet, sections)
+                peer = Peer(hby, rgy, sections)
                 if arrival == 'restart':
                     if schemaUse == 'own':
                         assert hby.db.emse.get((gexn.said, schema)) is not None
                     else:
                         assert peer.exc.complete(gexn.said)
                         with pytest.raises(MissingSchemaError):
-                            wallet.verification.evaluateGrant(gexn.said)
+                            peer.verification.evaluateGrant(gexn.said)
                     peer.ingest(wire(section))
                 assert peer.exc.complete(gexn.said)
-                assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
-                assert wallet.verification.evaluateGrant(gexn.said) is True
+                assert peer.verification.verifyAccepted(gexn.said, '/ipex/grant')
+                assert peer.verification.evaluateGrant(gexn.said) is True
                 aexn, aatc = admit(hby.habByName('holder'), 'retain this exact view', gexn)
                 peer.ingest(aexn.raw + aatc)
-                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
-                before = wallet.heldCredential(gexn.said)
+                peer.verification.validateAdmission(gexn.said, aexn.said, consent=True)
+                before = peer.verification.heldCredential(gexn.said)
                 # Cache a fuller attribute section. Retained evidence and any
                 # caller projecting that evidence still see only the original.
                 peer.ingest(wire(messaging.sectattr(full.sad['a'])))
-                after = wallet.heldCredential(gexn.said)
+                after = peer.verification.heldCredential(gexn.said)
                 assert after['proof'] == before['proof']
                 retained = after['credential'] if schemaUse == 'own' else next(
                     nest.serder for nest in loadParsedNestedSubstreams(hby, gexn.said)
@@ -662,7 +642,6 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
                 assert isinstance(retained.sad['a']['private'], str)
                 assert hby.db.schema.get(schema) is None
         finally:
-            wallet.close()
             rgy.close()
 
 
@@ -724,8 +703,7 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
         rgy = regery(hby, tmp_path)
         exc = Exchanger(hby=hby, handlers=[])
         verification = dispatching.loadHandlers(hby, exc, Notices(), rgy, graphPolicy=ScorePolicy())
-        wallet = Wallet(hby, rgy, exc=exc, verification=verification,
-                        db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = NativeOwners(hby, rgy, exc=exc, verification=verification)
         try:
             child = acdcmap(israid=issuer.pre, iseaid=holder.pre, attribute={'d': '', 'score': 90})
             origin = acdcmap(israid=issuer.pre, iseaid=holder.pre,
@@ -742,7 +720,7 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
                 receive(hby, aexn.raw + aatc, rgy=rgy, exc=exc)
                 assert exc.complete(aexn.said)
                 pairs.append((gexn.said, aexn.said))
-            wallet.recordAdmission(*pairs[0], consent=True)
+            wallet.verification.validateAdmission(*pairs[0], consent=True)
         finally:
             wallet.close()
             rgy.close()
@@ -750,21 +728,37 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
         rgy = regery(hby, tmp_path)
         exc = Exchanger(hby=hby, handlers=[])
         dispatching.loadHandlers(hby, exc, Notices(), rgy)
-        wallet = Wallet(hby, rgy, exc=exc, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = NativeOwners(hby, rgy, exc=exc)
         try:
-            # Consent history and exact retained evidence remain inspectable.
-            assert wallet.recordAdmission(*pairs[0], consent=True).grant == pairs[0][0]
-            assert wallet.heldCredential(pairs[0][0])['credential'].said == origin.said
+            # Both signed Admits remain history without a second application
+            # consent record. Fresh use still requires the current graph policy.
+            assert {record.admit for record in wallet.inventory()['held']} == {pair[1] for pair in pairs}
+            assert wallet.verification.heldCredential(pairs[0][0])['credential'].said == origin.said
             for policy in (None, ScorePolicy(permitted=False)):
                 wallet.verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=policy)
                 assert wallet.verification.verifyAccepted(pairs[1][0], '/ipex/grant')
                 assert wallet.verification.evaluateGrant(pairs[1][0]) is (None if policy is None else False)
                 with pytest.raises(ValidationError, match='semantic acceptance'):
-                    wallet.recordAdmission(*pairs[1], consent=True)
-                assert len(wallet.inventory()['held']) == 1
+                    wallet.verification.validateAdmission(*pairs[1], consent=True)
+                assert len(wallet.inventory()['held']) == 2
             wallet.verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=ScorePolicy())
-            assert wallet.recordAdmission(*pairs[1], consent=True).grant == pairs[1][0]
+            assert wallet.verification.validateAdmission(*pairs[1], consent=True).grant == pairs[1][0]
             assert len(wallet.inventory()['held']) == 2
         finally:
             wallet.close()
+            rgy.close()
+
+
+def test_native_inventory_borrows_existing_reger():
+    """Share the ordinary credential owner without opening or closing it twice."""
+    from keri.vdr import openReger
+
+    with openHby(name='borrowed-reger', temp=True, version=Vrsn_2_0) as hby, openReger() as reger:
+        rgy = Regery(hby=hby, temp=True)
+        try:
+            wallet = NativeOwners(hby, rgy, reger=reger)
+            assert wallet.reger is reger
+            wallet.close()
+            assert reger.opened
+        finally:
             rgy.close()

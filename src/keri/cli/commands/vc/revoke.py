@@ -56,6 +56,7 @@ def revokeCredential(args):
 
 class RevokeDoer(doing.DoDoer):
 
+    """Run ordinary legacy credential revocation and optional peer notification."""
     def __init__(self, name, alias, said, base, bran, registryName, send, timestamp, **kwa):
         """Open and schedule ordinary legacy revocation for an existing issuer.
 

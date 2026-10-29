@@ -56,6 +56,7 @@ def add_loc(args):
 
 class LocationDoer(doing.DoDoer):
 
+    """Publish an endpoint location through an existing authenticated habitat."""
     def __init__(self, name, base, alias, bran, url, eid, timestamp=None, version=None):
         self.url = url
         self.eid = eid
@@ -118,7 +119,7 @@ class LocationDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
         while not self.hab.loadLocScheme(scheme=up.scheme, eid=eid, gvrsn=self.version):
             yield self.tock

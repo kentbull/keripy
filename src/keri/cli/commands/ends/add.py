@@ -54,6 +54,7 @@ def add_end(args):
 
 class RoleDoer(doing.DoDoer):
 
+    """Publish an explicit endpoint-role reply using the selected protocol version."""
     def __init__(self, name, base, alias, bran, role, eid, timestamp=None, version=None):
         self.role = role
         self.eid = eid
@@ -125,7 +126,7 @@ class RoleDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
         while not self.hab.loadEndRole(cid=self.hab.pre, role=self.role, eid=self.eid, gvrsn=self.version):
             yield self.tock

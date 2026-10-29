@@ -106,6 +106,7 @@ def test_preexisting_accepted_upd_reopens_as_read_only_history(tmp_path, marker)
             assert evidence.store.headEvent(rip.said).raw == upd.raw
         finally:
             evidence.close()
+            reopened.close()
 
 
 def test_supported_prefix_marker_bootstraps_and_survives_reopen(tmp_path):

@@ -44,6 +44,7 @@ def import_schema(args):
 
 class ImportDoer(doing.DoDoer):
 
+    """Import schema bytes under the existing Keeper authentication policy."""
     def __init__(self, name, base, bran, schema, noPrompt=False):
         """Open existing schema inventory without changing Keeper encryption.
 

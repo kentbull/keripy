@@ -6,6 +6,8 @@ keri.kli.commands.multisig module
 """
 import argparse
 import json
+import math
+import time
 from ordered_set import OrderedSet as oset
 
 from hio.base import doing
@@ -14,32 +16,42 @@ from prettytable import PrettyTable
 
 from ...common import Parsery, setupHby, printIdentifier, parseVersion
 
-from ....kering import (TraitCodex, ConfigurationError,
-                        Kinds, MissingAnchorError, Version, Vrsn_1_0)
-from ....app import (HaberyDoer, MailboxDirector, WitnessInquisitor,
+from ....kering import (TraitCodex, ConfigurationError, KeriError, Roles,
+                        Kinds, Ilks, MissingAnchorError, MissingRegistryError, MissingEntryError, ValidationError,
+                        Version, Vrsn_1_0, Vrsn_2_0)
+from ....app import (GroupHab, HaberyDoer, MailboxDirector, WitnessInquisitor,
                      Notifier, Multiplexor, Counselor, Organizer, Poster,
                      multisigInceptExn, multisigInteractExn, multisigRotateExn,
                      multisigRpyExn, multisigRegistryInceptExn, multisigIssueExn,
                      multisigRevokeExn)
-from ....app.grouping import loadHandlers
+from ....app.grouping import loadHandlers, replyProposal, endorseReply
+from ....app.acdc_v2_grouping import RegistryApproval
+from ....app.forwarding import StreamPoster
+from ....app.evidencing import ServiceConfig
+from ....acdc import Regery as NativeRegery
+from ....acdc.regeventing import Rever
 
 from ....core import (Prefixer, Number, Diger, Tholder,
-                      Schemer, Parser, Revery, SerderKERI,
+                      Schemer, Kramer, Pruner, Parser, Revery, SerderKERI,
                       SerderACDC, TraitDex, messagize)
 
-from ....peer import Exchanger, cloneMessage
+from ....peer import Exchanger, cloneMessage, serializeMessage
 from ....vdr import Verifier, Regery, Credentialer, Registrar
 
 
 logger = ogler.getLogger()
 
-parser = argparse.ArgumentParser(description='Join group multisig inception, rotation or interaction event.',
+parser = argparse.ArgumentParser(description='Approve pending group multisig events, including native registry proposals.',
                                  parents=[Parsery.keystore()])
 parser.set_defaults(handler=lambda args: join(args))
 parser.add_argument('--group', '-g', help='human-readable name for the multisig group identifier prefix', required=False, default=None)
-parser.add_argument("--auto", "-Y", help="auto approve any delegation request non-interactively", action="store_true")
+parser.add_argument("--auto", "-Y", help="approve pending multisig events non-interactively", action="store_true")
+parser.add_argument('--timeout', type=float, default=30.0,
+                    help='seconds to await native registry acceptance and member delivery')
 parser.add_argument('--version', default=None, required=False, type=parseVersion,
                     help='KERI protocol version for mailbox queries while joining, such as 1.0 or 2.0')
+parser.add_argument('--registry-salt', action='store_true',
+                    help='enable optional encrypted registry-salt reply approval')
 
 def join(args):
     """ Wait for and provide interactive confirmation of group multisig inception, rotation or interaction events
@@ -55,7 +67,8 @@ def join(args):
     group = args.group
     version = args.version
 
-    joinDoer = JoinDoer(name=name, base=base, bran=bran, group=group, auto=auto, version=version)
+    joinDoer = JoinDoer(name=name, base=base, bran=bran, group=group, auto=auto,
+                        version=version, timeout=args.timeout, registrySalt=args.registry_salt)
 
     doers = [joinDoer]
     return doers
@@ -66,7 +79,8 @@ class JoinDoer(doing.DoDoer):
 
     """
 
-    def __init__(self, name, base, bran, group, auto=False, version=None):
+    def __init__(self, name, base, bran, group, auto=False, version=None, timeout=30.0,
+                 registrySalt=False):
         """ Create doer for polling for group multisig events and either approve automatically or prompt user
 
         Parameters:
@@ -76,7 +90,20 @@ class JoinDoer(doing.DoDoer):
             group (str): human-readable name for the multisig identifier prefix
             auto (bool): non-interactively auto approve any inception, rotation, interaction, or other event
                          while using the default group of "default-group"
+            version (Versionage | None): Protocol version for existing join processors.
+            timeout (float): Positive native registry acceptance and delivery deadline.
+            registrySalt (bool): Explicitly compose optional salt reply policy and
+                durable delivery using existing processors and trusted saved rosters.
         """
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ConfigurationError('--timeout must be positive')
+        if registrySalt and (version or Version) != Vrsn_2_0:
+            raise ConfigurationError('--registry-salt requires native v2 processing')
+        if registrySalt and not group:
+            raise ConfigurationError('--registry-salt requires an explicit --group')
+        self.registrySalt = registrySalt
+        self.saltService = None
+        self.timeout = timeout
         self.group = group
         self.version = version
         self.hby = setupHby(name=name, base=base, bran=bran, version=self.version)
@@ -93,12 +120,29 @@ class JoinDoer(doing.DoDoer):
         if self.version is not None:
             parser_kwa["version"] = self.version
 
-        self.psr = Parser(kvy=self.hby.kvy, tvy=self.rgy.tvy,
-                          rvy=self.rvy, vry=self.verifier, exc=self.exc,
-                          **parser_kwa)
-
-        mux = Multiplexor(hby=self.hby, notifier=self.notifier)
+        # Native TEL intake shares the existing local and mailbox parsers. It
+        # does not introduce another coordinator or autonomous mailbox lifecycle.
+        self.rgyV2 = (NativeRegery(hby=self.hby, name=name, base=base)
+                      if (self.version or Version) == Vrsn_2_0 else None)
+        self.reverV2 = (Rever(db=self.hby.db, reger=self.rgyV2.baser)
+                        if self.rgyV2 is not None else None)
+        mux_kwa = dict(exc=self.exc, rgy=self.reverV2) if self.reverV2 is not None else {}
+        mux = Multiplexor(hby=self.hby, notifier=self.notifier, **mux_kwa)
         self.mux = mux
+        self.pruner = None
+        kvy = self.hby.kvy
+        if self.reverV2 is not None:
+            # Preserve the native coordinator's mandatory KRAM policy at each
+            # intake boundary, with one cache owner and one pruning lifecycle.
+            kvy = mux.kvy
+            kvy.kramer = Kramer(db=self.hby.db, cf=ServiceConfig(), cues=kvy.cues)
+            self.hby.kvy.kramer = kvy.kramer
+            self.rvy = mux.rvy
+            self.pruner = Pruner(kvy.kramer, tock=1.0)
+        self.psr = Parser(kvy=kvy, tvy=self.rgy.tvy,
+                          rvy=self.rvy, vry=self.verifier, exc=self.exc,
+                          rgy=self.reverV2, **parser_kwa)
+
         loadHandlers(exc=self.exc, mux=mux)
         self.counselor = Counselor(hby=self.hby, version=self.version, kind=Kinds.json)
 
@@ -107,16 +151,27 @@ class JoinDoer(doing.DoDoer):
                                          verifier=self.verifier)
 
         kwa = dict(version=self.version, gvrsn=self.version, kind=Kinds.json) if self.version is not None else {}
+        if self.reverV2 is not None:
+            kwa.update(kvy=self.mux.kvy, rvy=self.rvy)
         self.mbx = MailboxDirector(hby=self.hby, exc=self.exc, topics=['/receipt', '/multisig', '/replay',
                                                                        '/delegate'],
                                    **kwa)
+        self.mbx.parser.rgy = self.reverV2
         self.postman = Poster(hby=self.hby, version=self.version, kind=Kinds.json)
 
         doers = [self.hbyDoer, self.witq,  self.mbx, self.counselor, self.registrar, self.credentialer, self.postman]
         self.toRemove = list(doers)
         doers.extend([doing.doify(self.joinDo)])
+        if self.reverV2 is not None:
+            escrow = doing.doify(self.registryEscrowDo)
+            doers.append(escrow)
+            self.toRemove.append(escrow)
+            doers.append(self.pruner)
+            self.toRemove.append(self.pruner)
         self.auto = auto
         super(JoinDoer, self).__init__(doers=doers)
+        if self.registrySalt:
+            self.enableRegistrySalt()
 
     def joinDo(self, tymth, tock=0.0, **kwa):
         """
@@ -151,6 +206,8 @@ class JoinDoer(doing.DoDoer):
                     done = yield from self.rotate(attrs)
                 case '/multisig/rpy':
                     done = yield from self.rpy(attrs)
+                case '/multisig/rip' | '/multisig/bup':
+                    done = yield from self.registry(attrs)
                 case '/multisig/vcp':
                     done = yield from self.vcp(attrs)
                 case '/multisig/iss':
@@ -163,7 +220,7 @@ class JoinDoer(doing.DoDoer):
             if done:
                 self.notifier.noter.notes.rem(keys=keys)
 
-            else:
+            elif done is not None or route not in ('/multisig/rip', '/multisig/bup', '/multisig/rpy'):
                 delete = input(f"\nDelete event [Y|n]? ")
                 if delete in ("Y", "y"):
                     self.notifier.noter.notes.rem(keys=keys)
@@ -171,6 +228,126 @@ class JoinDoer(doing.DoDoer):
             yield self.tock
 
         self.remove(self.toRemove)
+
+    def exit(self, deeds=None):
+        """Close native storage on owner exit, after cancelling owned children.
+
+        Removing individual doers also calls exit with an explicit deeds queue;
+        that narrower cancellation must leave the shared TEL store open.
+        """
+        try:
+            super().exit(deeds=deeds)
+        finally:
+            if deeds is None and self.rgyV2 is not None and self.rgyV2.store.opened:
+                self.rgyV2.close()
+
+    def enableRegistrySalt(self):
+        """Compose optional salt work once the selected group is actually accepted.
+
+        Existing join still owns KEL admission and one parser/mailbox lifecycle.
+        Current local GroupHab membership supplies recipient selection. No
+        incoming request implies group approval or generates a private root.
+        """
+        hab = self.hby.habByName(self.group)
+        if not isinstance(hab, GroupHab) or not hab.accepted:
+            return  # initial group join is still responsible for admission
+        if self.saltService is None:
+            from ....app.registry_custody import RegistryCustody
+            from ....app.registry_salt_service import RegistrySaltService, ROUTES
+            from ....app.essring import EssrReplyHandler
+
+            custody = RegistryCustody(self.hby, self.rgyV2)
+            self.saltService = RegistrySaltService(self.hby, self.rgyV2, custody, self.rvy)
+            self.saltService.register()
+            self.exc.addHandler(EssrReplyHandler(self.hby, hab.mhab, self.psr, ROUTES))
+
+    def registryEscrowDo(self, tymth, tock=0.03125, **kwa):
+        """Retry native TEL dependencies only while the join command is running."""
+        yield tock
+        while True:
+            self.reverV2.processEscrows()
+            if getattr(self, 'registrySalt', False):
+                self.enableRegistrySalt()
+                if self.saltService is not None:
+                    self.rvy.processEscrowReply()
+            yield tock
+
+    def registry(self, attrs):
+        """Approve a retained native rip or bup without authoring a credential.
+
+        Args:
+            attrs (dict): Notification route and authenticated proposal SAID.
+
+        Returns:
+            bool | None: True after the exact TEL event is accepted, False after
+                a human decline, or None while accepted inception evidence is
+                missing. Pending notifications remain available on the next run.
+        """
+        if self.rgyV2 is None:
+            raise ConfigurationError('native registry approval requires --version 2.0')
+        wrapper = self.hby.db.exns.get((attrs['d'],))
+        if wrapper is None or wrapper.route != attrs['r']:
+            raise ValidationError('native registry notification has no matching retained proposal')
+        ghab = self.hby.habs.get(wrapper.sad['a']['gid'])
+        approval = RegistryApproval(self.hby, self.rgyV2, ghab, self.exc,
+                                    self.mux, self.psr, self.counselor)
+        try:
+            event, anchor, opening = approval.proposal(serializeMessage(self.hby, wrapper.said))
+        except MissingRegistryError:
+            print('Registry proposal pending: accepted inception evidence is unavailable.')
+            return None
+
+        regid = event.said if event.ilk == Ilks.rip else event.sad['rd']
+        copies = wrapper.sad['a'].get('salts')
+        custody = None
+        if copies and ghab.mhab.pre in copies:
+            from ....app.registry_custody import RegistryCustody
+            custody = RegistryCustody(self.hby, self.rgyV2)
+            # Validate local decryption before human approval and KEL signing.
+            custody.openRoot(copies[ghab.mhab.pre], ghab.mhab.kever.verfers[0])
+        print(f'\nGroup registry {event.ilk} proposed for {ghab.name} ({ghab.pre}):')
+        print(f'    Registry: {regid}')
+        print(f"    TEL event: {event.said} at ordinal {event.sad['n']}")
+        print(f'    Exact group anchor: {anchor.said}')
+        if not self.auto and input('\nApprove exact TEL anchor [Y|n]? ') not in ('', 'y', 'Y'):
+            return False
+
+        # Borrow the existing group processors. Root custody and event openings
+        # are not prerequisites for signing the exact proposed commitment.
+        proposed, attachments = approval.approve(event, anchor, opening=opening,
+                                                   salts=wrapper.sad['a'].get('salts'))
+        deliveries = []
+        deadline = time.monotonic() + self.timeout
+        try:
+            for member in self.hby.db.signingMembers(pre=ghab.pre):
+                if member == ghab.mhab.pre:
+                    continue
+                poster = StreamPoster(hby=self.hby, hab=ghab.mhab, recp=member,
+                                      topic='multisig', version=Vrsn_2_0)
+                poster.send(proposed, attachment=attachments, gvrsn=Vrsn_2_0)
+                children = poster.deliver()
+                deliveries.extend(children)
+                self.extend(children)
+            while True:
+                approval.process()
+                accepted = self.rgyV2.store.seqEvent(regid, Number(numh=event.sad['n']).num)
+                complete = accepted is not None and accepted.said == event.said
+                delivered = all(child.done for child in deliveries)
+                if complete and delivered:
+                    break
+                if time.monotonic() >= deadline:
+                    if not complete:
+                        print('Registry proposal pending: the exact TEL event is not accepted.')
+                        return None
+                    print('Some member deliveries did not complete before timeout.')
+                    break
+                yield self.tock
+        finally:
+            self.remove(deliveries)
+        if custody is not None:
+            custody.retainMemberCopy(regid, ghab, copies)
+        print(f'Registry event {event.said} accepted.')
+        return True
 
     def incept(self, attrs):
         """ Join a group multisig inception event
@@ -267,7 +444,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, gvrsn=Vrsn_1_0)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -285,6 +462,12 @@ class JoinDoer(doing.DoDoer):
             return True
 
     def interact(self, attrs):
+        """Review and approve the retained group interaction identified by attrs.d.
+
+        Use the exact proposed KEL event and existing group membership. Preserve its
+        protocol version while routing approval through the ordinary group machinery;
+        missing group membership returns False before signing.
+        """
         said = attrs["d"]
         exn, pathed = cloneMessage(self.hby, said=said)
         payload = exn.ked['a']
@@ -346,7 +529,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, gvrsn=Vrsn_1_0)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -487,7 +670,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, gvrsn=Vrsn_1_0)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -576,6 +759,9 @@ class JoinDoer(doing.DoDoer):
             bool: True when the reply is approved and processed, otherwise False
             """
         said = attrs["d"]
+        retained = self.hby.db.exns.get(keys=said)
+        if retained is not None and retained.pvrsn == Vrsn_2_0:
+            return (yield from self.rpyV2(attrs))
         exn, pathed = cloneMessage(self.hby, said=said)
 
         sender = exn.ked['i']
@@ -623,7 +809,8 @@ class JoinDoer(doing.DoDoer):
             self.psr.parseOne(ims=bytes(anc))
 
             # Now sign the event and parse it with our signatures
-            anc = hab.endorse(rserder, framed=False)
+            anc = hab.endorse(rserder, framed=False,
+                              gvrsn=rserder.gvrsn or rserder.pvrsn)
             self.psr.parseOne(ims=bytes(anc))
 
             smids = hab.db.signingMembers(pre=hab.pre)
@@ -637,7 +824,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
             while not hab.loadEndRole(cid=cid, role=role, eid=eid):
                 self.rgy.processEscrows()
@@ -648,6 +835,161 @@ class JoinDoer(doing.DoDoer):
             return True
 
         return False
+
+    def rpyV2(self, attrs):
+        """Approve an exact retained v2 endpoint reply through existing group owners.
+
+        Parameters: attrs identifies the retained /multisig/rpy notification.
+        Returns: True after exact endpoint acceptance and finite fanout, False
+            after decline, or None for unsupported policy or pending acceptance.
+        Raises: ValidationError for invalid wrapper, group or endpoint semantics.
+            Unsupported domain routes receive no prompt or local signature.
+        """
+        wrapper = self.hby.db.exns.get(keys=attrs['d'])
+        if wrapper is None or wrapper.route != attrs['r']:
+            raise ValidationError('reply notification has no matching retained proposal')
+        hab = self.hby.habs.get(wrapper.sad['a'].get('gid'))
+        if not isinstance(hab, GroupHab):
+            raise ValidationError('reply proposal requires a local group')
+        if getattr(self, 'saltService', None) is not None:
+            from ....app.registry_salt_service import ROUTES
+            from ....peer.exchanging import loadParsedNestedSubstreams
+
+            children = loadParsedNestedSubstreams(self.hby, wrapper.said)
+            if len(children) == 1 and children[0].serder.route in ROUTES:
+                return (yield from self.rpySalt(wrapper.said))
+
+        def validateEndpoint(serder):
+            """Validate the installed endpoint policy before prompt and before signing."""
+            if serder.route != '/end/role/add':
+                raise ConfigurationError('reply domain policy is not installed')
+            data = serder.sad['a']
+            if not isinstance(data, dict) or not {'cid', 'role', 'eid'} <= set(data):
+                raise ValidationError('endpoint reply is missing controller, role or endpoint')
+            try:
+                if (Prefixer(qb64=data['cid']).qb64 != data['cid']
+                        or Prefixer(qb64=data['eid']).qb64 != data['eid']
+                        or data['cid'] != hab.pre or data['role'] not in Roles):
+                    raise ValueError
+            except (KeriError, ValueError, TypeError):
+                raise ValidationError('endpoint reply has invalid controller, role or endpoint') from None
+
+        try:
+            child = replyProposal(self.hby, self.exc, self.mux, wrapper.said,
+                ghab=hab, validate=validateEndpoint)
+        except ConfigurationError:
+            print('Reply proposal pending: its domain approval policy is unavailable.')
+            return None
+        data = child.serder.sad['a']
+        cid, role, eid = data['cid'], data['role'], data['eid']
+        contact = self.org.get(wrapper.pre) or {}
+        endpoint = self.org.get(eid) or {}
+        print(f"\nEndpoint Role Authorization (from {contact.get('alias', wrapper.pre)}):")
+        print(f'    Controller: {hab.name} ({cid})')
+        print(f'    Role: {role.capitalize()}')
+        print(f"    Endpoint Provider: {endpoint.get('alias', 'Unknown Endpoint')} ({eid})")
+        establishment = hab.kever.lastEst.d
+        if not self.auto and input('\nApprove exact endpoint reply [Y|n]? ') not in ('', 'y', 'Y'):
+            return False
+
+        # Approval applies to the signing establishment presented for review.
+        if hab.kever.lastEst.d != establishment:
+            raise ValidationError('group establishment changed during reply approval')
+
+        signed, proposal, attachments = endorseReply(self.hby, hab, child,
+            validate=validateEndpoint)
+        self.psr.parse(ims=bytearray(signed), local=True)
+        self.psr.parse(ims=bytearray(proposal.raw + attachments), local=True)
+        deliveries = []
+        deadline = time.monotonic() + self.timeout
+        try:
+            for member in hab.smids:
+                if member == hab.mhab.pre:
+                    continue
+                poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member,
+                                      topic='multisig', version=Vrsn_2_0)
+                poster.send(proposal, attachment=attachments, gvrsn=Vrsn_2_0)
+                children = poster.deliver()
+                deliveries.extend(children)
+                self.extend(children)
+            while True:
+                self.rvy.processEscrowReply()
+                accepted = self.hby.db.eans.get(keys=(cid, role, eid))
+                complete = (accepted is not None and accepted.qb64 == child.serder.said
+                            and hab.loadEndRole(cid=cid, role=role, eid=eid))
+                if complete and all(delivery.done for delivery in deliveries):
+                    break
+                if time.monotonic() >= deadline:
+                    if not complete:
+                        print('Reply proposal pending: the exact endpoint reply is not accepted.')
+                        return None
+                    print('Some member deliveries did not complete before timeout.')
+                    break
+                yield self.tock
+        finally:
+            self.remove(deliveries)
+        print(f'End role authorization added for role {role}')
+        return True
+
+    def rpySalt(self, said):
+        """Approve one encrypted salt reply through the existing group reply flow.
+
+        said identifies a retained multisig/rpy proposal. The member signs the
+        exact displayed reply and shares its contribution with current members.
+        Completion here means local approval and member submission, not recipient
+        custody or completed group signature collection.
+        """
+        hab = self.hby.habByName(self.group)
+        child = replyProposal(self.hby, self.exc, self.mux, said,
+                              ghab=hab, validate=self.saltService.validate)
+        body = child.serder
+        print(f'\nRegistry salt reply: {body.said}\n    Group: {body.pre}')
+        for key in ('registry', 'recipient', 'target'):
+            print(f'    {key}: {body.sad["a"][key]}')
+        establishment = hab.kever.lastEst.d
+        if not self.auto and input('\nApprove this exact encrypted salt reply [Y|n]? ') not in ('', 'y', 'Y'):
+            return False
+        if hab.kever.lastEst.d != establishment:
+            raise ValidationError('group establishment changed during reply approval')
+        signed, proposal, attachments = endorseReply(self.hby, hab, child,
+                                                      validate=self.saltService.validate)
+        self.psr.parse(ims=bytearray(signed), local=True)
+        self.psr.parse(ims=bytearray(proposal.raw + attachments), local=True)
+        children = []
+        proposer = self.hby.db.exns.get((said,)).pre
+        returning = []
+        deadline = time.monotonic() + self.timeout
+        try:
+            for member in hab.smids:
+                if member == hab.mhab.pre:
+                    continue
+                if not ({Roles.controller, Roles.agent, Roles.mailbox, Roles.witness}
+                        & set(hab.mhab.endsFor(member))):
+                    if member == proposer:
+                        raise ConfigurationError('registry salt proposer has no delivery route')
+                    continue
+                poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member,
+                                      topic='multisig', version=Vrsn_2_0)
+                poster.send(proposal, attachment=attachments, gvrsn=Vrsn_2_0)
+                pending = poster.deliver() or []
+                if member == proposer:
+                    returning.extend(pending)
+                children.extend(pending)
+                self.extend(pending)
+            if not returning:
+                raise ConfigurationError('registry salt proposer has no delivery route')
+            # Return the cosignature to the proposer before closing finite I/O.
+            # An unavailable optional member is not an additional quorum requirement.
+            while not all(child.done for child in returning):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('registry salt member submission timed out')
+                yield self.tock
+            if any(getattr(child, 'error', None) is not None for child in returning):
+                raise ConfigurationError('registry salt member submission failed')
+        finally:
+            self.remove(children)
+        print(f'Approved registry salt reply: {body.said}; recipient acceptance is separate.')
+        return True
 
     def vcp(self, attrs):
         """  Handle issue messages
@@ -722,7 +1064,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
             while not self.registrar.complete(vserder.pre, sn=0):
                 self.rgy.processEscrows()
@@ -833,7 +1175,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
             while not self.credentialer.complete(said=creder.said):
                 self.rgy.processEscrows()
@@ -938,7 +1280,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc, gvrsn=Vrsn_1_0)
 
             while not self.registrar.complete(creder.said, sn=1):
                 self.rgy.processEscrows()

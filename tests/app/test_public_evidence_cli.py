@@ -1,4 +1,5 @@
 """Operator commands expose public evidence without lifecycle fixture writes."""
+from keri.acdc.registraring import Registrar
 from contextlib import contextmanager
 import json
 import os
@@ -11,7 +12,6 @@ from types import SimpleNamespace
 import pytest
 
 from keri.acdc import messaging
-from keri.app.credentialing import DerivedUpdate
 from keri.cli.common import acdc_v2
 from keri.core import Blinder, BlindState, BoundState
 
@@ -52,11 +52,13 @@ def _owned_wallet(name):
     """Reopen all five real owners under the parent/child test store root."""
     args = SimpleNamespace(name=name, base='public-evidence-cli',
                            bran='0123456789abcdefghijk')
-    with acdc_v2.opened(args, custody=True) as owners:
-        hby, rgy, wallet = owners
+    with acdc_v2.openedCredentials(args, derive=True) as (hby, rgy, reger, custody):
+        from tests.app.native_owners import NativeOwners
+        wallet = NativeOwners(hby, rgy, reger=reger, custody=custody)
+        owners = hby, rgy, wallet
         root = Path(os.environ['KERIPY_TEST_STORE_ROOT'])
         assert all(Path(owner.path).is_relative_to(root) for owner in
-                   (hby.ks, hby.db, hby.cf, rgy.baser, wallet.db))
+                   (hby.ks, hby.db, hby.cf, rgy.baser, wallet.reger))
         yield owners
 
 
@@ -138,7 +140,7 @@ def _public_blind_cli_case(tmp_path, *, bound=False):
 
 @pytest.mark.parametrize('bound', [False, True])
 def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
-    """Retain exact new/staged derivations across reopen and a public successor."""
+    """Retain exact CESR proofs across reopen and a public successor."""
     case = _public_blind_cli_case(tmp_path, bound=bound)
     bob, registry, initial, granted = case.bob, case.registry, case.initial, case.granted
     opening_args, held_opening = case.opening_args, case.held_opening
@@ -154,25 +156,24 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
     # Each CLI invocation and each context closes Keeper/Baser/Configer/registry/wallet.
     with _owned_wallet(case.alice) as (hby, rgy, wallet):
         reg = rgy.registryByName('r')
-        acdc = wallet.issuedCredential(case.issued['credential'])
+        acdc = Registrar(wallet.rgy).issuedCredential(wallet.reger, case.issued['credential'])
         parameters = wallet.boundEvent(acdc, case.bound_args[1]) if bound else {}
         head = reg.store.headEvent(case.registry)
-        coordinates = dict(bn=case.proof.bsn, bd=case.proof.bd) if bound else {}
-        assert wallet.db.derivations.get((head.said,)) == DerivedUpdate(acdc.said, 'issued', coordinates)
-        assert wallet.publicOpening(head) is None
-        # Ordinary unanchored staging models interruption before coordinates were retained.
+        assert wallet.reger.privateOpening(head).qb64 == case.proof.qb64
+        assert wallet.rgy.store.verifiedOpening(head) is None
+        # Ordinary unanchored staging models interruption before its opening was retained.
         proof = wallet.custody.derive(case.registry, 3, acdc.said, 'issued', **parameters)
         staged = messaging.blindate(case.registry, head.said, proof.said, sn=3)
         reg.processEvent(staged)
-        assert wallet.db.derivations.get((staged.said,)) is None
+        assert wallet.reger.privateOpening(staged) is None
     resumed = invoke(case.alice, 'vc', 'registry', 'advance', '-a', 'self', '-r', 'r',
                      '-s', acdc.said, *case.bound_args)[0]
     assert resumed['accepted'] and resumed['update'] == staged.said and resumed['sn'] == 3
     with _owned_wallet(case.alice) as (_, rgy, wallet):
         reg = rgy.registryByName('r')
         assert reg.store.headEvent(case.registry).raw == staged.raw
-        assert wallet.db.derivations.get((staged.said,)) == DerivedUpdate(acdc.said, 'issued', coordinates)
-        assert wallet.publicOpening(staged) is None
+        assert wallet.reger.privateOpening(staged).qb64 == proof.qb64
+        assert wallet.rgy.store.verifiedOpening(staged) is None
     public = invoke(case.alice, 'vc', 'create', '--acdc-v2', '--public', '-a', 'self',
                     '-r', 'r', '--data', '{"status":"public successor"}')[0]
     with _owned_wallet(case.alice) as (_, rgy, wallet):
@@ -181,7 +182,7 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         assert head.sn == 4 and head.said == public['update']
         assert reg.store.seqEvent(case.registry, 2).said == case.next_event['update']
         assert reg.store.seqEvent(case.registry, 3).raw == staged.raw
-        assert wallet.publicOpening(head).acdc == public['credential']
+        assert wallet.rgy.store.verifiedOpening(head).acdc == public['credential']
 
     if not bound:
         # A rival pending state remains intact; Advance must not retain its coordinates.
@@ -202,26 +203,21 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         with _owned_wallet(case.alice) as (hby, rgy, wallet):
             assert rgy.store.headEvent(conflict_reg).said == head.said
             assert rgy.store.event(pending.said).raw == pending.raw
-            assert wallet.db.derivations.get((pending.said,)) is None
+            assert wallet.reger.privateOpening(pending) is None
             assert hby.habByName('self').kever.serder.said == kel_head
 
 
-@pytest.mark.skipif(os.name != 'posix', reason='protected plaintext custody handoff requires POSIX')
-def test_holder_opening_after_protected_custody_handoff(tmp_path):
-    """Only the designated recipient can import protected custody and derive the same opening."""
+def test_holder_opening_after_encrypted_salt_reply(tmp_path):
+    """An issuer-signed encrypted reply enables the holder's later opening command."""
     case = _public_blind_cli_case(tmp_path)
-    alice, bob, aid, bob_aid = case.alice, case.bob, case.aid, case.bob_aid
-    registry, latest, current = case.registry, case.latest, case.current
-    opening_args, held_opening = case.opening_args, case.held_opening
-    private = tmp_path / 'custody.json'
-    invoke(alice, 'vc', 'export', '--acdc-v2', '-a', 'self', '-r', 'r', '--custody', '--output', str(private))
-    invoke(bob, 'vc', 'import', '--acdc-v2', '--custody', '--registry', registry,
-        '--controller', aid, '--discloser', aid, '--file', str(private),
-        '--passcode', '0123456789abcdefghijk', okay=False)
-    invoke(bob, 'vc', 'import', '--acdc-v2', '--custody', '--registry', registry,
-        '--controller', aid, '--discloser', bob_aid, '--file', str(private))
-    derived = invoke(bob, *opening_args)[0]
-    assert derived['opening'] == latest['opening'] and held_opening.read_bytes() == current.read_bytes()
+    encrypted = tmp_path / 'salt-reply.cesr'
+    invoke(case.alice, 'vc', 'registry', 'salt', 'send', '-a', 'self',
+           '--registry', case.registry, '--party', case.bob_aid, '--output', str(encrypted))
+    invoke(case.bob, 'vc', 'registry', 'salt', 'receive', '-a', 'self', '--input', str(encrypted))
+    derived = invoke(case.bob, *case.opening_args)[0]
+    assert derived['opening'] == case.latest['opening']
+    assert case.held_opening.read_bytes() == case.current.read_bytes()
+
 
 
 def test_unencrypted_kel_operations_ignore_environment_passcode(tmp_path):

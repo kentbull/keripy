@@ -1,4 +1,5 @@
 """Real independent group members, ACDC v2 registry TELs and IPEX approval thresholds."""
+from keri.acdc.registraring import Registrar
 from contextlib import ExitStack, contextmanager
 
 import pytest
@@ -8,8 +9,8 @@ from keri.acdc import Regery, acdcmap, grant, loadHandlers
 from keri.acdc.messaging import blindate, regcept
 from keri.app import openHby
 from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
-from keri.core import Blinder, Diger, Number, Parser, messagize
-from keri.kering import ValidationError, MissingSchemaError
+from keri.core import Blinder, Diger, Number, Parser, messagize, eventing
+from keri.kering import Kinds, ValidationError, MissingSchemaError
 from keri.peer import Exchanger
 
 
@@ -96,6 +97,8 @@ def test_registry_quorum_and_explicit_member_approval(members):
     hbys, groups, rgys, owners = members
     rip = regcept(groups[0].pre)
     first, atc = owners[0].approveRegistry(rip)
+    assert first.route == '/multisig/rip'
+    assert '/multisig/registry' not in owners[0].exc.routes
     assert rgys[0].store.headEvent(rip.said) is None
     proposal = first.raw + atc
     event, anchor, opening = owners[1].registryProposal(proposal)
@@ -118,6 +121,7 @@ def test_registry_quorum_and_explicit_member_approval(members):
     opening = Blinder.blind(sn=1, acdc=credential.said, state='issued')
     issued = blindate(rip.said, rip.said, opening.said)
     first, atc = owners[0].approveRegistry(issued, opening=opening)
+    assert first.route == '/multisig/bup'
     event, anchor, disclosed = owners[1].registryProposal(first.raw + atc)
     assert disclosed.qb64 == opening.qb64
     assert rgys[1].store.headEvent(rip.said).said == rip.said
@@ -128,6 +132,30 @@ def test_registry_quorum_and_explicit_member_approval(members):
     # Exact old proposal replay cannot lower the accepted ACDC v2 registry TEL head.
     owners[0].receive(proposal)
     assert rgys[0].store.headEvent(rip.said).said == issued.said
+
+
+def test_blinded_registry_approval_needs_no_opening(members):
+    """Approve an exact bup commitment without disclosing or deriving its opening."""
+    _, groups, rgys, owners = members
+    rip = regcept(groups[0].pre)
+    first, atc = owners[0].approveRegistry(rip)
+    event, anchor, _ = owners[1].registryProposal(first.raw + atc)
+    second, atc = owners[1].approveRegistry(event, anchor)
+    owners[0].receive(second.raw + atc)
+
+    opening = Blinder.blind(sn=1, acdc=Diger(ser=b'private credential').qb64, state='issued')
+    bup = blindate(rip.said, rip.said, opening.said)
+    first, atc = owners[0].approveRegistry(bup)
+    proposal = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(first.raw + atc), processive=False)[0]
+    assert first.route == '/multisig/bup'
+    assert not proposal.nests[0].bsqs and not proposal.nests[0].bsss
+    assert opening.qb64b not in first.raw + atc
+    event, anchor, disclosed = owners[1].registryProposal(first.raw + atc)
+    assert disclosed is None
+    second, atc = owners[1].approveRegistry(event, anchor)
+    owners[0].receive(second.raw + atc)
+    assert all(rgy.store.headEvent(rip.said).said == bup.said for rgy in rgys[:2])
 
 
 def test_group_ipex_uses_real_threshold_and_shared_semantic_handler(members):
@@ -179,6 +207,150 @@ def test_acdc_v2_registry_approval_refuses_different_tel(members):
     substitute = regcept(groups[0].pre)
     with pytest.raises(ValidationError, match='exclusively anchor'):
         owners[1].approveRegistry(substitute, anchor)
+
+
+@pytest.mark.parametrize('route,ilk', [
+    ('/multisig/rip', 'bup'),
+    ('/multisig/bup', 'rip'),
+    ('/multisig/rip', 'icp'),
+    ('/multisig/bup', 'icp'),
+])
+def test_registry_handlers_reject_wrong_tel_ilk_before_save(members, route, ilk):
+    """Reject signed proposals whose TEL child does not match the route.
+
+    Real independent members authenticate the wrapper, while the handler must
+    reject its shape before retaining proposal children or recording approval.
+    """
+    from keri.core import Codens, Counter, SerderKERI, exchange
+    from keri.peer.exchanging import serializeParsedSubstream
+
+    hbys, groups, rgys, owners = members
+    rip = regcept(groups[0].pre)
+    if ilk == 'bup':
+        event = blindate(rip.said, rip.said, Diger(ser=b'private event').qb64)
+    elif ilk == 'icp':
+        event = SerderKERI(raw=groups[0].msgOwnInception(gvrsn=Vrsn_2_0))
+    else:
+        event = rip
+    anchorStream = groups[0].interact(data=[dict(s=event.sad.get('n', '0'), d=event.said)],
+        version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+    anchor = SerderKERI(raw=anchorStream)
+    wrapper = exchange(sender=groups[0].mhab.pre, route=route,
+        attributes=dict(gid=groups[0].pre, tel=event.said, anc=anchor.said),
+        version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+    footer = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+    children = [Parser(version=Vrsn_2_0).parse(ims=bytearray(stream),
+        processive=False)[0] for stream in (event.raw + footer, anchorStream)]
+    message = groups[0].mhab.endorse(wrapper, last=False, framed=False,
+        gvrsn=Vrsn_2_0, nests=[serializeParsedSubstream(child) for child in children])
+
+    parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(message), processive=False)
+    assert len(parsed) == 1 and parsed[0].serder.said == wrapper.said
+    assert parsed[0].serder.route == route and len(parsed[0].nests) == 2
+    with pytest.raises(ValidationError, match='invalid ACDC v2 registry proposal bodies'):
+        owners[1].mux.validate(parsed[0].serder, nests=parsed[0].nests)
+    with pytest.raises(ValidationError, match='registry proposal is not authenticated'):
+        owners[1].registryProposal(message)
+    assert hbys[1].db.exns.get((wrapper.said,)) is None
+    assert not hbys[1].db.enst.get((wrapper.said,))
+    assert not hbys[1].db.meids.get((anchor.said,))
+    assert not hbys[1].db.maids.get((anchor.said,))
+    assert rgys[1].store.headEvent(rip.said) is None
+    assert groups[1].kever.sn == 0
+
+
+@pytest.mark.parametrize('ilk', ['rip', 'bup'])
+@pytest.mark.parametrize('form', ['couple', 'digest', 'triple', 'extra'])
+def test_registry_proposal_seal_policy_is_identical_before_consent(members, monkeypatch, ilk, form):
+    """Builder, remote intake and approval share one exact anchor contract.
+
+    Digest/triple seals remain valid core evidence forms, but this narrowly
+    scoped group signing proposal supports only one sequence/digest couple.
+    A signed unsupported proposal must not become a notice awaiting consent.
+    """
+    from keri.app.grouping import multisigRipExn, multisigBupExn
+    from keri.core import Codens, Counter, SerderKERI, exchange
+    from keri.peer.exchanging import serializeParsedSubstream
+
+    hbys, groups, rgys, owners = members
+    rip = regcept(groups[0].pre)
+    if ilk == 'bup':
+        initial, atc = owners[0].approveRegistry(rip)
+        event, anchor, _ = owners[1].registryProposal(initial.raw + atc)
+        approved, atc = owners[1].approveRegistry(event, anchor)
+        owners[0].receive(approved.raw + atc)
+        assert rgys[0].store.headEvent(rip.said).said == rip.said
+    event = rip if ilk == 'rip' else blindate(rip.said, rip.said, Diger(ser=b'private').qb64)
+    couple = dict(s=event.sad['n'], d=event.said)
+    seals = dict(couple=[couple], digest=[dict(d=event.said)],
+                 triple=[dict(i=rip.said, **couple)],
+                 extra=[couple, dict(d=Diger(ser=b'unrelated').qb64)])[form]
+    stream = groups[0].interact(data=seals, version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+    anchor = SerderKERI(raw=stream)
+    footer = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+    builder = multisigRipExn if ilk == 'rip' else multisigBupExn
+    if form == 'couple':
+        wrapper, atc = builder(groups[0], event.raw + footer, stream)
+        proposed, exact, _ = owners[1].registryProposal(wrapper.raw + atc)
+        assert proposed.raw == event.raw and exact.raw == anchor.raw
+        owners[1].approveRegistry(proposed, exact)
+        return
+
+    with pytest.raises(ValidationError, match='one s,d seal'):
+        builder(groups[0], event.raw + footer, stream)
+    with pytest.raises(ValidationError, match='one s,d seal'):
+        owners[1].approveRegistry(event, anchor)
+    # Bypass the local builder to represent an authenticated foreign sender.
+    wrapper = exchange(sender=groups[0].mhab.pre, route=f'/multisig/{ilk}',
+        attributes=dict(gid=groups[0].pre, tel=event.said, anc=anchor.said),
+        version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+    children = [Parser(version=Vrsn_2_0).parse(ims=bytearray(raw),
+        processive=False)[0] for raw in (event.raw + footer, stream)]
+    message = groups[0].mhab.endorse(wrapper, gvrsn=Vrsn_2_0,
+        nests=[serializeParsedSubstream(child) for child in children])
+    notices = []
+    monkeypatch.setattr(owners[1].mux.notifier, 'add', notices.append)
+    with pytest.raises(ValidationError, match='registry proposal is not authenticated'):
+        owners[1].registryProposal(message)
+    assert hbys[1].db.exns.get((wrapper.said,)) is None
+    assert not hbys[1].db.maids.get((anchor.said,))
+    assert notices == []
+
+
+def test_registry_builders_reject_wrong_route_and_removed_route(members):
+    """Make route contracts explicit at authoring and reject the removed wrapper.
+
+    Neither route selection nor proposal inspection may sign an unrelated TEL.
+    """
+    from keri import Vrsn_1_0
+    from keri.app.grouping import multisigRipExn, multisigBupExn
+    from keri.peer import specialExchange
+    from keri.core import Codens, Counter, exchange
+
+    _, groups, _, owners = members
+    rip = regcept(groups[0].pre)
+    bup = blindate(rip.said, rip.said, Diger(ser=b'private event').qb64)
+    anchor = groups[0].interact(data=[dict(s='0', d=rip.said)],
+        version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+    footer = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+    with pytest.raises(ValueError, match='requires a rip event'):
+        multisigRipExn(groups[0], bup.raw + footer, anchor)
+    with pytest.raises(ValueError, match='requires a bup event'):
+        multisigBupExn(groups[0], rip.raw + footer, anchor)
+
+    wrapper = exchange(sender=groups[0].mhab.pre, route='/multisig/registry',
+        attributes=dict(gid=groups[0].pre), version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+    message = groups[0].mhab.endorse(wrapper, last=False, framed=False, gvrsn=Vrsn_2_0)
+    assert '/multisig/registry' not in owners[1].exc.routes
+    with pytest.raises(ValidationError, match='expected one ACDC v2 registry proposal'):
+        owners[1].registryProposal(message)
+
+    for route in ('/multisig/rip', '/multisig/bup'):
+        legacy, _ = specialExchange(sender=groups[0].mhab.pre, route=route,
+            attributes=dict(gid=groups[0].pre), version=Vrsn_1_0)
+        with pytest.raises(ValidationError, match='requires a v2 wrapper'):
+            owners[1].mux.validate(legacy)
+        assert not owners[1].exc.routes[route].verify(legacy)
 
 
 def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fanout(tmp_path):
@@ -238,15 +410,16 @@ def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fano
     assert issuedAgain['credential'] == issued['credential']
     assert invoke(names[0], 'vc', 'registry', 'status', '--acdc-v2', '-r', 'registry')[0]['sn'] == 1
     # Public group authoring must not provision a secret in either member store.
-    from keri.app.credentialing import WalletBaser
+    from keri.app import Keeper
     from keri.db import openLMDB
     for name in names:
-        with openLMDB(cls=WalletBaser, name=name, base='acdc-v2-cli-test', temp=False) as wallet:
-            assert wallet.custody.get((accepted['registry'],)) is None
+        with openLMDB(cls=Keeper, name=name, base='acdc-v2-cli-test', temp=False) as keeper:
+            assert keeper.custody.get((accepted['registry'],)) is None
     for path in (first, second, issue1, issue2):
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(path.read_bytes()), processive=False)
         wrapper = parsed[-1]
-        assert wrapper.serder.route == '/multisig/registry'
+        assert wrapper.serder.route == ('/multisig/rip' if path in (first, second)
+                                        else '/multisig/bup')
         assert not wrapper.bsqs and not wrapper.bsss
     for path in (issue1, issue2):
         tel = Parser(version=Vrsn_2_0).parse(
@@ -396,7 +569,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
         None. Assertions check the stated evidence boundary."""
     from keri.acdc import admit
     from keri.acdc.regeventing import vet
-    from keri.app.credentialing import Wallet
+    from tests.app.native_owners import NativeOwners
     from keri.core import Codens, Counter, Prefixer
     from keri.peer import serializeMessage
     from keri.peer.exchanging import serializeParsedSubstream
@@ -411,7 +584,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             for group in groups:
                 owner.receive(group.mhab.replay(gvrsn=Vrsn_2_0))
                 owner.receive(group.replay(gvrsn=Vrsn_2_0))
-        wallets = [Wallet(hby, rgy, exc=owner.exc) for hby, rgy, owner in zip(hbys, rgys, owners)]
+        wallets = [NativeOwners(hby, rgy, exc=owner.exc) for hby, rgy, owner in zip(hbys, rgys, owners)]
         for wallet in wallets:
             stack.callback(wallet.close)
         foot = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
@@ -488,7 +661,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             approveRegistry(issuerTeam, issued, issuedOpening)
             synchronize()
             for wallet in wallets[:3]:
-                wallet.recordIssued(credential, issued.said, blinder=issuedOpening)
+                Registrar(wallet.rgy).recordIssued(wallet.reger, credential, issued.said, blinder=issuedOpening)
 
             # First create the immutable grant, then have the holder group
             # authorize that exact grant through its declared presentation TEL.
@@ -528,12 +701,12 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             for peer in issuerTeam[3]:
                 peer.receive(admitted)
             for wallet in wallets[3:]:
-                wallet.recordAdmission(original.said, response.said, consent=True)
-                assert wallet.heldCredential(original.said)['credential'].said == credential.said
+                wallet.verification.validateAdmission(original.said, response.said, consent=True)
+                assert wallet.verification.heldCredential(original.said)['credential'].said == credential.said
 
             # The group holder presents the retained disclosure with a distinct
             # grant and a newly approved binding. The first grant stays historical.
-            held = wallets[3].heldCredential(original.said)
+            held = wallets[3].verification.heldCredential(original.said)
             presented, patc = grant(holder, issuer.mhab.pre, 'group presentation', origin=held['proof'])
             secondBinding, stream = presentation(presented.raw + patc, presented, firstBinding.said, 2)
             delivered = approveExchange(holderTeam, stream)
@@ -550,7 +723,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
                 assert vet(issuerRip, [issued, revoked], db=hby.db, acdc=credential,
                            blinder=revokedOpening).state == 'revoked'
                 assert rgy.store.headEvent(holderRip.said).said == secondBinding.said
-            assert all(wallet.heldCredential(original.said)['grant'].said == original.said
+            assert all(wallet.verification.heldCredential(original.said)['grant'].said == original.said
                        for wallet in wallets[3:])
             assert all(endpoint.requests > 0 for endpoint in endpoints)
 
@@ -664,7 +837,7 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
     """
     from hio.base import doing
     from keri.acdc import admit, apply
-    from keri.app.credentialing import Wallet
+    from tests.app.native_owners import NativeOwners
     from keri.cli.common import acdc_v2_ipex
     from keri.cli.commands.ipex.grant import parser as arguments
     from keri.kering import ConfigurationError
@@ -702,9 +875,9 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
         Number(num=group.kever.lastEst.s), Diger(qb64=group.kever.lastEst.d),
         [member.sign(reply.raw)[0] for member in groups[:2]])], gvrsn=Vrsn_2_0))
     assert exc.complete(reply.said)
-    wallet = Wallet(hby, rgy, exc=exc, verification=verification)
+    wallet = NativeOwners(hby, rgy, exc=exc, verification=verification)
     try:
-        wallet.recordAdmission(incoming.said, reply.said, consent=True)
+        wallet.verification.validateAdmission(incoming.said, reply.said, consent=True)
         plan = [[near.schema['$id'], '/', []], [far.schema['$id'], '/e/proof/_/', []]]
         request, ratc = apply(groups[1].mhab, group.pre, 'exact graph request', modifiers=dict(dp=plan))
         parser.parse(ims=bytearray(request.raw + ratc))
@@ -729,8 +902,8 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
             return
         @contextmanager
         def opened(args, **kwa):
-            yield hby, rgy, wallet
-        monkeypatch.setattr(acdc_v2_ipex.acdc_v2, 'opened', opened)
+            yield hby, rgy
+        monkeypatch.setattr(acdc_v2_ipex.acdc_v2, 'openedRegistry', opened)
         completed = []
         if boundary == 'completion':
             # Keep the real Peer, but explicitly select this application's policy.
@@ -785,3 +958,24 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
         assert not output.exists()
     finally:
         wallet.close()
+
+
+def memberAids(groups):
+    """Return the fixture's explicit trusted local member order."""
+    return [group.mhab.pre for group in groups]
+
+
+def rotateMembers(hbys, groups):
+    """Accept each member's independent rotation in every peer's local KEL."""
+    messages = [group.mhab.rotate(version=Vrsn_2_0, gvrsn=Vrsn_2_0) for group in groups]
+    for hby in hbys:
+        for message in messages:
+            Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(ims=bytearray(message), local=True)
+
+
+def groupRotation(hby, group, smids):
+    """Build a group rotation using supplied trusted member order and new keys."""
+    return eventing.rotate(pre=group.pre, sn=group.kever.sn + 1,
+        dig=group.kever.serder.said, isith='2', nsith='2',
+        keys=[hby.kevers[aid].verfers[0].qb64 for aid in smids],
+        ndigs=[hby.kevers[aid].ndigers[0].qb64 for aid in smids], version=Vrsn_2_0)

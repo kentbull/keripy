@@ -88,6 +88,7 @@ def test_upd_schema_parses_but_semantic_paths_reject_without_rewriting_history()
                 evidence.clone([rip.said])
         finally:
             evidence.close()
+            reger.close()
 
 
 @pytest.mark.parametrize('stamp', [

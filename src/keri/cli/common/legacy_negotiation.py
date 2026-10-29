@@ -90,7 +90,7 @@ class Negotiation(doing.DoDoer):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
-        public_evidence.ObserverPolicy.fromArgs(args, None)
+        public_evidence.ObserverConnection.fromArgs(args, None)
         unsupported = ('plan', 'observer', 'registry', 'proposal', 'proposal_output',
                        'from_grant', 'disclose')
         if self.verb != 'admit' and args.time:

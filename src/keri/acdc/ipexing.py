@@ -25,7 +25,7 @@ from ..core import (Aggor, Compactor, Counter,
                     Codens, Diger, GenDex, Noncer, Number, Pather, Prefixer,
                     Parser, Saider, SealEvent, SealSource, SerderACDC, Serdery, Texter, exchange,
                     messagize)
-from ..peer.exchanging import (cloneMessage, loadParsedNestedSubstreams,
+from ..peer.exchanging import (cloneMessage, loadParsedNestedSubstreams, serializeParsedSubstream,
                                verifyAttachments)
 from . import scheming
 from .edging import (EdgeEvaluator, EdgeSectionLabels, EdgeGroupLabels,
@@ -2221,6 +2221,25 @@ class IpexHandler:
         ))
 
 
+@dataclass
+class AdmittedCredential:
+    """Explicit local consent to one exact grant/admit disclosure pair.
+
+        credential and holder identify its origin/recipient; grant and admit retain
+        exchange provenance. admitted is the signed Admit timestamp, not a local
+        observation or issuer-publication time.
+
+        The original reference view was adapted from KERI Foundation Locksmith
+        3a5ad9ebcf98b4ec03baf1bbb91d928d49c168e4 (Apache-2.0). This local view
+        is reconstructed from Exchanger records and introduces no wallet storage.
+    """
+    credential: str
+    grant: str
+    admit: str
+    holder: str
+    admitted: str
+
+
 @dataclass(frozen=True)
 class AcdcV2IpexVerification:
     """Concrete ACDC v2 IPEX semantic context shared by intake and fresh admission.
@@ -2269,6 +2288,125 @@ class AcdcV2IpexVerification:
             KeriError: Retained authentication or dependent evidence is invalid.
         """
         return self.handler(route).verifyAccepted(said, historical=historical)
+
+    def admission(self, grant, admit, *, historical=False):
+        """Read one authenticated local Grant/Admit pair from exchange storage.
+
+        Args:
+            grant (str): Retained Grant identifier.
+            admit (str): Retained Admit identifier.
+            historical (bool): Select retained TEL prefixes for inspection.
+
+        Returns:
+            AdmittedCredential: A view of signed consent, never a new stored row.
+
+        Raises:
+            ValidationError: Signature, recipient, response linkage or credential
+                proof is invalid. Evidence dependency errors propagate.
+
+        A signed local Admit is the consent artifact. Neither receipt of a Grant
+        nor a notification supplies consent. This view asserts no graph-policy
+        decision; fresh use must separately evaluate the configured policy.
+        """
+        gexn, aexn = self.hby.db.exns.get((grant,)), self.hby.db.exns.get((admit,))
+        for said, exn, route in ((grant, gexn, '/ipex/grant'), (admit, aexn, '/ipex/admit')):
+            if (exn is None or exn.said != said or exn.route != route or exn.pvrsn.major != 2):
+                raise ValidationError('accepted ACDC v2 IPEX evidence is required')
+        holder = gexn.sad.get('ri')
+        response = self.hby.db.erpy.get((grant,))
+        if (self.hby.habByPre(holder) is None or aexn.pre != holder or aexn.sad.get('p') != grant
+                or aexn.sad.get('ri') != gexn.pre or response is None or response.qb64 != admit):
+            raise ValidationError('admit must be the local intended holder response to this grant')
+        origins = gexn.sad['a'].get('o')
+        if not isinstance(origins, list) or len(origins) != 1:
+            raise ValidationError('admission requires one disclosed origin credential')
+        for route, message in (('/ipex/grant', gexn), ('/ipex/admit', aexn)):
+            if not self.verifyAccepted(message.said, route, historical=historical):
+                raise ValidationError('ACDC v2 IPEX semantic acceptance is required before admission')
+        return AdmittedCredential(origins[0], grant, admit, holder, aexn.sad['dt'])
+
+    def validateAdmission(self, grant, admit, *, consent=False):
+        """Validate fresh admission without a second application consent ledger.
+
+        Args:
+            grant (str): Retained Grant identifier.
+            admit (str): Holder-signed response identifier.
+            consent (bool): Explicit local approval for this fresh validation.
+
+        Returns:
+            AdmittedCredential: View of the already signed and retained pair.
+
+        Raises:
+            ValidationError: Consent, authentication or current graph policy fails.
+
+        The existing Exchanger owns persistence. Repeating this operation creates
+        no record, index, journal or delivery authorization. Current policy is
+        checked every time; use heldCredential for historical inspection.
+        """
+        if consent is not True:
+            raise ValidationError('explicit consent is required before admission')
+        record = self.admission(grant, admit, historical=False)
+        if self.evaluateGrant(grant) is not True:
+            raise ValidationError('ACDC v2 graph semantic acceptance is required before admission')
+        return record
+
+    def heldCredential(self, grant):
+        """Read one admitted grant's exact retained proof without merging later views.
+
+            Args:
+                grant (str): Grant SAID with existing explicit local consent.
+
+            Returns:
+                dict: Exact credential, serialized origin proof, other original artifacts,
+                    retained grant, and admit SAID. No cached fuller section is substituted.
+
+            Raises:
+                ValidationError: Consent, authenticated exchange evidence, or origin is absent.
+
+            Current graph policy and private custody are unnecessary for historical proof
+            retrieval; onward acceptance still invokes the receiving semantic verifier."""
+        response = self.hby.db.erpy.get((grant,))
+        if response is None:
+            raise ValidationError('this grant has no signed local admission')
+        record = self.admission(grant, response.qb64, historical=True)
+        exn = self.hby.db.exns.get((grant,))
+        nests = loadParsedNestedSubstreams(self.hby, grant)
+        for nest in nests:
+            if nest.serder.said == record.credential:
+                return {'credential': nest.serder,
+                        'proof': serializeParsedSubstream(nest),
+                        'artifacts': [serializeParsedSubstream(other) for other in nests
+                                      if other.serder.said != record.credential],
+                        'grant': exn, 'admit': record.admit}
+        raise ValidationError('admitted grant origin evidence is missing')
+
+    def admissions(self, credential=None):
+        """Read authenticated local Grant/Admit pairs from ordinary exchange storage.
+
+        Args:
+            credential (str | None): Restrict to this credential commitment, or
+                return all local admissions. Distinct disclosure views stay separate.
+
+        Returns:
+            list[AdmittedCredential]: Historical signed-consent views, not current
+                standing or remembered graph-policy decisions. No index is written.
+
+        Invalid or unrelated responses are omitted; missing evidence dependencies
+        propagate through the existing protocol exceptions.
+        """
+        held = []
+        for (grant,), response in self.hby.db.erpy.getTopItemIter():
+            exn = self.hby.db.exns.get((response.qb64,))
+            if (exn is None or exn.route != '/ipex/admit' or exn.pvrsn.major != 2
+                    or self.hby.habByPre(exn.pre) is None):
+                continue
+            try:
+                record = self.admission(grant, response.qb64, historical=True)
+            except ValidationError:
+                continue
+            if credential is None or record.credential == credential:
+                held.append(record)
+        return held
 
     def _evaluateGraph(self, nodes, order, *, historical):
         """Invoke the single evaluator with this action's concrete policy/evidence."""

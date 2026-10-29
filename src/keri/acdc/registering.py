@@ -56,8 +56,46 @@ class RegistryStore:
         """Return the exact retained public opening bytes for one event SAID."""
         return self.baser.openings.get(keys=said)
 
+    def verifiedOpening(self, event):
+        """Read a public opening and verify its exact event commitment.
+
+        Args:
+            event (SerderACDC): BUP whose published proof is requested.
+
+        Returns:
+            Blinder | None: Verified opening, or None when absent or not a BUP.
+
+        Raises:
+            ValidationError: Retained proof is ambiguous or mismatches the event.
+
+        This read neither derives private material nor asserts TEL acceptance.
+        """
+        from . import regeventing
+
+        if event is None or event.ilk != 'bup':
+            return None
+        qb64 = self.opening(event.said)
+        if qb64 is None:
+            return None
+        candidates = regeventing._blindCandidates(qb64)
+        if len(candidates) != 1:
+            raise ValidationError('retained public opening is ambiguous')
+        blinder = candidates[0]
+        regeventing.vetBlind(blinder, blid=event.sad['b'])
+        return blinder
+
     def retainOpening(self, event, opening):
         """Authenticate and retain one event-specific public ``bup`` opening.
+
+        Args:
+            event (SerderACDC): Exact BUP already stored by TEL processing.
+            opening (Blinder): Event-specific proof selected for public disclosure.
+
+        Returns:
+            Blinder: The verified, retained opening.
+
+        Raises:
+            ValidationError: Event bytes, commitment or existing proof disagree.
 
         Repeated identical publication is idempotent. A different opening for
         the same event is refused before it can replace durable evidence.

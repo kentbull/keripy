@@ -147,6 +147,12 @@ def fixedEdgeOrder(near, *, evidence, sections=None):
     schema, resolver = _edgeSchema(near, evidence, sections)
 
     def fixed(schema, resolver, *, root=False, depth=64):
+        """Check a resolved schema subtree for a required, closed edge shape.
+
+        schema/resolver describe this subtree; root distinguishes the edge
+        section from a member. depth bounds schema recursion. Return False for
+        unresolved or unsupported shapes rather than inferring member order.
+        """
         if depth <= 0 or (selected := _staticEdgeSchema(schema, resolver)) is None:
             return False
         schema, resolver = selected
@@ -186,6 +192,12 @@ class EdgeEvaluator:
     Truth caches are local to each verification call.
     """
     def __init__(self, evidence: PresentedEvidence, *, graphPolicy=None, sections=None):
+        """Borrow accepted evidence, optional graph policy and schema sections.
+
+        evidence supplies authenticated KEL/TEL lookups; graphPolicy supplies
+        caller-selected validity/value/accept rules, and sections resolves
+        independent schema material. Construction opens no stores or workers.
+        """
         self.evidence = evidence
         self.graphPolicy = graphPolicy
         self.sections = sections

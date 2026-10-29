@@ -6,7 +6,6 @@ keri.app.forwarding module
 module for enveloping and forwarding KERI message
 """
 import random
-import pysodium
 from ordered_set import OrderedSet as oset
 
 from hio.base import doing
@@ -15,9 +14,9 @@ from hio.help import decking, ogler
 from ..kering import (Roles, Vrsn_1_0, Version, Kinds,
                       ConfigurationError, ValidationError)
 from .agenting import messengerFrom, streamMessengerFrom
-from ..core import (Bexter, Prefixer, Verfer, Texter, Diger,
-                    Counter, SerderKERI, Parser, exchange,
-                    MtrDex, Codens, NonTransDex)
+from .essring import envelope
+from ..core import (Bexter, Prefixer, Verfer, Diger,
+                    SerderKERI, Parser, exchange, NonTransDex)
 from ..db import dgKey
 from ..peer import specialExchange
 from ..peer.exchanging import serializeParsedSubstream
@@ -32,8 +31,8 @@ class Poster(doing.DoDoer):
     delivers them to one of the target receiver's witnesses for store and forward
     to the intended receiver
 
-    Forwarding bodies remain V1; attachment framing follows this poster's version.
-    Use StreamPoster for native V2 forwarding with nested payloads.
+    V1 delivery retains legacy embedded forwarding. V2 delivery uses the same
+    native nested forwarding and child serializer as StreamPoster.
 
     """
 
@@ -73,6 +72,7 @@ class Poster(doing.DoDoer):
                 tpc = evt["topic"]
                 srdr = evt["serder"]
                 atc = evt["attachment"] if "attachment" in evt else None
+                gvrsn = evt.get("gvrsn")
 
                 # Get the hab of the sender
                 if "hab" in evt:
@@ -92,9 +92,9 @@ class Poster(doing.DoDoer):
                                                             recp=recp,
                                                             serder=srdr,
                                                             atc=atc,
-                                                            topic=tpc)
+                                                            topic=tpc, gvrsn=gvrsn)
                                 else:
-                                    yield from self.sendDirect(hab, ends[role], serder=srdr, atc=atc)
+                                    yield from self.sendDirect(hab, ends[role], serder=srdr, atc=atc, gvrsn=gvrsn)
 
                     # otherwise send to one witness
                     elif Roles.witness in ends:
@@ -103,7 +103,7 @@ class Poster(doing.DoDoer):
                                                          recp=recp,
                                                          serder=srdr,
                                                          atc=atc,
-                                                         topic=tpc)
+                                                         topic=tpc, gvrsn=gvrsn)
                     else:
                         logger.info(f"No end roles for {recp} to send evt={srdr.said}")
                         continue
@@ -118,7 +118,7 @@ class Poster(doing.DoDoer):
 
             yield self.tock
 
-    def send(self, dest, topic, serder, src=None, hab=None, attachment=None):
+    def send(self, dest, topic, serder, src=None, hab=None, attachment=None, *, gvrsn=None):
         """
         Utility function to queue a msg on the Poster's buffer for
         enveloping and forwarding to a witness
@@ -130,11 +130,14 @@ class Poster(doing.DoDoer):
             topic (str): topic of message
             serder (Serder): KERI event message to envelope and forward
             attachment (bytes): attachment bytes
+            gvrsn (Versionage | None): Input attachment genus, defaulting to this
+                poster's version. Supply V1 explicitly for a legacy proposal
+                carried by a V2 poster; body version alone is insufficient.
 
         """
         src = src if src is not None else hab.pre
 
-        evt = dict(src=src, dest=dest, topic=topic, serder=serder)
+        evt = dict(src=src, dest=dest, topic=topic, serder=serder, gvrsn=gvrsn)
         if attachment is not None:
             evt["attachment"] = attachment
         if hab is not None:
@@ -176,29 +179,65 @@ class Poster(doing.DoDoer):
                     self.cues.append(cue)
             yield self.tock
 
-    def sendDirect(self, hab, ends, serder, atc):
+    def _frame(self, serder, atc, gvrsn):
+        """Frame one child for this poster using its explicit input attachment genus.
+
+        Returns bytes with the same signed body and authenticators. V2 uses the
+        existing parsed-substream serializer; malformed input raises ValueError.
+        """
+        msg = bytearray(serder.raw)
+        msg.extend(atc or b'')
+        if self.version.major >= 2:
+            parsed = Parser(version=gvrsn if gvrsn is not None else self.version).parse(
+                ims=msg, framed=True, processive=False)
+            if not parsed or len(parsed) != 1:
+                raise ValueError('Expected one poster payload stream')
+            return serializeParsedSubstream(parsed[0], gvrsn=self.version)
+        return msg
+
+    def sendDirect(self, hab, ends, serder, atc, *, gvrsn=None):
+        """Send one authenticated child with framing selected by this poster.
+
+        gvrsn identifies input attachments; endpoints and habitat retain their
+        existing transport ownership. Malformed V2 input raises ValueError.
+        """
+        msg = self._frame(serder, atc, gvrsn)
         for ctrl, locs in ends.items():
+            if self.version.major >= 2:
+                yield from self._deliverStream(hab, ctrl, locs, msg)
+                continue
             witer = messengerFrom(hab=hab, pre=ctrl, urls=locs)
-
-            msg = bytearray(serder.raw)
-            if atc is not None:
-                msg.extend(atc)
-
-            witer.msgs.append(bytearray(msg))  # make a copy
+            witer.msgs.append(bytearray(msg))
             self.extend([witer])
-
             while not witer.idle:
-                _ = (yield self.tock)
-
+                yield self.tock
             self.remove([witer])
 
-    def forward(self, hab, ends, recp, serder, atc, topic):
+    def _deliverStream(self, hab, recipient, urls, msg):
+        """Send one complete native stream using the existing finite transport.
+
+        Completion means transport submission, not authenticated peer acceptance.
+        Cancel the owned messenger before returning or unwinding the caller.
+        """
+        messenger = streamMessengerFrom(hab=hab, pre=recipient, urls=urls, msg=msg)
+        self.extend([messenger])
+        try:
+            while not messenger.done:
+                yield self.tock
+        finally:
+            self.remove([messenger])
+
+    def forward(self, hab, ends, recp, serder, atc, topic, *, gvrsn=None):
+        """Forward through one mailbox using legacy V1 or existing native V2 framing.
+
+        gvrsn identifies input attachments, defaulting to this poster's version.
+        The generator owns its transport until native finite completion or the
+        legacy idle cue. Malformed V2 input raises ValueError before queuing.
+        """
         # If we are one of the mailboxes, just store locally in mailbox
         owits = oset(ends.keys())
         if self.mbx and owits.intersection(hab.prefixes):
-            msg = bytearray(serder.raw)
-            if atc is not None:
-                msg.extend(atc)
+            msg = self._frame(serder, atc, gvrsn)
             self.mbx.storeMsg(topic=f"{recp}/{topic}".encode("utf-8"), msg=msg)
             return
 
@@ -208,63 +247,36 @@ class Poster(doing.DoDoer):
         msg.extend(introduce(hab, mbx, gvrsn=self.version))
         # create the forward message with payload embedded at `a` field
 
-        evt = bytearray(serder.raw)
-        evt.extend(atc)
-        fwd, atc = specialExchange(sender=hab.pre,
-                                   route='/fwd',
-                                   modifiers=dict(pre=recp, topic=topic),
-                                   attributes={},
-                                   embeds=dict(evt=evt),
-                                   version=Vrsn_1_0, kind=self.kind)
-        ims = hab.endorse(serder=fwd, last=False, framed=True, gvrsn=self.version)
+        if self.version.major >= 2:
+            fwd, atc = StreamPoster(self.hby, recp, hab=hab,
+                version=self.version, kind=self.kind).createForward(
+                    hab, ends, serder, atc or b'', topic, gvrsn=gvrsn)
+            ims = fwd.raw
+        else:
+            evt = bytearray(serder.raw)
+            evt.extend(atc)
+            fwd, atc = specialExchange(sender=hab.pre,
+                                       route='/fwd',
+                                       modifiers=dict(pre=recp, topic=topic),
+                                       attributes={},
+                                       embeds=dict(evt=evt),
+                                       version=Vrsn_1_0, kind=self.kind)
+            ims = hab.endorse(serder=fwd, last=False, framed=True, gvrsn=self.version)
 
-        # Transpose the signatures to point to the new location
-        witer = messengerFrom(hab=hab, pre=mbx, urls=mailbox)
         msg.extend(ims)
         msg.extend(atc)
+        if self.version.major >= 2:
+            yield from self._deliverStream(hab, mbx, mailbox, msg)
+        else:
+            witer = messengerFrom(hab=hab, pre=mbx, urls=mailbox)
+            witer.msgs.append(bytearray(msg))
+            self.extend([witer])
+            while not witer.idle:
+                yield self.tock
 
-        witer.msgs.append(bytearray(msg))  # make a copy
-        self.extend([witer])
-
-        while not witer.idle:
-            _ = (yield self.tock)
-
-    def forwardToWitness(self, hab, ends, recp, serder, atc, topic):
-        # If we are one of the mailboxes, just store locally in mailbox
-        owits = oset(ends.keys())
-        if self.mbx and owits.intersection(hab.prefixes):
-            msg = bytearray(serder.raw)
-            if atc is not None:
-                msg.extend(atc)
-            self.mbx.storeMsg(topic=f"{recp}/{topic}".encode("utf-8"), msg=msg)
-            return
-
-        # Its not us, randomly select a mailbox and forward it on
-        mbx, mailbox = random.choice(list(ends.items()))
-        msg = bytearray()
-        msg.extend(introduce(hab, mbx, gvrsn=self.version))
-        # create the forward message with payload embedded at `a` field
-
-        evt = bytearray(serder.raw)
-        evt.extend(atc)
-        fwd, atc = specialExchange(sender=hab.pre,
-                                   route='/fwd',
-                                   modifiers=dict(pre=recp, topic=topic),
-                                   attributes={},
-                                   embeds=dict(evt=evt),
-                                   version=Vrsn_1_0, kind=self.kind)
-        ims = hab.endorse(serder=fwd, last=False, framed=True, gvrsn=self.version)
-
-        # Transpose the signatures to point to the new location
-        witer = messengerFrom(hab=hab, pre=mbx, urls=mailbox)
-        msg.extend(ims)
-        msg.extend(atc)
-
-        witer.msgs.append(bytearray(msg))  # make a copy
-        self.extend([witer])
-
-        while not witer.idle:
-            _ = (yield self.tock)
+    def forwardToWitness(self, hab, ends, recp, serder, atc, topic, *, gvrsn=None):
+        """Use the same mailbox construction and input genus contract for a witness."""
+        yield from self.forward(hab, ends, recp, serder, atc, topic, gvrsn=gvrsn)
 
 
 class StreamPoster:
@@ -308,6 +320,11 @@ class StreamPoster:
         return doers
 
     def _chunk(self):
+        """Compose queued frames, adding the existing SCS prefix only for ESSR.
+
+        Return ordinary transport doers for this chunk. Unconsumed events remain in
+        the poster's queue; this operation creates no delivery or acceptance record.
+        """
         msg = bytearray()
 
         if self.essr:
@@ -330,9 +347,19 @@ class StreamPoster:
             msg.extend(serder.raw)
             msg.extend(atc)
 
-        if len(msg) == 0:
-            return []
+        return self.deliverStream(msg)
 
+    def deliverStream(self, msg):
+        """Route an already composed CESR stream through the existing finite sender.
+
+        msg contains complete message frames, including any SCS prefix when
+        this poster uses ESSR. The caller owns framing; this method preserves
+        bytes and selects ordinary direct endpoints or witness/mailbox forwarding.
+        Return unscheduled transport Doers, as deliver() does. No retry, receipt,
+        persistence or recipient-acceptance policy is introduced.
+        """
+        if not msg:
+            return []
         ends = self.hab.endsFor(self.recp)
         try:
             # If there is a controller or agent in ends, send to all
@@ -406,6 +433,11 @@ class StreamPoster:
         return self.messagers
 
     def _essrWrapper(self, hab, msg, ctrl):
+        """Seal already SCS-framed msg from hab for destination controller ctrl.
+
+        Resolve ctrl's current encryption verifier and return the ordinary envelope.
+        The caller supplied SCS framing, so do not prepend a second SCS header.
+        """
         prefixer = Prefixer(qb64=ctrl)
         if prefixer.code in NonTransDex:  # e.g. witness mbx
             verfer = Verfer(qb64=ctrl)
@@ -413,22 +445,8 @@ class StreamPoster:
             rkever = self.hby.kevers[ctrl]
             verfer = rkever.verfers[0]
 
-        pubkey = pysodium.crypto_sign_pk_to_box_pk(verfer.raw)
-        raw = pysodium.crypto_box_seal(bytes(msg), pubkey)
-
-        texter = Texter(raw=raw)
-        diger = Diger(ser=raw, code=MtrDex.Blake3_256)
-        essr, _ = specialExchange(sender=hab.pre,
-                                  route='/essr/req',
-                                  modifiers=dict(src=hab.pre, dest=ctrl),
-                                  diger=diger,
-                                  version=Vrsn_1_0, kind=self.kind)
-        ims = hab.endorse(serder=essr, framed=True, gvrsn=self.version)
-        ims.extend(Counter(Codens.ESSRPayloadGroup,
-                           count=1 if self.version.major < 2 else len(texter.qb64b) // 4,
-                           gvrsn=self.version).qb64b)
-        ims.extend(texter.qb64b)
-        return ims
+        # _chunk already frames SCS; preserve this wrapper's raw sealing contract.
+        return envelope(hab, msg, ctrl, verfer, version=self.version, kind=self.kind, scs=False)
 
     def createForward(self, hab, ends, serder, atc, topic, *, gvrsn=None):
         """Wrap a child with input attachment genus gvrsn in this poster's version."""

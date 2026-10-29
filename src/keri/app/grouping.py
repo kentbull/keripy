@@ -9,13 +9,13 @@ module for enveloping and forwarding KERI message
 from hio.base import doing
 from hio.help import ogler
 
-from ..kering import ValidationError, Version, Versionage, Vrsn_1_0, Vrsn_2_0, Kinds, Ilks
-from ..core import (Number, Diger, Saider,
+from ..kering import KeriError, ValidationError, Version, Versionage, Vrsn_1_0, Vrsn_2_0, Kinds, Ilks
+from ..core import (Cipher, MtrDex, Number, Diger, Saider,
                     Prefixer, Kevery, Router,
                     Revery, Parser, SerderKERI,
                     Serder, NumDex, SealSource, messagize, exchange)
 from ..peer import Exchanger, specialExchange, cloneMessage
-from ..peer.exchanging import serializeParsedSubstream
+from ..peer.exchanging import serializeParsedSubstream, loadParsedNestedSubstreams, verify
 
 from .delegating import Anchorer
 from .agenting import Receiptor, WitnessInquisitor
@@ -276,7 +276,8 @@ class MultisigNotificationHandler:
     def verify(self, serder, attachments=None, nests=None):
         """Validate a multisig EXN before the exchanger saves it."""
         try:
-            return self.mux.validate(serder=serder, nests=nests) is not None
+            return (serder.route == self.resource
+                    and self.mux.validate(serder=serder, nests=nests) is not None)
         except (ValidationError, ValueError, KeyError, TypeError, AttributeError):
             return False
 
@@ -313,7 +314,8 @@ def loadHandlers(exc, mux):
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rev", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/exn", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rpy", mux=mux))
-    exc.addHandler(MultisigNotificationHandler(resource="/multisig/registry", mux=mux))
+    exc.addHandler(MultisigNotificationHandler(resource="/multisig/rip", mux=mux))
+    exc.addHandler(MultisigNotificationHandler(resource="/multisig/bup", mux=mux))
 
 
 def multisigInceptExn(hab, smids, rmids, icp, delegator=None, version=None, gvrsn=None, kind=None):
@@ -748,6 +750,90 @@ def multisigRpyExn(ghab, rpy, version=None, gvrsn=None, kind=None):
     return exn, bytearray(ims[exn.size:])
 
 
+def _replyGroup(hby, ghab):
+    """Require an accepted local GroupHab with its normal signing member."""
+    from .habbing import GroupHab
+
+    if (not isinstance(ghab, GroupHab) or hby.habs.get(ghab.pre) is not ghab
+            or not ghab.accepted or ghab.mhab is None
+            or ghab.mhab.pre not in ghab.smids):
+        raise ValidationError('reply approval requires an accepted local signing group')
+
+
+def _replyChild(ghab, child, validate):
+    """Check exact reply attribution and signature-only attachments before policy."""
+    serder = child.serder
+    if (not callable(validate) or not isinstance(serder, SerderKERI)
+            or serder.ilk != Ilks.rpy or not serder.verify()
+            or (serder.pvrsn == Vrsn_2_0 and serder.pre != ghab.pre)
+            or any(value for key, value in vars(child).items()
+                   if key not in ('serder', 'tsgs', 'cigars', 'local'))):
+        raise ValidationError('reply approval requires one group reply with signature attachments')
+    # Policy must raise on refusal. Merely returning False must never mean consent.
+    if validate(serder) is False:
+        raise ValidationError('reply approval domain policy declined the body')
+
+
+def replyProposal(hby, exc, mux, said, *, ghab, validate):
+    """Inspect one authenticated retained v2 reply proposal without approving it.
+
+    Parameters: hby/exc/mux are caller-owned processors; said identifies a
+        retained /multisig/rpy wrapper; ghab is the local GroupHab; validate is a required domain-policy
+        callable that raises on rejection, run before user approval/display.
+    Returns: exact retained parsed reply child, including signature attachments.
+    Raises: ValidationError for missing authentication, mismatched group/member,
+        invalid local group, malformed child or domain-policy refusal. Policy errors
+        propagate. This read path grants no local approval or reply authority.
+    """
+    _replyGroup(hby, ghab)
+    wrapper = hby.db.exns.get(keys=said)
+    if (wrapper is None or wrapper.route != '/multisig/rpy'
+            or wrapper.pvrsn != Vrsn_2_0 or not exc.complete(said)
+            or wrapper.sad['a'].get('gid') != ghab.pre
+            or wrapper.pre not in ghab.smids):
+        raise ValidationError('reply proposal requires an authenticated current group member wrapper')
+    verify(hby, wrapper)
+    children = loadParsedNestedSubstreams(hby, said)
+    mux.validate(wrapper, nests=children)
+    if len(children) != 1:
+        raise ValidationError('reply proposal requires exactly one retained child')
+    child = children[0]
+    _replyChild(ghab, child, validate)
+    _replyGroup(hby, ghab)
+    return child
+
+
+def endorseReply(hby, ghab, child, *, validate):
+    """Add explicit local approval to an exact policy-validated group reply.
+
+    Parameters: hby is caller-owned Habery; ghab is its accepted GroupHab;
+        child is the exact parsed reply;
+        validate is required domain policy, rerun immediately before signing.
+    Returns: (signed child stream, member wrapper, detached wrapper attachments).
+        The caller processes the local wrapper through its existing Exchanger/
+        Multiplexor to record approval and replay retained contributions.
+    Raises: ValidationError for invalid local group, child or policy refusal.
+        Policy and signing errors propagate. No routes or processors are created.
+        The callback owns domain consent; this helper adds no application-secret
+        custody prerequisite beyond the group's existing signing operation.
+    """
+    _replyGroup(hby, ghab)
+    _replyChild(ghab, child, validate)
+    _replyGroup(hby, ghab)
+    local = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(ghab.endorse(child.serder, gvrsn=Vrsn_2_0)), processive=False)[0]
+    # Reparse a copy so retries cannot mutate the retained proposal object.
+    signed = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(serializeParsedSubstream(child)), processive=False)[0]
+    signed.tsgs.extend(local.tsgs)
+    signed.cigars.extend(local.cigars)
+    stream = messagize(signed.serder, tsgs=signed.tsgs or None,
+                       cigars=signed.cigars or None, gvrsn=Vrsn_2_0)
+    wrapper, attachments = multisigRpyExn(ghab, stream, version=Vrsn_2_0,
+                                         gvrsn=Vrsn_2_0, kind=Kinds.json)
+    return stream, wrapper, attachments
+
+
 def multisigExn(ghab, exn, version=None, kind=None):
     """Wrap one proposed exchange for explicit group-member approval.
 
@@ -797,32 +883,114 @@ def multisigExn(ghab, exn, version=None, kind=None):
     return wexn, atc
 
 
-def multisigRegistryExn(ghab, tel, anc):
-    """Propose exact ACDC v2 registry TEL and group KEL bodies without custody secrets.
+def validateRegistryAnchor(event, anchor, controller):
+    """Require this profile's single sequence/digest TEL seal before consent.
+
+    Args: event is the exact native TEL body; anchor is the proposed KEL body;
+        controller is the group AID expected to sign it.
+    Returns: None. Raises ValidationError for another controller, event type,
+        version, seal form, or additional seals. This local proposal restriction
+        does not narrow the seal forms accepted by the underlying TEL verifier.
+    """
+    if (anchor.pvrsn != Vrsn_2_0 or anchor.pre != controller
+            or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
+            or anchor.sad.get('a') != [dict(s=event.sad['n'], d=event.said)]):
+        raise ValidationError('group proposal does not exclusively anchor the requested TEL with one s,d seal')
+
+
+def multisigRipExn(ghab, rip, anc, *, salts=None):
+    """Wrap an exact ACDC v2 registry inception and its proposed group KEL anchor.
+
+    The local member endorses the proposal. GroupHab and Counselor still own
+    group signing and completion; the wrapper itself grants no approval.
 
     Args:
-        ghab (GroupHab): Group whose local member signs the proposal wrapper.
-        tel (bytes): One serialized ACDC v2 registry event with any attachments.
-        anc (bytes): One serialized group key event intended to seal that TEL event.
+        ghab (GroupHab): Group whose local member endorses the wrapper.
+        rip (bytes): One exact registry inception stream with attachments.
+        anc (bytes): One proposed controlling KEL event with attachments.
+        salts (dict | None): Optional member AID to encrypted salt mapping.
 
     Returns:
-        tuple[Serder, bytearray]: Signed /multisig/registry wrapper and attachments
-        nesting both exact parsed child streams in TEL/KEL order.
+        tuple: Member-signed wrapper and detached attachments, in TEL/KEL order.
 
     Raises:
-        ValueError: Either input does not parse as exactly one event.
+        ValueError: A child is not one event or the TEL is not a v2 inception.
+    """
+    return _multisigRegistryExn(ghab, rip, anc, ilk=Ilks.rip, salts=salts)
 
-    This builder commits to supplied bodies; Multiplexor validates their relationship
-    and each participant must explicitly approve before ordinary event processing."""
+
+def multisigBupExn(ghab, bup, anc, *, salts=None):
+    """Wrap an exact ACDC v2 blindable update and its proposed group KEL anchor.
+
+    Supplied attachments may disclose an explicitly public event opening. This
+    builder neither derives openings nor accesses registry custody secrets.
+
+    Args:
+        ghab (GroupHab): Group whose local member endorses the wrapper.
+        bup (bytes): One exact blinded update stream with supplied attachments.
+        anc (bytes): One proposed controlling KEL event with attachments.
+        salts (dict | None): Optional member AID to encrypted salt mapping.
+
+    Returns:
+        tuple: Member-signed wrapper and detached attachments, in TEL/KEL order.
+
+    Raises:
+        ValueError: A child is not one event or the TEL is not a v2 blinded update.
+    """
+    return _multisigRegistryExn(ghab, bup, anc, ilk=Ilks.bup, salts=salts)
+
+
+def validateRegistrySalts(salts, members):
+    """Validate optional encrypted salt copies addressed to local group members.
+
+    salts is a map of member AIDs to exact CESR X25519 salt ciphers. members is
+    the existing GroupHab signing-member list, not a separate roster. None means
+    no salt sharing. This local R&D EXN payload encoding neither discloses an
+    event opening nor proves that ciphertexts contain identical plaintexts.
+    Signature verification and recipient decryption remain their owners' work.
+    """
+    if salts is None:
+        return
+    if not isinstance(salts, dict) or not salts or set(salts) - set(members):
+        raise ValidationError('registry salt copies require current group member recipients')
+    try:
+        for member, value in salts.items():
+            if Prefixer(qb64=member).qb64 != member:
+                raise ValueError
+            cipher = Cipher(qb64=value)
+            if cipher.code != MtrDex.X25519_Cipher_Salt or cipher.qb64 != value:
+                raise ValueError
+    except (KeriError, ValueError, TypeError):
+        raise ValidationError('registry salt copy is not an exact encrypted salt') from None
+
+
+def _multisigRegistryExn(ghab, tel, anc, *, ilk, salts=None):
+    """Endorse two exact child streams under the route for the required TEL ilk.
+
+    Multiplexor validates their commitments, controller, and anchor relationship
+    before storing the proposal. The builder rejects a TEL for the wrong route.
+
+    ghab, tel and anc supply the member signer and exact child streams; ilk
+    selects the required TEL type. Return the wrapper and detached attachments.
+    This factors the former fork multisigRegistryExn construction, introduced
+    in 93fef663f53ee49187747caf207bc9173c9b6fc1, into per-event contracts.
+    """
     children = []
     for stream in (tel, anc):
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False)
         if len(parsed) != 1:
             raise ValueError('ACDC v2 registry proposal requires one TEL and one KEL event')
         children.append(parsed[0])
-    wrapper = exchange(sender=ghab.mhab.pre, route='/multisig/registry',
-        attributes=dict(gid=ghab.pre, tel=children[0].serder.said,
-                        anc=children[1].serder.said), version=Vrsn_2_0,
+    event = children[0].serder
+    if event.ilk != ilk or event.pvrsn != Vrsn_2_0:
+        raise ValueError(f'ACDC v2 multisig {ilk} proposal requires a {ilk} event')
+    validateRegistryAnchor(event, children[1].serder, ghab.pre)
+    validateRegistrySalts(salts, ghab.smids)
+    attributes = dict(gid=ghab.pre, tel=event.said, anc=children[1].serder.said)
+    if salts is not None:
+        attributes['salts'] = salts
+    wrapper = exchange(sender=ghab.mhab.pre, route=f'/multisig/{ilk}',
+        attributes=attributes, version=Vrsn_2_0,
         gvrsn=Vrsn_2_0, kind=Kinds.json)
     msg = ghab.mhab.endorse(wrapper, last=False, framed=False, gvrsn=Vrsn_2_0,
                            nests=[serializeParsedSubstream(child) for child in children])
@@ -872,7 +1040,7 @@ class Multiplexor:
 
     """
 
-    def __init__(self, hby, notifier, *, exc=None, rgy=None):
+    def __init__(self, hby, notifier, *, exc=None, rgy=None, kvy=None, rvy=None):
         """Create Multiplexor for local database and Habs
 
         Parameters:
@@ -883,17 +1051,31 @@ class Multiplexor:
             exc (Exchanger | None): Shared concrete exchange processor for approved child
             replay; None creates the existing empty-handler Exchanger.
             rgy (Rever | None): ACDC v2 registry processor for approved TEL child replay.
+            kvy (Kevery | None), rvy (Revery | None): Matching caller-owned pair
+                for approved child replay. Supply both or neither. An injected
+                pair keeps its existing reply routes, cues and KRAM policy;
+                the caller owns registration and escrow scheduling.
 
         Returns:
             None. Habery, notifier, and injected processors remain caller-owned; this
-            object creates no autonomous approval or scheduling lifecycle."""
+            object creates no autonomous approval or scheduling lifecycle.
+
+        Raises:
+            ValidationError: An injected pair is incomplete or belongs to a
+                different database/reply owner.
+        """
+        if (kvy is None) != (rvy is None):
+            raise ValidationError('group replay requires both borrowed KEL and reply processors')
+        if kvy is not None and (kvy.db is not hby.db or rvy.db is not hby.db or kvy.rvy is not rvy):
+            raise ValidationError('group replay processors must share the selected Habery and reply owner')
         self.hby = hby
-        self.rtr = Router()
-        self.rvy = Revery(db=self.hby.db, rtr=self.rtr)
+        self.rtr = rvy.rtr if rvy is not None else Router()
+        self.rvy = rvy if rvy is not None else Revery(db=self.hby.db, rtr=self.rtr)
         self.exc = exc if exc is not None else Exchanger(hby=self.hby, handlers=[])
         self.rgy = rgy
-        self.kvy = Kevery(db=self.hby.db, lax=False, local=False, rvy=self.rvy)
-        self.kvy.registerReplyRoutes(router=self.rtr)
+        self.kvy = kvy if kvy is not None else Kevery(db=self.hby.db, lax=False, local=False, rvy=self.rvy)
+        if kvy is None:
+            self.kvy.registerReplyRoutes(router=self.rtr)
 
         self.notifier = notifier
 
@@ -977,30 +1159,31 @@ class Multiplexor:
         ovrsn = serder.pvrsn
         exnSaid = serder.said
 
+        if route in ('/multisig/rip', '/multisig/bup') and ovrsn != Vrsn_2_0:
+            raise ValidationError('ACDC v2 registry proposal requires a v2 wrapper')
+
         if ovrsn.major == Vrsn_1_0.major:
             if embed is None or "d" not in embed:
                 return
 
             # Preserve the legacy V1 aggregation key for both single- and multi-child wrappers
             esaid = embed["d"]
-        elif route == '/multisig/registry':
+        elif route in ('/multisig/rip', '/multisig/bup'):
             if len(nests) != 2 or not isinstance(payload, dict):
                 raise ValidationError('ACDC v2 registry proposal requires TEL and KEL children')
             children = [nest['serder'] if isinstance(nest, dict) else nest.serder for nest in nests]
             tel, anchor = children
-            if (tel.ilk not in (Ilks.rip, Ilks.bup)
+            if (tel.ilk != route.rsplit('/', 1)[-1]
                     or tel.pvrsn.major != 2 or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
                     or anchor.pre != payload.get('gid')
                     or not tel.verify() or not anchor.verify()
                     or tel.said != payload.get('tel') or anchor.said != payload.get('anc')):
                 raise ValidationError('invalid ACDC v2 registry proposal bodies')
-            regid = tel.said if tel.ilk == Ilks.rip else tel.sad['rd']
             if tel.ilk == Ilks.rip and tel.sad['i'] != anchor.pre:
                 raise ValidationError('ACDC v2 registry inception has a different controller')
-            if not any(seal in anchor.sad.get('a', []) for seal in
-                       (dict(d=tel.said), dict(s=tel.sad['n'], d=tel.said),
-                        dict(i=regid, s=tel.sad['n'], d=tel.said))):
-                raise ValidationError('ACDC v2 registry proposal KEL does not seal its TEL')
+            validateRegistryAnchor(tel, anchor, payload.get('gid'))
+            group = self.hby.habByPre(payload.get('gid'))
+            validateRegistrySalts(payload.get('salts'), group.smids if group else [])
             esaid = anchor.said
         else:
             if len(nests) != 1:
@@ -1072,7 +1255,7 @@ class Multiplexor:
                 gid = payload["gid"]
                 if gid not in self.hby.habs:
                     raise ValueError(f"invalid request to participate in group, not member of gid={gid}")
-                if ovrsn.major == 2 and route in ('/multisig/registry', '/multisig/exn'):
+                if ovrsn.major == 2 and route in ('/multisig/rip', '/multisig/bup', '/multisig/exn'):
                     if sender not in self.hby.db.signingMembers(pre=gid):
                         raise ValueError('v2 multisig proposal sender is not a signing member')
 
