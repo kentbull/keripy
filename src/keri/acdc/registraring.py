@@ -181,20 +181,24 @@ class Registry:
 
     @property
     def regk(self):
+        """Return the registry identifier bound to the shared event engine."""
         # Surface the engine's current registry binding through the legacy API.
         return self._eventer.regk
 
     @regk.setter
     def regk(self, regk):
+        """Bind regk on the shared engine without independently accepting history."""
         self._eventer.regk = regk
 
     @property
     def regd(self):
+        """Return the shared engine's current registry TEL head digest."""
         # Surface the engine's current accepted TEL head SAID.
         return self._eventer.regd
 
     @regd.setter
     def regd(self, regd):
+        """Set the engine's head reference; event verification remains engine-owned."""
         self._eventer.regd = regd
 
     @property

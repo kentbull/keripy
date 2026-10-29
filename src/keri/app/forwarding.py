@@ -320,6 +320,11 @@ class StreamPoster:
         return doers
 
     def _chunk(self):
+        """Compose queued frames, adding the existing SCS prefix only for ESSR.
+
+        Return ordinary transport doers for this chunk. Unconsumed events remain in
+        the poster's queue; this operation creates no delivery or acceptance record.
+        """
         msg = bytearray()
 
         if self.essr:
@@ -428,6 +433,11 @@ class StreamPoster:
         return self.messagers
 
     def _essrWrapper(self, hab, msg, ctrl):
+        """Seal already SCS-framed msg from hab for destination controller ctrl.
+
+        Resolve ctrl's current encryption verifier and return the ordinary envelope.
+        The caller supplied SCS framing, so do not prepend a second SCS header.
+        """
         prefixer = Prefixer(qb64=ctrl)
         if prefixer.code in NonTransDex:  # e.g. witness mbx
             verfer = Verfer(qb64=ctrl)

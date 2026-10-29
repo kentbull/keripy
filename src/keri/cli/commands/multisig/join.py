@@ -462,6 +462,12 @@ class JoinDoer(doing.DoDoer):
             return True
 
     def interact(self, attrs):
+        """Review and approve the retained group interaction identified by attrs.d.
+
+        Use the exact proposed KEL event and existing group membership. Preserve its
+        protocol version while routing approval through the ordinary group machinery;
+        missing group membership returns False before signing.
+        """
         said = attrs["d"]
         exn, pathed = cloneMessage(self.hby, said=said)
         payload = exn.ked['a']

@@ -88,6 +88,7 @@ def inceptMultisig(args):
 
 class GroupMultisigIncept(doing.DoDoer):
 
+    """Coordinate explicit member approval of a group inception with existing doers."""
     def __init__(self, name, base, alias, bran, group, wait, version=None, **kwa):
         self.name = name
         self.version = version

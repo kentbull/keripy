@@ -54,6 +54,7 @@ def add_end(args):
 
 class RoleDoer(doing.DoDoer):
 
+    """Publish an explicit endpoint-role reply using the selected protocol version."""
     def __init__(self, name, base, alias, bran, role, eid, timestamp=None, version=None):
         self.role = role
         self.eid = eid

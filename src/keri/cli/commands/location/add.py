@@ -56,6 +56,7 @@ def add_loc(args):
 
 class LocationDoer(doing.DoDoer):
 
+    """Publish an endpoint location through an existing authenticated habitat."""
     def __init__(self, name, base, alias, bran, url, eid, timestamp=None, version=None):
         self.url = url
         self.eid = eid
