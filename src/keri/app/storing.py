@@ -254,7 +254,9 @@ class Respondant(doing.DoDoer):
                                           gvrsn=serder.pvrsn)
                         rserder = SerderKERI(raw=raw)
                         del raw[:rserder.size]
-                        self.postman.send(serder.pre, topic="receipt", serder=rserder, hab=hab, attachment=raw)
+                        # Receipt attachments follow the event, independently of Poster output framing.
+                        self.postman.send(serder.pre, topic="receipt", serder=rserder, hab=hab,
+                                          attachment=raw, gvrsn=serder.pvrsn)
 
             elif cueKin in ("replay",):
                 src = cue["src"]
