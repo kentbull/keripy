@@ -28,6 +28,7 @@ from ....app.grouping import loadHandlers, replyProposal, endorseReply
 from ....app.group_members import acceptedRoster
 from ....app.acdc_v2_grouping import RegistryApproval
 from ....app.forwarding import StreamPoster
+from ....app.registry_salt_delivery import SaltTransportAttempt
 from ....app.evidencing import ServiceConfig
 from ....acdc import Regery as NativeRegery
 from ....acdc.regeventing import Rever
@@ -933,7 +934,8 @@ class JoinDoer(doing.DoDoer):
 
         said names a retained member proposal. Return True after its exact
         logical reply authenticates, False after refusal, or None while quorum
-        remains pending. Public metadata is shown; no private key/root is read
+        remains pending. Bounded fanout permits one healthy submission and
+        cancels optional remaining peers. Public metadata is shown; no private key/root is read
         for display. The domain service owns all authority and consistency checks.
         """
         service = self.saltService
@@ -948,28 +950,44 @@ class JoinDoer(doing.DoDoer):
             return False
         outbound = service.approveReply(body, proposal=said)
         hab = self.hby.habByPre(body.pre)
-        children = []
+        children, unavailable = [], 0
         deadline = time.monotonic() + self.timeout
         try:
             for member in service.roster(body.pre).members:
                 if member.aid == hab.mhab.pre:
                     continue
-                poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member.aid,
-                                      topic='multisig', version=Vrsn_2_0)
-                poster.send(outbound.proposal, attachment=outbound.attachments, gvrsn=Vrsn_2_0)
-                pending = poster.deliver()
-                children.extend(pending)
-                self.extend(pending)
-            while service.state.proof(body.said) is None or any(not child.done for child in children):
+                try:
+                    poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member.aid,
+                                          topic='multisig', version=Vrsn_2_0)
+                    poster.send(outbound.proposal, attachment=outbound.attachments, gvrsn=Vrsn_2_0)
+                    pending = poster.deliver()
+                except (ConfigurationError, MissingEntryError, ValidationError):
+                    unavailable += 1
+                    continue
+                if pending:
+                    attempt = SaltTransportAttempt(pending, self.timeout)
+                    children.append(attempt)
+                    self.extend([attempt])
+                else:
+                    unavailable += 1
+            while True:
                 service.process()
                 self.exc.processEscrow()
+                authenticated = service.state.proof(body.said) is not None
+                delivered = any(child.done and child.error is None for child in children)
+                if authenticated and (delivered or all(child.done for child in children)):
+                    break
                 if time.monotonic() >= deadline:
-                    print('Registry salt reply or member delivery remains pending; retained approval is unchanged.')
-                    return None
+                    if not authenticated:
+                        print('Registry salt reply remains pending; retained approval is unchanged.')
+                        return None
+                    break
                 yield self.tock
         finally:
             self.remove(children)
         print(f'Authenticated registry salt reply: {body.said}; member custody is tracked separately.')
+        if unavailable or any(not child.done or child.error is not None for child in children):
+            print('Dissemination to some members remains pending; the authenticated proof is retained.')
         return True
 
     def vcp(self, attrs):

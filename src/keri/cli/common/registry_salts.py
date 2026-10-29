@@ -25,8 +25,9 @@ from ...app.grouping import Multiplexor, loadHandlers
 from ...app.indirecting import createHttpServer
 from ...app.registry_salt_service import RegistrySaltService, ROUTES
 from ...app.registry_salt_state import RegistrySaltState
+from ...app.registry_salt_delivery import SaltTransportAttempt
 from ...core import Kramer, Parser, Pruner
-from ...kering import ConfigurationError, MissingEntryError, UnverifiedReplyError
+from ...kering import ConfigurationError, MissingEntryError, UnverifiedReplyError, ValidationError
 from ...peer import Exchanger
 from . import acdc_v2, cesr_sending
 from .acdc_v2_ipex import Intake
@@ -160,26 +161,35 @@ class SaltDoer(doing.DoDoer):
         return body, args.proposal if args.operation == 'approve' else None
 
     def _fanout(self, peer, outbound):
-        """Start existing finite group delivery and return only owned child doers."""
+        """Return supervised member attempts and the number of unavailable routes."""
         if outbound.proposal is None:
-            return []
-        children = []
+            return [], 0
+        children, unavailable = [], 0
         roster = peer.service.roster(peer.hab.pre)
         for member in roster.members:
             if member.aid == peer.member.pre:
                 continue
-            poster = StreamPoster(hby=peer.hby, hab=peer.member, recp=member.aid,
-                                  topic='multisig', version=Vrsn_2_0)
-            poster.send(outbound.proposal, attachment=outbound.attachments, gvrsn=Vrsn_2_0)
-            children.extend(poster.deliver())
-        return children
+            try:
+                poster = StreamPoster(hby=peer.hby, hab=peer.member, recp=member.aid,
+                                      topic='multisig', version=Vrsn_2_0)
+                poster.send(outbound.proposal, attachment=outbound.attachments, gvrsn=Vrsn_2_0)
+                pending = poster.deliver()
+            except (ConfigurationError, MissingEntryError, ValidationError):
+                unavailable += 1
+                continue
+            if pending:
+                children.append(SaltTransportAttempt(pending, self.args.timeout))
+            else:
+                unavailable += 1
+        return children, unavailable
 
     def run(self, tymth, tock=0.0, **kwa):
         """Run the explicit action and release scheduled children before store closure.
 
-        HIO supplies tymth/tock/kwa. Yield while quorum, transport or service work
-        is pending. Exceptions propagate as CLI failure; success output describes
-        exact proof retention or transport, never inferred remote custody.
+        HIO supplies tymth/tock/kwa. Wait for quorum and bounded group delivery,
+        allowing one healthy submission before cancelling optional peers. An
+        authenticated proof remains successful when dissemination is pending.
+        Output never infers remote custody from transport completion.
         """
         self.wind(tymth)
         yield tock
@@ -242,16 +252,20 @@ class SaltDoer(doing.DoDoer):
                 print(json.dumps(dict(said=body.said, proposal=outbound.proposal.said,
                                       pending=peer.state.proof(body.said) is None)))
                 return
-            deliveries = self._fanout(peer, outbound)
+            deliveries, unavailable = self._fanout(peer, outbound)
             self.extend(deliveries)
             activity.callback(self.remove, deliveries)
             deadline = self.tyme + args.timeout
-            while peer.state.proof(body.said) is None or any(not child.done for child in deliveries):
+            while True:
                 peer.process()
+                authenticated = peer.state.proof(body.said) is not None
+                delivered = any(child.done and child.error is None for child in deliveries)
+                if authenticated and (delivered or all(child.done for child in deliveries)):
+                    break
                 if self.tyme >= deadline:
-                    if peer.state.proof(body.said) is None:
+                    if not authenticated:
                         raise TimeoutError('registry-salt reply is pending exact group approval')
-                    raise TimeoutError('registry-salt reply is authenticated but member fanout is pending')
+                    break
                 yield self.tock
             stream = peer.state.proof(body.said)
             if args.output:
@@ -263,7 +277,8 @@ class SaltDoer(doing.DoDoer):
                 peer.service.checkLive(body)
                 transport = yield from cesr_sending.send(self, args.endpoint, stream, args.timeout)
             print(json.dumps(dict(said=body.said, route=body.route, authenticated=True,
-                                  submitted=transport is not None)))
+                submitted=transport is not None, dissemination_pending=bool(unavailable or
+                    any(not child.done or child.error is not None for child in deliveries)))))
 
     def serve(self, peer, activity):
         """Run HTTP intake and the durable worker under the command's one scheduler.
