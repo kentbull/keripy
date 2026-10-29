@@ -388,7 +388,7 @@ def opening(args):
                 # Reuse the same retained semantic context as ordinary holder
                 # presentation; possession of a grant reference is not consent.
                 peer = Peer(hby, rgy, wallet, sections)
-                acdc = wallet.heldCredential(args.from_grant)['credential']
+                acdc = wallet.verification.heldCredential(args.from_grant)['credential']
                 if acdc.said != args.said:
                     raise ConfigurationError('admitted grant does not bind the requested credential')
             else:

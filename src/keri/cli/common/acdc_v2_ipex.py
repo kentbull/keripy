@@ -232,7 +232,7 @@ class ExchangeDoer(doing.DoDoer):
             elif self.verb in ('grant', 'offer'):
                 held = None
                 if args.from_grant:
-                    held = wallet.heldCredential(args.from_grant)
+                    held = wallet.verification.heldCredential(args.from_grant)
                     credential = held['credential']
                     artifacts = held['artifacts']
                 else:
@@ -345,7 +345,7 @@ class ExchangeDoer(doing.DoDoer):
                 if wallet.verification.evaluateGrant(exn.sad['p']) is not True:
                     raise ConfigurationError('credential graph is false or unresolved')
             if self.verb == 'admit':
-                wallet.recordAdmission(args.said, exn.said, consent=True)
+                wallet.verification.validateAdmission(args.said, exn.said, consent=True)
             if args.output:
                 with Path(args.output).open('xb') as stream:
                     stream.write(bytes(hab.replay(gvrsn=Vrsn_2_0)) + raw)

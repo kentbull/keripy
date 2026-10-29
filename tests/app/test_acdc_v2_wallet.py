@@ -279,47 +279,48 @@ def test_real_partial_and_full_grants_retain_separate_explicit_admissions(tmp_pa
                 receive(holder, gexn.raw + gatc, rgy=hrgy, exc=exc)
                 assert exc.complete(gexn.said)
                 with pytest.raises(ValidationError, match='no signed local admission'):
-                    wallet.heldCredential(gexn.said)
-                assert wallet.inventory()['held'] == [record for record in wallet.admissions(full.said)]
+                    wallet.verification.heldCredential(gexn.said)
+                assert wallet.inventory()['held'] == [record for record in wallet.verification.admissions(full.said)]
                 aexn, aatc = admit(hhab, 'I consent to retain this disclosure', gexn)
                 receive(holder, aexn.raw + aatc, rgy=hrgy, exc=exc)
                 assert exc.complete(aexn.said)
                 # Signed protocol consent is sufficient; no second wallet write
                 # may be needed to recover the exact disclosure after restart.
-                assert wallet.heldCredential(gexn.said)['admit'] == aexn.said
+                assert wallet.verification.heldCredential(gexn.said)['admit'] == aexn.said
                 with pytest.raises(ValidationError, match='consent'):
-                    wallet.recordAdmission(gexn.said, aexn.said)
-                record = wallet.recordAdmission(gexn.said, aexn.said, consent=True)
-                assert wallet.recordAdmission(gexn.said, aexn.said, consent=True) == record
+                    wallet.verification.validateAdmission(gexn.said, aexn.said)
+                record = wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True)
+                assert wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True) == record
                 pairs.append((gexn.said, aexn.said))
             assert pairs[0][0] != pairs[1][0]
-            assert len(wallet.admissions(full.said)) == 2
+            assert len(wallet.verification.admissions(full.said)) == 2
             assert {record.grant for record in wallet.inventory()['held']} == {pair[0] for pair in pairs}
-            assert isinstance(wallet.heldCredential(pairs[0][0])['credential'].sad['a']['private'], str)
-            assert wallet.heldCredential(pairs[1][0])['credential'].sad['a']['private']['value'] == 'hidden-first'
+            assert isinstance(wallet.verification.heldCredential(pairs[0][0])['credential'].sad['a']['private'], str)
+            assert wallet.verification.heldCredential(pairs[1][0])['credential'].sad['a']['private']['value'] == 'hidden-first'
             # Missing/synthetic protocol IDs and bare notifications never create inventory.
             notices.add({'r': '/exn/ipex/grant', 'd': 'synthetic'})
             with pytest.raises(ValidationError):
-                wallet.recordAdmission('synthetic', pairs[0][1], consent=True)
+                wallet.verification.validateAdmission('synthetic', pairs[0][1], consent=True)
         finally:
-            # Discard only this test-owned application store. The next process
+            # Discard only this test-owned issuer credential store. The next process
             # must recover both admissions from Habery exchange evidence alone.
             wallet.reger.close(clear=True)
             wallet.close()
             hrgy.close()
     with encrypted('inventory-holder', tmp_path, holderKey) as holder:
+        from keri.acdc.ipexing import AcdcV2IpexVerification
+
         hrgy = regery(holder, tmp_path)
-        exc = Exchanger(hby=holder, handlers=[])
-        loadHandlers(holder, exc, Notices(), rgy=hrgy)
-        wallet = Wallet(holder, hrgy, exc=exc)
+        # Retained consent and disclosure need only Habery/Regery. Do not open
+        # issuer credential storage or construct an application Wallet on restart.
+        verification = AcdcV2IpexVerification(holder, hrgy)
         try:
-            assert len(wallet.admissions(full.said)) == 2
-            assert {record.admit for record in wallet.inventory()['held']} == {pair[1] for pair in pairs}
-            assert wallet.recordAdmission(*pairs[0], consent=True).grant == pairs[0][0]
-            assert isinstance(wallet.heldCredential(pairs[0][0])['credential'].sad['a']['private'], str)
-            assert wallet.heldCredential(pairs[1][0])['credential'].sad['a']['private']['value'] == 'hidden-first'
+            assert len(verification.admissions(full.said)) == 2
+            assert {record.admit for record in verification.admissions()} == {pair[1] for pair in pairs}
+            assert verification.validateAdmission(*pairs[0], consent=True).grant == pairs[0][0]
+            assert isinstance(verification.heldCredential(pairs[0][0])['credential'].sad['a']['private'], str)
+            assert verification.heldCredential(pairs[1][0])['credential'].sad['a']['private']['value'] == 'hidden-first'
         finally:
-            wallet.close()
             hrgy.close()
 
 
@@ -375,7 +376,7 @@ def test_handlerless_retention_cannot_become_wallet_admission_after_registration
         try:
             assert exc.complete(gexn.said) and exc.complete(aexn.said)
             with pytest.raises(ValidationError, match='semantic acceptance'):
-                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
+                wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True)
             class AcceptsEverything:
                 """Counterexample: route registration claims acceptance without proof."""
                 resource = '/ipex/grant'
@@ -386,14 +387,9 @@ def test_handlerless_retention_cannot_become_wallet_admission_after_registration
 
             exc.routes['/ipex/grant'] = AcceptsEverything()
             with pytest.raises(ValidationError, match='semantic acceptance'):
-                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
-            wallet.verification = True
-            with pytest.raises(ConfigurationError, match='concrete ACDC v2 IPEX verification'):
-                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
-            from keri.acdc.ipexing import AcdcV2IpexVerification
-            wallet.verification = AcdcV2IpexVerification(holder, rgy)
+                wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True)
             assert wallet.inventory()['held'] == []
-            assert wallet.admissions(credential.said) == []
+            assert wallet.verification.admissions(credential.said) == []
         finally:
             wallet.close()
             rgy.close()
@@ -636,12 +632,12 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
                 assert wallet.verification.evaluateGrant(gexn.said) is True
                 aexn, aatc = admit(hby.habByName('holder'), 'retain this exact view', gexn)
                 peer.ingest(aexn.raw + aatc)
-                wallet.recordAdmission(gexn.said, aexn.said, consent=True)
-                before = wallet.heldCredential(gexn.said)
+                wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True)
+                before = wallet.verification.heldCredential(gexn.said)
                 # Cache a fuller attribute section. Retained evidence and any
                 # caller projecting that evidence still see only the original.
                 peer.ingest(wire(messaging.sectattr(full.sad['a'])))
-                after = wallet.heldCredential(gexn.said)
+                after = wallet.verification.heldCredential(gexn.said)
                 assert after['proof'] == before['proof']
                 retained = after['credential'] if schemaUse == 'own' else next(
                     nest.serder for nest in loadParsedNestedSubstreams(hby, gexn.said)
@@ -728,7 +724,7 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
                 receive(hby, aexn.raw + aatc, rgy=rgy, exc=exc)
                 assert exc.complete(aexn.said)
                 pairs.append((gexn.said, aexn.said))
-            wallet.recordAdmission(*pairs[0], consent=True)
+            wallet.verification.validateAdmission(*pairs[0], consent=True)
         finally:
             wallet.close()
             rgy.close()
@@ -741,16 +737,16 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
             # Both signed Admits remain history without a second application
             # consent record. Fresh use still requires the current graph policy.
             assert {record.admit for record in wallet.inventory()['held']} == {pair[1] for pair in pairs}
-            assert wallet.heldCredential(pairs[0][0])['credential'].said == origin.said
+            assert wallet.verification.heldCredential(pairs[0][0])['credential'].said == origin.said
             for policy in (None, ScorePolicy(permitted=False)):
                 wallet.verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=policy)
                 assert wallet.verification.verifyAccepted(pairs[1][0], '/ipex/grant')
                 assert wallet.verification.evaluateGrant(pairs[1][0]) is (None if policy is None else False)
                 with pytest.raises(ValidationError, match='semantic acceptance'):
-                    wallet.recordAdmission(*pairs[1], consent=True)
+                    wallet.verification.validateAdmission(*pairs[1], consent=True)
                 assert len(wallet.inventory()['held']) == 2
             wallet.verification = AcdcV2IpexVerification(hby, rgy, graphPolicy=ScorePolicy())
-            assert wallet.recordAdmission(*pairs[1], consent=True).grant == pairs[1][0]
+            assert wallet.verification.validateAdmission(*pairs[1], consent=True).grant == pairs[1][0]
             assert len(wallet.inventory()['held']) == 2
         finally:
             wallet.close()

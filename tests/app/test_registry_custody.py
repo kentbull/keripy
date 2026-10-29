@@ -151,8 +151,8 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
         receive(holder, original.raw + atc, rgy=rgy, exc=exc)
         response, ratc = admit(hhab, 'explicit holder consent', original)
         receive(holder, response.raw + ratc, rgy=rgy, exc=exc)
-        wallet.recordAdmission(original.said, response.said, consent=True)
-        retained = wallet.heldCredential(original.said)['proof']
+        wallet.verification.validateAdmission(original.said, response.said, consent=True)
+        retained = wallet.verification.heldCredential(original.said)['proof']
         regid = None
         if custodyState in ('corrupt', 'old-aeid'):
             registry = Registrar(rgy=rgy).makeRegistry(name='private capability', prefix=hhab.pre)
@@ -170,7 +170,7 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
                 holder.ks.custody.pin((regid,), row)
             with pytest.raises(AuthError):
                 wallet.custody.derive(regid, 1, credential.said, 'issued')
-        assert wallet.heldCredential(original.said)['proof'] == retained
+        assert wallet.verification.heldCredential(original.said)['proof'] == retained
     with ExitStack() as stack:
         holder = stack.enter_context(holderContext())
         verifier = stack.enter_context(encrypted('verifier-' + custodyState, tmp_path, keys['verifier']))
@@ -189,7 +189,7 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
         assert inventory['held'][0].grant == original.said
         if custodyState == 'unencrypted':
             assert not holder.mgr.aeid
-        assert wallet.heldCredential(original.said)['proof'] == retained
+        assert wallet.verification.heldCredential(original.said)['proof'] == retained
         if regid is not None:
             capability = RegistryCustody(holder, hrgy)
             with pytest.raises(AuthError):
@@ -200,4 +200,4 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
         receive(verifier, hhab.replay(gvrsn=Vrsn_2_0))
         receive(verifier, onward.raw + patc, rgy=vrgy, exc=vexc)
         assert vexc.complete(onward.said)
-        assert wallet.heldCredential(original.said)['proof'] == retained
+        assert wallet.verification.heldCredential(original.said)['proof'] == retained

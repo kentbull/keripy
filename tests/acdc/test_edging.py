@@ -679,17 +679,17 @@ def test_authenticated_graph_retention_is_separate_from_wallet_use(graph, farTru
         try:
             if verdict is not True:
                 with pytest.raises(ValidationError, match='semantic acceptance'):
-                    wallet.recordAdmission(exn.said, reply.said, consent=True)
+                    wallet.verification.validateAdmission(exn.said, reply.said, consent=True)
                 # A signed Admit remains inspectable history; it does not turn
                 # false graph policy into permission for a fresh use.
-                assert wallet.heldCredential(exn.said)['admit'] == reply.said
+                assert wallet.verification.heldCredential(exn.said)['admit'] == reply.said
                 policy.validity = lambda node: node.said == near.said or operator == 'NI2I'
-            row = wallet.recordAdmission(exn.said, reply.said, consent=True)
+            row = wallet.verification.validateAdmission(exn.said, reply.said, consent=True)
             policy.validity = lambda node: None
             assert verification.evaluateGrant(exn.said) is None
             with pytest.raises(ValidationError, match='semantic acceptance'):
-                wallet.recordAdmission(exn.said, reply.said, consent=True)
-            assert wallet.heldCredential(exn.said)['admit'] == row.admit
+                wallet.verification.validateAdmission(exn.said, reply.said, consent=True)
+            assert wallet.verification.heldCredential(exn.said)['admit'] == row.admit
             assert tuple(receiver.db.enst.get((exn.said,))) == retained
         finally:
             wallet.close()

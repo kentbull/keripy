@@ -700,12 +700,12 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
             for peer in issuerTeam[3]:
                 peer.receive(admitted)
             for wallet in wallets[3:]:
-                wallet.recordAdmission(original.said, response.said, consent=True)
-                assert wallet.heldCredential(original.said)['credential'].said == credential.said
+                wallet.verification.validateAdmission(original.said, response.said, consent=True)
+                assert wallet.verification.heldCredential(original.said)['credential'].said == credential.said
 
             # The group holder presents the retained disclosure with a distinct
             # grant and a newly approved binding. The first grant stays historical.
-            held = wallets[3].heldCredential(original.said)
+            held = wallets[3].verification.heldCredential(original.said)
             presented, patc = grant(holder, issuer.mhab.pre, 'group presentation', origin=held['proof'])
             secondBinding, stream = presentation(presented.raw + patc, presented, firstBinding.said, 2)
             delivered = approveExchange(holderTeam, stream)
@@ -722,7 +722,7 @@ def test_group_issuer_holder_admission_presentation_and_revocation_converge(memb
                 assert vet(issuerRip, [issued, revoked], db=hby.db, acdc=credential,
                            blinder=revokedOpening).state == 'revoked'
                 assert rgy.store.headEvent(holderRip.said).said == secondBinding.said
-            assert all(wallet.heldCredential(original.said)['grant'].said == original.said
+            assert all(wallet.verification.heldCredential(original.said)['grant'].said == original.said
                        for wallet in wallets[3:])
             assert all(endpoint.requests > 0 for endpoint in endpoints)
 
@@ -876,7 +876,7 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
     assert exc.complete(reply.said)
     wallet = Wallet(hby, rgy, exc=exc, verification=verification)
     try:
-        wallet.recordAdmission(incoming.said, reply.said, consent=True)
+        wallet.verification.validateAdmission(incoming.said, reply.said, consent=True)
         plan = [[near.schema['$id'], '/', []], [far.schema['$id'], '/e/proof/_/', []]]
         request, ratc = apply(groups[1].mhab, group.pre, 'exact graph request', modifiers=dict(dp=plan))
         parser.parse(ims=bytearray(request.raw + ratc))
