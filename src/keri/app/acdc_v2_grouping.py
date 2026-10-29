@@ -5,7 +5,7 @@ from .. import Vrsn_2_0
 from ..acdc.regeventing import Rever, vetBlind
 from ..core import (Blinder, BlindState, BoundState, Codens, Counter, Diger,
                     Kramer, Number, Parser, Prefixer, Pruner, SerderKERI, messagize)
-from ..kering import ConfigurationError, Ilks, ValidationError
+from ..kering import ConfigurationError, Ilks, MissingRegistryError, ValidationError
 from ..peer.exchanging import serializeParsedSubstream
 from .grouping import (Counselor, Multiplexor, loadHandlers,
                        multisigExn, multisigRipExn, multisigBupExn)
@@ -68,6 +68,8 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
         self.mailbox.parser.scy = scy
         self.parser = Parser(kvy=self.mux.kvy, rgy=self.rever, exc=exc, scy=scy,
                              version=Vrsn_2_0, local=True)
+        self.registry = RegistryApproval(hby, rgy, ghab, exc, self.mux,
+                                         self.parser, self.counselor)
         doers = [self.counselor, self.mailbox, doing.doify(self.escrowDo)]
         if self.pruner is not None:
             doers.append(self.pruner)
@@ -79,10 +81,7 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
             Returns:
                 None. Only ordinary processors can accept evidence; delivery alone never
                 creates local approval. Unexpected processor/storage errors propagate."""
-        self.mux.kvy.processEscrows()
-        self.counselor.processEscrows()
-        self.rever.processEscrows()
-        self.exc.processEscrow()
+        self.registry.process()
 
     def escrowDo(self, tymth, tock=0.03125, **kwa):
         """Schedule bounded group dependency passes for this coordinator's lifetime.
@@ -131,44 +130,8 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
             self.extend(poster.deliver())
 
     def registryProposal(self, stream):
-        """Authenticate one exact registry proposal without signing its anchor.
-
-            Args:
-                stream (bytes): Signed group wrapper with proposed TEL and KEL bodies.
-
-            Returns:
-                tuple: Exact proposed registry event, controlling group anchor,
-                    and optional explicitly disclosed event opening.
-
-            Raises:
-                ValidationError: Expected wrapper is absent, unauthenticated, or malformed.
-
-            receive may retain authenticated evidence, but this read path adds no local
-            signature and cannot substitute for approveRegistry."""
-        parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False) or []
-        proposals = [dom for dom in parsed if dom.serder.ilk == Ilks.exn
-                     and dom.serder.route in ('/multisig/rip', '/multisig/bup')]
-        if len(proposals) != 1:
-            raise ValidationError('expected one ACDC v2 registry proposal')
-        self.receive(stream)
-        proposal = proposals[0]
-        if not self.exc.complete(proposal.serder.said):
-            raise ValidationError('registry proposal is not authenticated')
-        self.mux.validate(proposal.serder, nests=proposal.nests)
-        tel = proposal.nests[0]
-        proofs = ((tel.get('bsqs', []) + tel.get('bsss', [])) if isinstance(tel, dict)
-                  else tel.bsqs + tel.bsss)
-        if len(proofs) > 1:
-            raise ValidationError('registry proposal carries multiple event openings')
-        opening = None
-        if proofs:
-            clan = BlindState if len(proofs[0]) == 4 else BoundState
-            opening = Blinder(data=clan(*proofs[0]))
-            event = tel['serder'] if isinstance(tel, dict) else tel.serder
-            vetBlind(opening, blid=event.sad.get('b', ''))
-        children = tuple(nest['serder'] if isinstance(nest, dict) else nest.serder
-                         for nest in proposal.nests)
-        return children + (opening,)
+        """Inspect an authenticated exact registry proposal without signing it."""
+        return self.registry.proposal(stream)
 
     def exchangeProposal(self, stream):
         """Authenticate one exact IPEX proposal and reconstruct its wrapped bytes.
@@ -196,58 +159,8 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
         return serializeParsedSubstream(proposal.nests[0])
 
     def approveRegistry(self, event, anchor=None, *, opening=None):
-        """Sign the exact proposed TEL anchor and start ordinary threshold completion.
-
-            Args:
-                event (SerderACDC): ACDC v2 registry event this member explicitly approves.
-                anchor (SerderKERI | None): Exact proposed group KEL event; None reuses
-                    pending local work or authors a new suitable interaction/rotation.
-                opening (Blinder | None): Explicit opening published with a ``bup``.
-
-            Returns:
-                tuple: Member proposal wrapper and detached attachments for fanout.
-
-            Raises:
-                ValidationError: Anchor identity/type/body does not exclusively seal event.
-
-            Local retries reuse partial events rather than fork them. Acceptance still
-            requires Counselor quorum/witness/delegation and normal Rever verification."""
-        if event.ilk not in (Ilks.rip, Ilks.bup):
-            raise ValidationError('selected ACDC v2 group profile supports only rip and bup')
-        if opening is not None:
-            if event.ilk != Ilks.bup or not isinstance(opening, Blinder):
-                raise ValidationError('registry opening requires an exact bup proposal')
-            vetBlind(opening, blid=event.sad['b'])
-        seal = dict(s=event.sad['n'], d=event.said)
-        if anchor is None:
-            # A command retry reuses its partial event instead of forking it.
-            sn = self.ghab.kever.sn + 1
-            dig = self.hby.db.pses.getLast(keys=self.ghab.pre, on=sn)
-            anchor = self.hby.db.evts.get((self.ghab.pre, dig)) if dig else None
-            if anchor is None:
-                author = self.ghab.rotate if self.ghab.kever.estOnly else self.ghab.interact
-                stream = author(data=[seal], version=Vrsn_2_0, gvrsn=Vrsn_2_0)
-                anchor = SerderKERI(raw=stream)
-        if (anchor.pre != self.ghab.pre or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
-                or anchor.sad.get('a') != [seal]):
-            raise ValidationError('group proposal does not exclusively anchor the requested TEL')
-        if anchor.ilk in (Ilks.rot, Ilks.drt):
-            stream = self.ghab.rotate(serder=anchor, smids=self.ghab.smids,
-                rmids=self.ghab.rmids, gvrsn=Vrsn_2_0)
-        else:
-            stream = messagize(anchor, sigers=self.ghab.sign(anchor.raw), gvrsn=Vrsn_2_0)
-        self.parser.parse(ims=bytearray(stream))
-        tel = (messagize(event, bonds=[opening.data], gvrsn=Vrsn_2_0)
-               if opening is not None else
-               event.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
-        self.rever.processEvent(event)
-        propose = multisigRipExn if event.ilk == Ilks.rip else multisigBupExn
-        wrapper, attachments = propose(self.ghab, tel, stream)
-        self.receive(wrapper.raw + attachments)  # explicit local approval
-        self.counselor.start(self.ghab, Prefixer(qb64=self.ghab.pre),
-                             Number(num=anchor.sn), Diger(qb64=anchor.said))
-        self.process()
-        return wrapper, attachments
+        """Explicitly approve one exact registry event through the shared signer."""
+        return self.registry.approve(event, anchor, opening=opening)
 
     def approveExchange(self, stream):
         """Add this member's signature to one exact group EXN and retain its view.
@@ -299,3 +212,158 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
                 bool: Whether its authenticated threshold and protocol workflow completed.
                 Completion alone is not application graph authorization."""
         return self.exc.complete(said)
+
+
+class RegistryApproval:
+    """Approve exact native registry proposals using caller-owned group processors.
+
+    This passive collaborator has no mailbox, scheduler, transport, or custody
+    owner. GroupHab signs, Multiplexor records explicit consent, Counselor drives
+    the group KEL, and Rever accepts the TEL against accepted controller evidence.
+    """
+
+    def __init__(self, hby, rgy, ghab, exc, mux, parser, counselor):
+        """Borrow existing processors without opening stores or scheduling work.
+
+        Args:
+            hby (Habery): Local KEL and proposal evidence owner.
+            rgy (Regery): Native registry store shared with the injected Rever.
+            ghab (GroupHab): Accepted local group whose exact anchors may be signed.
+            exc (Exchanger): Existing authenticated proposal router.
+            mux (Multiplexor): Existing explicit-consent and child-replay owner.
+            parser (Parser): Existing KEL, TEL, and EXN intake parser.
+            counselor (Counselor): Existing group completion owner.
+        """
+        if not isinstance(ghab, GroupHab) or not ghab.accepted:
+            raise ConfigurationError('registry approval requires an accepted local GroupHab')
+        self.hby, self.rgy, self.ghab = hby, rgy, ghab
+        self.exc, self.mux, self.parser, self.counselor = exc, mux, parser, counselor
+        self.rever = mux.rgy
+        if (self.rever is None or parser.rgy is not self.rever
+                or parser.kvy is not mux.kvy):
+            raise ConfigurationError('registry approval requires shared native KEL and TEL processors')
+
+    def validateEvent(self, event):
+        """Check event identity and accepted registry control before any signature.
+
+        Missing accepted inception evidence raises MissingRegistryError so callers
+        can retain the notification pending. A known foreign controller is invalid.
+        Neither case authorizes signing a fresh local group anchor.
+        """
+        if (event.ilk not in (Ilks.rip, Ilks.bup) or event.pvrsn != Vrsn_2_0
+                or not event.verify()):
+            raise ValidationError('selected ACDC v2 group profile supports only valid rip and bup')
+        if event.ilk == Ilks.rip:
+            rip = event
+        else:
+            rip = self.rgy.store.seqEvent(event.sad['rd'], 0)
+            if rip is None:
+                raise MissingRegistryError('registry proposal needs accepted inception evidence')
+        if rip.ilk != Ilks.rip or rip.sad['i'] != self.ghab.pre:
+            raise ValidationError('registry proposal is controlled by a different group')
+
+    def process(self):
+        """Advance borrowed processors; acceptance remains their ordinary decision."""
+        self.mux.kvy.processEscrows()
+        self.counselor.processEscrows()
+        self.rever.processEscrows()
+        self.exc.processEscrow()
+
+    def receive(self, stream):
+        """Retain authenticated evidence without creating local approval."""
+        self.parser.parse(ims=bytearray(stream), local=True)
+        self.process()
+
+    def proposal(self, stream):
+        """Authenticate one exact registry proposal without signing its anchor.
+
+            Args:
+                stream (bytes): Signed group wrapper with proposed TEL and KEL bodies.
+
+            Returns:
+                tuple: Exact proposed registry event, controlling group anchor,
+                    and optional explicitly disclosed event opening.
+
+            Raises:
+                ValidationError: Expected wrapper is absent, unauthenticated, or malformed.
+
+            receive may retain authenticated evidence, but this read path adds no local
+            signature and cannot substitute for approve."""
+        parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False) or []
+        proposals = [dom for dom in parsed if dom.serder.ilk == Ilks.exn
+                     and dom.serder.route in ('/multisig/rip', '/multisig/bup')]
+        if len(proposals) != 1:
+            raise ValidationError('expected one ACDC v2 registry proposal')
+        self.receive(stream)
+        proposal = proposals[0]
+        if not self.exc.complete(proposal.serder.said):
+            raise ValidationError('registry proposal is not authenticated')
+        self.mux.validate(proposal.serder, nests=proposal.nests)
+        tel = proposal.nests[0]
+        proofs = ((tel.get('bsqs', []) + tel.get('bsss', [])) if isinstance(tel, dict)
+                  else tel.bsqs + tel.bsss)
+        if len(proofs) > 1:
+            raise ValidationError('registry proposal carries multiple event openings')
+        opening = None
+        if proofs:
+            clan = BlindState if len(proofs[0]) == 4 else BoundState
+            opening = Blinder(data=clan(*proofs[0]))
+            event = tel['serder'] if isinstance(tel, dict) else tel.serder
+            vetBlind(opening, blid=event.sad.get('b', ''))
+        children = tuple(nest['serder'] if isinstance(nest, dict) else nest.serder
+                         for nest in proposal.nests)
+        self.validateEvent(children[0])
+        return children + (opening,)
+
+    def approve(self, event, anchor=None, *, opening=None):
+        """Sign the exact proposed TEL anchor and start ordinary threshold completion.
+
+            Args:
+                event (SerderACDC): ACDC v2 registry event this member explicitly approves.
+                anchor (SerderKERI | None): Exact proposed group KEL event; None reuses
+                    pending local work or authors a new suitable interaction/rotation.
+                opening (Blinder | None): Explicit opening published with a ``bup``.
+
+            Returns:
+                tuple: Member proposal wrapper and detached attachments for fanout.
+
+            Raises:
+                ValidationError: Anchor identity/type/body does not exclusively seal event.
+
+            Local retries reuse partial events rather than fork them. Acceptance still
+            requires Counselor quorum/witness/delegation and normal Rever verification."""
+        self.validateEvent(event)
+        if opening is not None:
+            if event.ilk != Ilks.bup or not isinstance(opening, Blinder):
+                raise ValidationError('registry opening requires an exact bup proposal')
+            vetBlind(opening, blid=event.sad['b'])
+        seal = dict(s=event.sad['n'], d=event.said)
+        if anchor is None:
+            # A command retry reuses its partial event instead of forking it.
+            sn = self.ghab.kever.sn + 1
+            dig = self.hby.db.pses.getLast(keys=self.ghab.pre, on=sn)
+            anchor = self.hby.db.evts.get((self.ghab.pre, dig)) if dig else None
+            if anchor is None:
+                author = self.ghab.rotate if self.ghab.kever.estOnly else self.ghab.interact
+                stream = author(data=[seal], version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+                anchor = SerderKERI(raw=stream)
+        if (anchor.pre != self.ghab.pre or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
+                or anchor.sad.get('a') != [seal]):
+            raise ValidationError('group proposal does not exclusively anchor the requested TEL')
+        if anchor.ilk in (Ilks.rot, Ilks.drt):
+            stream = self.ghab.rotate(serder=anchor, smids=self.ghab.smids,
+                rmids=self.ghab.rmids, gvrsn=Vrsn_2_0)
+        else:
+            stream = messagize(anchor, sigers=self.ghab.sign(anchor.raw), gvrsn=Vrsn_2_0)
+        self.parser.parse(ims=bytearray(stream), local=True)
+        tel = (messagize(event, bonds=[opening.data], gvrsn=Vrsn_2_0)
+               if opening is not None else
+               event.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
+        self.rever.processEvent(event)
+        propose = multisigRipExn if event.ilk == Ilks.rip else multisigBupExn
+        wrapper, attachments = propose(self.ghab, tel, stream)
+        self.receive(wrapper.raw + attachments)  # explicit local approval
+        self.counselor.start(self.ghab, Prefixer(qb64=self.ghab.pre),
+                             Number(num=anchor.sn), Diger(qb64=anchor.said))
+        self.process()
+        return wrapper, attachments

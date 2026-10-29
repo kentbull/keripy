@@ -6,6 +6,8 @@ keri.kli.commands.multisig module
 """
 import argparse
 import json
+import math
+import time
 from ordered_set import OrderedSet as oset
 
 from hio.base import doing
@@ -15,29 +17,37 @@ from prettytable import PrettyTable
 from ...common import Parsery, setupHby, printIdentifier, parseVersion
 
 from ....kering import (TraitCodex, ConfigurationError,
-                        Kinds, MissingAnchorError, Version, Vrsn_1_0)
+                        Kinds, Ilks, MissingAnchorError, MissingRegistryError, ValidationError,
+                        Version, Vrsn_1_0, Vrsn_2_0)
 from ....app import (HaberyDoer, MailboxDirector, WitnessInquisitor,
                      Notifier, Multiplexor, Counselor, Organizer, Poster,
                      multisigInceptExn, multisigInteractExn, multisigRotateExn,
                      multisigRpyExn, multisigRegistryInceptExn, multisigIssueExn,
                      multisigRevokeExn)
 from ....app.grouping import loadHandlers
+from ....app.acdc_v2_grouping import RegistryApproval
+from ....app.forwarding import StreamPoster
+from ....app.evidencing import ServiceConfig
+from ....acdc import Regery as NativeRegery
+from ....acdc.regeventing import Rever
 
 from ....core import (Prefixer, Number, Diger, Tholder,
-                      Schemer, Parser, Revery, SerderKERI,
+                      Schemer, Kramer, Pruner, Parser, Revery, SerderKERI,
                       SerderACDC, TraitDex, messagize)
 
-from ....peer import Exchanger, cloneMessage
+from ....peer import Exchanger, cloneMessage, serializeMessage
 from ....vdr import Verifier, Regery, Credentialer, Registrar
 
 
 logger = ogler.getLogger()
 
-parser = argparse.ArgumentParser(description='Join group multisig inception, rotation or interaction event.',
+parser = argparse.ArgumentParser(description='Approve pending group multisig events, including native registry proposals.',
                                  parents=[Parsery.keystore()])
 parser.set_defaults(handler=lambda args: join(args))
 parser.add_argument('--group', '-g', help='human-readable name for the multisig group identifier prefix', required=False, default=None)
-parser.add_argument("--auto", "-Y", help="auto approve any delegation request non-interactively", action="store_true")
+parser.add_argument("--auto", "-Y", help="approve pending multisig events non-interactively", action="store_true")
+parser.add_argument('--timeout', type=float, default=30.0,
+                    help='seconds to await native registry acceptance and member delivery')
 parser.add_argument('--version', default=None, required=False, type=parseVersion,
                     help='KERI protocol version for mailbox queries while joining, such as 1.0 or 2.0')
 
@@ -55,7 +65,8 @@ def join(args):
     group = args.group
     version = args.version
 
-    joinDoer = JoinDoer(name=name, base=base, bran=bran, group=group, auto=auto, version=version)
+    joinDoer = JoinDoer(name=name, base=base, bran=bran, group=group, auto=auto,
+                        version=version, timeout=args.timeout)
 
     doers = [joinDoer]
     return doers
@@ -66,7 +77,7 @@ class JoinDoer(doing.DoDoer):
 
     """
 
-    def __init__(self, name, base, bran, group, auto=False, version=None):
+    def __init__(self, name, base, bran, group, auto=False, version=None, timeout=30.0):
         """ Create doer for polling for group multisig events and either approve automatically or prompt user
 
         Parameters:
@@ -76,7 +87,12 @@ class JoinDoer(doing.DoDoer):
             group (str): human-readable name for the multisig identifier prefix
             auto (bool): non-interactively auto approve any inception, rotation, interaction, or other event
                          while using the default group of "default-group"
+            version (Versionage | None): Protocol version for existing join processors.
+            timeout (float): Positive native registry acceptance and delivery deadline.
         """
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ConfigurationError('--timeout must be positive')
+        self.timeout = timeout
         self.group = group
         self.version = version
         self.hby = setupHby(name=name, base=base, bran=bran, version=self.version)
@@ -93,12 +109,29 @@ class JoinDoer(doing.DoDoer):
         if self.version is not None:
             parser_kwa["version"] = self.version
 
-        self.psr = Parser(kvy=self.hby.kvy, tvy=self.rgy.tvy,
-                          rvy=self.rvy, vry=self.verifier, exc=self.exc,
-                          **parser_kwa)
-
-        mux = Multiplexor(hby=self.hby, notifier=self.notifier)
+        # Native TEL intake shares the existing local and mailbox parsers. It
+        # does not introduce another coordinator or autonomous mailbox lifecycle.
+        self.rgyV2 = (NativeRegery(hby=self.hby, name=name, base=base)
+                      if (self.version or Version) == Vrsn_2_0 else None)
+        self.reverV2 = (Rever(db=self.hby.db, reger=self.rgyV2.baser)
+                        if self.rgyV2 is not None else None)
+        mux_kwa = dict(exc=self.exc, rgy=self.reverV2) if self.reverV2 is not None else {}
+        mux = Multiplexor(hby=self.hby, notifier=self.notifier, **mux_kwa)
         self.mux = mux
+        self.pruner = None
+        kvy = self.hby.kvy
+        if self.reverV2 is not None:
+            # Preserve the native coordinator's mandatory KRAM policy at each
+            # intake boundary, with one cache owner and one pruning lifecycle.
+            kvy = mux.kvy
+            kvy.kramer = Kramer(db=self.hby.db, cf=ServiceConfig(), cues=kvy.cues)
+            self.hby.kvy.kramer = kvy.kramer
+            self.rvy = mux.rvy
+            self.pruner = Pruner(kvy.kramer, tock=1.0)
+        self.psr = Parser(kvy=kvy, tvy=self.rgy.tvy,
+                          rvy=self.rvy, vry=self.verifier, exc=self.exc,
+                          rgy=self.reverV2, **parser_kwa)
+
         loadHandlers(exc=self.exc, mux=mux)
         self.counselor = Counselor(hby=self.hby, version=self.version, kind=Kinds.json)
 
@@ -107,14 +140,23 @@ class JoinDoer(doing.DoDoer):
                                          verifier=self.verifier)
 
         kwa = dict(version=self.version, gvrsn=self.version, kind=Kinds.json) if self.version is not None else {}
+        if self.reverV2 is not None:
+            kwa.update(kvy=self.mux.kvy, rvy=self.rvy)
         self.mbx = MailboxDirector(hby=self.hby, exc=self.exc, topics=['/receipt', '/multisig', '/replay',
                                                                        '/delegate'],
                                    **kwa)
+        self.mbx.parser.rgy = self.reverV2
         self.postman = Poster(hby=self.hby, version=self.version, kind=Kinds.json)
 
         doers = [self.hbyDoer, self.witq,  self.mbx, self.counselor, self.registrar, self.credentialer, self.postman]
         self.toRemove = list(doers)
         doers.extend([doing.doify(self.joinDo)])
+        if self.reverV2 is not None:
+            escrow = doing.doify(self.registryEscrowDo)
+            doers.append(escrow)
+            self.toRemove.append(escrow)
+            doers.append(self.pruner)
+            self.toRemove.append(self.pruner)
         self.auto = auto
         super(JoinDoer, self).__init__(doers=doers)
 
@@ -151,6 +193,8 @@ class JoinDoer(doing.DoDoer):
                     done = yield from self.rotate(attrs)
                 case '/multisig/rpy':
                     done = yield from self.rpy(attrs)
+                case '/multisig/rip' | '/multisig/bup':
+                    done = yield from self.registry(attrs)
                 case '/multisig/vcp':
                     done = yield from self.vcp(attrs)
                 case '/multisig/iss':
@@ -163,7 +207,7 @@ class JoinDoer(doing.DoDoer):
             if done:
                 self.notifier.noter.notes.rem(keys=keys)
 
-            else:
+            elif done is not None or route not in ('/multisig/rip', '/multisig/bup'):
                 delete = input(f"\nDelete event [Y|n]? ")
                 if delete in ("Y", "y"):
                     self.notifier.noter.notes.rem(keys=keys)
@@ -171,6 +215,92 @@ class JoinDoer(doing.DoDoer):
             yield self.tock
 
         self.remove(self.toRemove)
+
+    def exit(self, deeds=None):
+        """Close native storage on owner exit, after cancelling owned children.
+
+        Removing individual doers also calls exit with an explicit deeds queue;
+        that narrower cancellation must leave the shared TEL store open.
+        """
+        try:
+            super().exit(deeds=deeds)
+        finally:
+            if deeds is None and self.rgyV2 is not None and self.rgyV2.store.opened:
+                self.rgyV2.close()
+
+    def registryEscrowDo(self, tymth, tock=0.03125, **kwa):
+        """Retry native TEL dependencies only while the join command is running."""
+        yield tock
+        while True:
+            self.reverV2.processEscrows()
+            yield tock
+
+    def registry(self, attrs):
+        """Approve a retained native rip or bup without authoring a credential.
+
+        Args:
+            attrs (dict): Notification route and authenticated proposal SAID.
+
+        Returns:
+            bool | None: True after the exact TEL event is accepted, False after
+                a human decline, or None while accepted inception evidence is
+                missing. Pending notifications remain available on the next run.
+        """
+        if self.rgyV2 is None:
+            raise ConfigurationError('native registry approval requires --version 2.0')
+        wrapper = self.hby.db.exns.get((attrs['d'],))
+        if wrapper is None or wrapper.route != attrs['r']:
+            raise ValidationError('native registry notification has no matching retained proposal')
+        ghab = self.hby.habs.get(wrapper.sad['a']['gid'])
+        approval = RegistryApproval(self.hby, self.rgyV2, ghab, self.exc,
+                                    self.mux, self.psr, self.counselor)
+        try:
+            event, anchor, opening = approval.proposal(serializeMessage(self.hby, wrapper.said))
+        except MissingRegistryError:
+            print('Registry proposal pending: accepted inception evidence is unavailable.')
+            return None
+
+        regid = event.said if event.ilk == Ilks.rip else event.sad['rd']
+        print(f'\nGroup registry {event.ilk} proposed for {ghab.name} ({ghab.pre}):')
+        print(f'    Registry: {regid}')
+        print(f"    TEL event: {event.said} at ordinal {event.sad['n']}")
+        print(f'    Exact group anchor: {anchor.said}')
+        if not self.auto and input('\nApprove exact TEL anchor [Y|n]? ') not in ('', 'y', 'Y'):
+            return False
+
+        # Borrow the existing group processors. Root custody and event openings
+        # are not prerequisites for signing the exact proposed commitment.
+        proposed, attachments = approval.approve(event, anchor, opening=opening)
+        deliveries = []
+        deadline = time.monotonic() + self.timeout
+        try:
+            for member in self.hby.db.signingMembers(pre=ghab.pre):
+                if member == ghab.mhab.pre:
+                    continue
+                poster = StreamPoster(hby=self.hby, hab=ghab.mhab, recp=member,
+                                      topic='multisig', version=Vrsn_2_0)
+                poster.send(proposed, attachment=attachments, gvrsn=Vrsn_2_0)
+                children = poster.deliver()
+                deliveries.extend(children)
+                self.extend(children)
+            while True:
+                approval.process()
+                accepted = self.rgyV2.store.seqEvent(regid, Number(numh=event.sad['n']).num)
+                complete = accepted is not None and accepted.said == event.said
+                delivered = all(child.done for child in deliveries)
+                if complete and delivered:
+                    break
+                if time.monotonic() >= deadline:
+                    if not complete:
+                        print('Registry proposal pending: the exact TEL event is not accepted.')
+                        return None
+                    print('Some member deliveries did not complete before timeout.')
+                    break
+                yield self.tock
+        finally:
+            self.remove(deliveries)
+        print(f'Registry event {event.said} accepted.')
+        return True
 
     def incept(self, attrs):
         """ Join a group multisig inception event
