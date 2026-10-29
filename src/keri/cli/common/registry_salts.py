@@ -19,7 +19,7 @@ from ... import Vrsn_2_0
 from ...acdc.regeventing import Rever
 from ...app import GroupHab, HaberyDoer, MailboxDirector, Notifier
 from ...app.essring import EssrReplyHandler
-from ...app.evidencing import KEL_DEPENDENCIES, ServiceConfig
+from ...app.evidencing import EvidenceContext, KEL_DEPENDENCIES, ServiceConfig
 from ...app.forwarding import StreamPoster
 from ...app.grouping import Multiplexor, loadHandlers, replyProposal, endorseReply, multisigRpyExn
 from ...app.indirecting import createHttpServer
@@ -186,8 +186,8 @@ class SaltDoer(doing.DoDoer):
                 self._require('input')
                 print(json.dumps(dict(processed=True)))
                 return
-            if not (args.output or args.endpoint or args.proposal_output):
-                raise ConfigurationError('send/approve requires --output, --endpoint or --proposal-output')
+            if not (args.output or args.endpoint or args.proposal_output or getattr(args, 'deliver', False)):
+                raise ConfigurationError('send/approve requires --output, --endpoint, --deliver or --proposal-output')
             stream, proposal, attachments = self._reply(peer)
             body = Parser(version=Vrsn_2_0).parseOne(ims=bytearray(stream), processive=False).serder
             peer.ingest(stream)
@@ -225,7 +225,38 @@ class SaltDoer(doing.DoDoer):
                 write(args.output, stream)
             if args.endpoint:
                 yield from cesr_sending.send(self, args.endpoint, stream, args.timeout)
-            print(json.dumps(dict(said=body.said, submitted=bool(args.endpoint))))
+            if getattr(args, 'deliver', False):
+                yield from self.deliver(peer, body, stream)
+            print(json.dumps(dict(said=body.said,
+                submitted=bool(args.endpoint or getattr(args, 'deliver', False)))))
+
+    def deliver(self, peer, body, stream):
+        """Submit accepted public evidence and this verified reply via ordinary routing.
+
+        peer borrows identity/registry stores; body and stream are the exact
+        operator-approved reply after ordinary threshold verification. Public
+        replay precedes it so a new member can verify registry inception.
+        Completion means submission, not remote custody. Timeout or transport
+        failure propagates without a retry or a delivery-state record.
+        """
+        evidence = EvidenceContext(peer.hby, reger=peer.rgy.baser)
+        raw = evidence.clone([body.sad['a']['registry']]) + bytes(stream)
+        poster = StreamPoster(hby=peer.hby, hab=peer.member,
+            recp=body.sad['a']['target'], topic='credential', version=Vrsn_2_0)
+        children = poster.deliverStream(raw)
+        if not children:
+            raise ConfigurationError('registry salt recipient has no delivery route')
+        self.extend(children)
+        deadline = self.tyme + self.args.timeout
+        try:
+            while not all(child.done for child in children):
+                if self.tyme >= deadline:
+                    raise TimeoutError('registry salt submission timed out')
+                yield self.tock
+            if any(getattr(child, 'error', None) is not None for child in children):
+                raise ConfigurationError('registry salt submission failed')
+        finally:
+            self.remove(children)
 
     def serve(self, peer, activity):
         """Run HTTP intake and ordinary protocol escrows under the command's one scheduler.

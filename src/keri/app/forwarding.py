@@ -342,9 +342,19 @@ class StreamPoster:
             msg.extend(serder.raw)
             msg.extend(atc)
 
-        if len(msg) == 0:
-            return []
+        return self.deliverStream(msg)
 
+    def deliverStream(self, msg):
+        """Route an already composed CESR stream through the existing finite sender.
+
+        msg contains complete message frames, including any SCS prefix when
+        this poster uses ESSR. The caller owns framing; this method preserves
+        bytes and selects ordinary direct endpoints or witness/mailbox forwarding.
+        Return unscheduled transport Doers, as deliver() does. No retry, receipt,
+        persistence or recipient-acceptance policy is introduced.
+        """
+        if not msg:
+            return []
         ends = self.hab.endsFor(self.recp)
         try:
             # If there is a controller or agent in ends, send to all

@@ -15,7 +15,10 @@ parser.add_argument('--proposal', help='retained multisig/rpy proposal SAID to a
 parser.add_argument('--party', help='logical holder or discloser receiving the encrypted salt')
 parser.add_argument('--target', help='current individual member receiving an encrypted salt copy')
 parser.add_argument('--registry', help='exact accepted registry inception SAID')
-parser.add_argument('--endpoint', help='HTTP(S) or TCP recipient for the fully authenticated reply')
+delivery = parser.add_mutually_exclusive_group()
+delivery.add_argument('--endpoint', help='HTTP(S) or TCP recipient for the fully authenticated reply')
+delivery.add_argument('--deliver', action='store_true',
+                      help="send through the addressed member's existing endpoint or witness mailbox")
 parser.add_argument('--host', default='127.0.0.1')
 parser.add_argument('--port', type=int, default=5649, help='HTTP intake port for serve')
 parser.add_argument('--timeout', type=float, default=30.0, help='bounded quorum or transport wait in seconds')

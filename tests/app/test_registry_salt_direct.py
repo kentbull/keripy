@@ -258,3 +258,57 @@ def test_join_retains_member_salt_after_real_registry_quorum(groupServiceNetwork
         assert result is True
         assert c.rgys[1].store.seqEvent(event.said, 0).said == event.said
         assert c.services[1].custody._load(event.said).salt == root.qb64
+
+
+def test_routed_salt_reply_supplies_registry_evidence_before_custody(network, unused_tcp_port):
+    """An ordinary routed HTTP submission equips a receiver with evidence and salt."""
+    import falcon
+    from hio.base import doing
+    from hio.core import http
+    from keri.acdc import Regery
+    from keri.app.notifying import Notifier
+    from keri.app.indirecting import createHttpServer
+    from keri.cli.common.acdc_v2_ipex import Intake
+    from keri.cli.common.registry_salts import SaltDoer, SaltPeer
+    from keri.kering import Roles, Schemes
+
+    c = network
+    source = c.services[0]
+    issuer, holder = c.habs[:2]
+    source.custody.createCustody(c.rip.said, holder.pre)
+    body = source.makeReply(issuer, c.rip.said, holder.pre)
+    stream = bytes(issuer.endorse(body, gvrsn=Vrsn_2_0))
+    # The recipient has authenticated identity keys, but no accepted registry.
+    fresh = Regery(c.hbys[1], name='fresh-salt-intake', temp=True)
+    notifier = Notifier(c.hbys[1])
+    try:
+        target = SaltPeer(c.hbys[1], fresh, RegistryCustody(c.hbys[1], fresh), holder, notifier)
+        assert fresh.store.seqEvent(c.rip.said, 0) is None
+        assert target.service.custody.db.custody.get((c.rip.said,)) is None
+        app = falcon.App()
+        app.add_route('/', Intake(target))
+        server = createHttpServer('127.0.0.1', unused_tcp_port, app)
+        endpoints = holder.makeEndRole(eid=holder.pre, role=Roles.controller,
+                                      version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+        endpoints.extend(holder.makeLocScheme(url=f'http://127.0.0.1:{unused_tcp_port}/',
+            scheme=Schemes.http, version=Vrsn_2_0, gvrsn=Vrsn_2_0))
+        c.parsers[0].parse(ims=endpoints, local=False)
+        peer = SimpleNamespace(hby=source.hby, rgy=source.rgy, member=issuer)
+
+        class Delivery(SaltDoer):
+            """Drive the real finite delivery with the fixture's already-open owners."""
+            def run(self, tymth, tock=0.0, **kwa):
+                """Use the injected HIO clock; no alternate sender or mocked transport."""
+                self.wind(tymth)
+                yield tock
+                yield from self.deliver(peer, body, stream)
+
+        sender = Delivery(SimpleNamespace(timeout=2.0))
+        doing.Doist(real=True, tock=0.01, limit=3.0).do(
+            doers=[http.ServerDoer(server=server), sender])
+        assert sender.done
+        assert fresh.store.seqEvent(c.rip.said, 0).said == c.rip.said
+        assert target.service.custody._load(c.rip.said).salt == source.custody._load(c.rip.said).salt
+    finally:
+        notifier.noter.close()
+        fresh.close()
