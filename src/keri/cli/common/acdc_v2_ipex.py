@@ -273,7 +273,7 @@ class ExchangeDoer(doing.DoDoer):
                     origin = self.registryOrigin(wallet, rgy, credential, regid,
                         retained=peer.exc.routes['/ipex/grant']._blindProofs(node))
                 elif regid := (issuerRegistry(credential) or
-                               wallet.db.issued.get((credential.said,)).registry):
+                               wallet.issuedRecord(credential.said).registry):
                     origin = self.registryOrigin(wallet, rgy, credential, regid)
                 else:
                     if credential.israid != hab.pre:
@@ -374,7 +374,7 @@ class ExchangeDoer(doing.DoDoer):
             retained.append(acdc_v2.loadOpening(path))
         explicit = (wallet.boundEvent(credential, self.args.bound_event)
                     if self.args.bound_event else {})
-        issued = wallet.db.issued.get((credential.said,))
+        issued = wallet.issuedRecord(credential.said)
 
         def derive(update, target, state):
             """Apply the selected custody's existing bound coordinates to this event."""

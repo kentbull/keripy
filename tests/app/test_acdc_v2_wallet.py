@@ -306,6 +306,7 @@ def test_real_partial_and_full_grants_retain_separate_explicit_admissions(tmp_pa
             # Discard only this test-owned application store. The next process
             # must recover both admissions from Habery exchange evidence alone.
             wallet.db.close(clear=True)
+            wallet.close()
             hrgy.close()
     with encrypted('inventory-holder', tmp_path, holderKey) as holder:
         hrgy = regery(holder, tmp_path)
@@ -443,7 +444,19 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
                 anchored(hab, registry, head)
             if history != 'blinded':
                 assert wallet.hby.ks.custody.get((registry.regk,)) is None
+            # Use the same existing Reger for a legacy credential. Native
+            # issuance must preserve its bytes and source and exclude it from
+            # the native issuer view, rather than create another inventory DB.
+            from keri import Vrsn_1_0
+            from keri.core import Saider
+            from keri.vc.proving import credential
+            legacy = credential(schema=acdc.said, issuer=hab.pre,
+                                data={'kind': 'legacy'}, version=Vrsn_1_0)
+            wallet.reger.logCred(legacy, hab.kever.prefixer, Number(num=0), Diger(qb64=hab.pre))
+            wallet.reger.issus.add((hab.pre,), Saider(qb64=legacy.said))
             record = wallet.recordIssued(acdc, head.said, blinder=opening)
+            assert [item.credential for item in wallet.issuedRecords()] == [acdc.said]
+            assert wallet.reger.cloneCred(legacy.said)[0].raw == legacy.raw
             assert record.encoding == 'base64'
             assert wallet.issuedCredential(acdc.said).raw == acdc.raw
             raw, said, regid, head = acdc.raw, acdc.said, registry.regk, head.said
@@ -457,6 +470,8 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
             assert rgy.store.head(regid).qb64 == head
             assert wallet.issuedCredential(said).raw == raw
             assert wallet.issuedCredential(said).kind == kind
+            assert wallet.reger.cloneCred(legacy.said)[0].raw == legacy.raw
+            assert wallet.issuedRecord(legacy.said) is None
             assert wallet.recordIssued(wallet.issuedCredential(said), head) == record
         finally:
             wallet.close()
@@ -743,4 +758,19 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
             assert len(wallet.inventory()['held']) == 2
         finally:
             wallet.close()
+            rgy.close()
+
+
+def test_native_inventory_borrows_existing_reger():
+    """Share the ordinary credential owner without opening or closing it twice."""
+    from keri.vdr import openReger
+
+    with openHby(name='borrowed-reger', temp=True, version=Vrsn_2_0) as hby, openReger() as reger:
+        rgy = Regery(hby=hby, temp=True)
+        try:
+            wallet = Wallet(hby, rgy, reger=reger)
+            assert wallet.reger is reger
+            wallet.close()
+            assert reger.opened
+        finally:
             rgy.close()

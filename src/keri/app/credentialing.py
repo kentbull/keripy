@@ -11,20 +11,21 @@ The original issued/admitted reference model was adapted from KERI Foundation Lo
 incorrectly declares MIT). No Locksmith runtime or GUI dependency is used.
 """
 from dataclasses import dataclass, field
-from base64 import b64encode, b64decode
+from base64 import b64encode
 
 from keri.acdc import regeventing
 from keri.acdc.ipexing import AcdcV2IpexVerification
-from keri.core import Blinder, BoundState, Number, SerderACDC
+from keri.core import Blinder, BoundState, Number, SerderACDC, Prefixer, Diger, Saider
 from keri.db import dbing, koming
 from keri.kering import ConfigurationError, ValidationError
 from keri.peer import exchanging
+from keri.vdr.eventing import Reger
 from .credential_disclosing import boundEvent
 
 
 @dataclass
 class IssuedCredential:
-    """Durable issued-history reference plus exact original credential bytes.
+    """Read-only view of Reger credential bytes and source coordinates.
 
         credential/registry/controller/update bind accepted issuance. raw is base64
         under encoding='base64'; bound retains original issuee KEL coordinates for
@@ -61,12 +62,12 @@ class AdmittedCredential:
 
 
 class WalletBaser(dbing.LMDBer):
-    """Remaining issuer records; signed admission state stays in Habery."""
+    """Remaining derivation coordinates pending removal; no credential inventory."""
     TailDirPath = 'keri/wallet'
     AltTailDirPath = '.keri/wallet'
 
     def reopen(self, **kwa):
-        """Open credential inventory without private salt storage.
+        """Open only the remaining derivation-coordinate table.
 
             Args:
                 **kwa: Ordinary LMDBer path/reopen settings.
@@ -74,11 +75,10 @@ class WalletBaser(dbing.LMDBer):
             Returns:
                 bool: Whether the application environment is open.
 
-            Issued credential bytes and derivation coordinates remain here.
+            Only per-event derivation coordinates remain here.
             Admissions are read from ordinary signed IPEX exchanges; private
             registry salts belong to the existing Keeper."""
         super().reopen(**kwa)
-        self.issued = koming.Komer(db=self, subkey='issued.', klas=IssuedCredential)
         self.derivations = koming.Komer(db=self, subkey='derived-updates.', klas=DerivedUpdate)
         return self.opened
 
@@ -89,14 +89,16 @@ class Wallet:
     Optional RegistryCustody is an explicit collaborator for callers that derive
     openings. Inventory itself never invokes it or reads encrypted salt records.
     """
-    def __init__(self, hby, rgy, *, exc=None, db=None, verification=None, custody=None):
+    def __init__(self, hby, rgy, *, exc=None, db=None, reger=None, verification=None, custody=None):
         """Compose local inventory and ACDC v2 IPEX verification without loading secrets.
 
         Args:
             hby (Habery): Authenticated local identity and retained exchange owner.
             rgy (Regery): ACDC v2 registry evidence owner.
             exc (Exchanger | None): Router used to check retained completion.
-            db (WalletBaser | None): Existing credential inventory store, or create one.
+            db (WalletBaser | None): Remaining derivation-coordinate store.
+            reger (Reger | None): Borrow an existing credential owner, or open one
+                that this facade closes. Native and legacy bytes use its normal tables.
             verification (AcdcV2IpexVerification | None): Explicit context returned by
                 app.ipexing.loadHandlers for ACDC v2. None uses ordinary default policy;
                 configured applications must pass their actual shared context.
@@ -110,8 +112,16 @@ class Wallet:
         self.custody = custody
         self.verification = (verification if verification is not None
                              else AcdcV2IpexVerification(hby, rgy))
-        self.db = db if db is not None else WalletBaser(
+        self.reger = reger if reger is not None else Reger(
             name=hby.name, base=hby.base, temp=hby.temp)
+        self.ownsReger = reger is None
+        try:
+            self.db = db if db is not None else WalletBaser(
+                name=hby.name, base=hby.base, temp=hby.temp)
+        except Exception:
+            if self.ownsReger:
+                self.reger.close()
+            raise
 
     def boundEvent(self, acdc, said):
         """Resolve a selected accepted, witnessed issuee KEL event for derivation.
@@ -193,7 +203,9 @@ class Wallet:
             ValidationError: Ownership, accepted event, proof, or retained bytes differ.
             KeriError: Core registry/KEL/opening authentication fails.
 
-        This inventory boundary never derives an opening or loads private custody.
+        Reuse the existing Reger credential/source/issuer tables. This boundary
+        never derives an opening or loads private custody; the returned record
+        is a view, not a second serialized issuance archive.
         """
         event = self.rgy.store.event(update)
         regid = regeventing.issuerRegistry(acdc)
@@ -206,7 +218,7 @@ class Wallet:
         accepted = self.rgy.store.seqEvent(regid, sn)
         if accepted is None or accepted.said != update:
             raise ValidationError('issuance update is still pending')
-        old = self.db.issued.get((acdc.said,))
+        old = self.issuedRecord(acdc.said)
         if blinder is not None and (event.ilk != 'bup' or not isinstance(blinder, Blinder)):
             raise ValidationError('explicit issuance opening requires an ACDC v2 blinded update')
         if old is not None and blinder is None:
@@ -230,31 +242,88 @@ class Wallet:
                                   if proof is not None and proof.clan == BoundState else {})
         if old is not None and old != record:
             raise ValidationError('different issuance is already retained for this credential')
-        self.db.issued.put((acdc.said,), record)
+        stored = self.reger.creds.get((acdc.said,))
+        if stored is not None and stored.raw != acdc.raw:
+            raise ValidationError('different credential bytes already occupy the Reger identifier')
+        if proof is not None and proof.clan == BoundState:
+            self.retainDerivedUpdate(event, proof)
+        # Reuse Reger.logCred's credential/source representation and its normal
+        # issuer index. One native LMDB transaction exposes the complete record;
+        # no application rollback, retry journal or duplicate byte archive exists.
+        source = (Prefixer(qb64=regid), Number(num=sn), Diger(qb64=update))
+        with self.reger.env.begin(write=True) as txn:
+            txn.put(self.reger.creds._tokey((acdc.said,)), self.reger.creds._ser(acdc),
+                    db=self.reger.creds.sdb, overwrite=False)
+            txn.put(self.reger.cancs._tokey((acdc.said,)), self.reger.cancs._ser(source),
+                    db=self.reger.cancs.sdb, overwrite=False)
+            txn.put(self.reger.issus._tokey((acdc.israid,)), self.reger.issus._ser(Saider(qb64=acdc.said)),
+                    db=self.reger.issus.sdb, dupdata=False)
         return record
 
+    def issuedRecord(self, credential):
+        """Read a native issuance view from existing Reger credential/source tables.
+
+        Args:
+            credential (str): Exact credential identifier.
+
+        Returns:
+            IssuedCredential | None: Local native issuance view, or None when no
+                native source exists. Legacy credentials remain untouched.
+
+        Raises:
+            ValidationError: Retained source coordinates disagree with accepted TEL.
+
+        Raw bytes are serialized for the existing CLI view only; there is no
+        base64 credential row. Bound coordinates temporarily come from the
+        remaining derivation table until that separate dependency is removed.
+        """
+        acdc = self.reger.creds.get((credential,))
+        source = self.reger.cancs.get((credential,))
+        if (acdc is None or acdc.pvrsn.major != 2 or source is None
+                or self.hby.habByPre(acdc.israid) is None):
+            return None
+        prefixer, number, diger = source
+        event = self.rgy.store.seqEvent(prefixer.qb64, number.num)
+        if event is None or event.said != diger.qb64:
+            raise ValidationError('issued source is not an accepted registry event')
+        metadata = self.db.derivations.get((diger.qb64,))
+        bound = metadata.bound if metadata is not None else {}
+        return IssuedCredential(acdc.said, prefixer.qb64, acdc.israid, diger.qb64,
+                                b64encode(acdc.raw).decode('ascii'), 'base64', bound)
+
+    def issuedRecords(self):
+        """Return local native issuances selected by Reger's existing issuer index.
+
+        Returns:
+            list[IssuedCredential]: Views of locally controlled native credentials.
+                Legacy and foreign credentials are not treated as local issuances.
+        """
+        records = []
+        for (issuer,), said in self.reger.issus.getTopItemIter():
+            if self.hby.habByPre(issuer) is None:
+                continue
+            record = self.issuedRecord(said.qb64)
+            if record is not None:
+                records.append(record)
+        return records
+
     def issuedCredential(self, credential):
-        """Reconstruct the exact originally issued credential bytes.
+        """Return exact native credential bytes retained by the existing Reger.
 
-            Args:
-                credential (str): Issued credential SAID indexing a durable inventory row.
+        Args:
+            credential (str): Locally issued credential identifier.
 
-            Returns:
-                SerderACDC: Original view, including its binary serialization kind.
+        Returns:
+            SerderACDC: Original serialization, including CBOR or MessagePack.
 
-            Raises:
-                ValidationError: Row/encoding is unsupported or bytes do not match its SAID.
-                ValueError: Corrupt stored base64 cannot be decoded.
+        Raises:
+            ValidationError: The local native issuance source is missing or invalid.
 
-            Retrieval is historical and never infers present registry standing."""
-        record = self.db.issued.get((credential,))
-        if record is None or record.encoding != 'base64':
+        Retrieval is historical and makes no current-standing claim.
+        """
+        if self.issuedRecord(credential) is None:
             raise ValidationError('issued credential with a supported encoding is required')
-        raw = b64decode(record.raw, validate=True)
-        acdc = SerderACDC(raw=raw)
-        if acdc.raw != raw or acdc.said != credential:
-            raise ValidationError('issued credential bytes do not match their retained identifier')
-        return acdc
+        return self.reger.creds.get((credential,))
 
     def _verification(self):
         """Return the concrete ACDC v2 IPEX context for fresh semantic acceptance.
@@ -384,7 +453,7 @@ class Wallet:
                 held.append(self._admission(grant, response.qb64, historical=True))
             except ValidationError:
                 continue
-        return {'issued': [record for _, record in self.db.issued.getTopItemIter()],
+        return {'issued': self.issuedRecords(),
                 'held': held}
 
     def admissions(self, credential):
@@ -402,6 +471,9 @@ class Wallet:
         """Close this wallet's application environment after dependent work stops.
 
             Returns:
-                None. Habery/Regery remain caller-owned. RegistryCustody uses
+                None. Habery/Regery and a borrowed Reger remain caller-owned.
+                An internally opened Reger closes here. RegistryCustody uses
                 the independently owned Keeper; no secret is exported."""
         self.db.close()
+        if self.ownsReger:
+            self.reger.close()

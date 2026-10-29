@@ -187,7 +187,7 @@ def standing(wallet, reg, acdc, *, derive=False):
     if head is None or head.ilk != 'bup':
         return 'unknown'
     sn = Number(numh=head.sad['n']).num
-    retained = wallet.db.issued.get((acdc.said,))
+    retained = wallet.issuedRecord(acdc.said)
     opening = wallet.publicOpening(head)
     if opening is None and derive and wallet.custody is not None:
         bound = (dict(bound=True, bsn=retained.bound['bn'], bd=retained.bound['bd'])
@@ -343,11 +343,11 @@ class AcdcV2Author(doing.DoDoer):
                     reg.regk, ordinal, retained.credential, retained.state, **priorBound)
                 return (candidate, False) if candidate.said == event.sad.get('b') else (None, False)
 
-            # Issuance-only records predate the per-event derivation index but
-            # still carry exact original coordinates. Later updates without the
-            # index remain intentionally unrecoverable rather than guessed.
+            # Reger's source seal identifies an original issuance even when
+            # no per-event derivation coordinates were retained. Match that
+            # exact accepted event; unrelated later updates are not guessed.
             candidates = {}
-            for _, retained in wallet.db.issued.getTopItemIter():
+            for retained in wallet.issuedRecords():
                 if retained.registry != reg.regk or retained.update != event.said:
                     continue
                 priorBound = (dict(bound=True, bsn=retained.bound['bn'], bd=retained.bound['bd'])
@@ -580,10 +580,10 @@ class AcdcV2Author(doing.DoDoer):
                     if not acdc.verify() or acdc.sad.get('i') != hab.pre or issuerRegistry(acdc) not in (None, reg.regk):
                         raise ConfigurationError('ACDC v2 credential does not match issuer and registry')
                     scheming.validateSchema(acdc, hby.db)
-                    old = wallet.db.issued.get((acdc.said,))
+                    old = wallet.issuedRecord(acdc.said)
                     event = reg.store.event(old.update) if old else self.update(wallet, reg, acdc, 'issued')
                     yield from self.anchor(hby, reg, event, receiptor)
-                    # An exact issued-row retry reports retained history. Do not
+                    # An exact Reger-source retry reports retained history. Do not
                     # re-derive an old opening or require healthy salt custody.
                     record = wallet.recordIssued(acdc, event.said,
                                                  blinder=self.blinder if event.ilk == 'bup' else None)
@@ -592,7 +592,7 @@ class AcdcV2Author(doing.DoDoer):
                 else:
                     if args.send:
                         raise ConfigurationError('ACDC v2 revocation publication uses the registrar service')
-                    record = wallet.db.issued.get((args.said,))
+                    record = wallet.issuedRecord(args.said)
                     if record is None or record.registry != reg.regk:
                         raise ConfigurationError('credential is not in this ACDC v2 issued inventory')
                     acdc = wallet.issuedCredential(record.credential)
@@ -675,7 +675,7 @@ def read(args, operation):
                 if hab is None:
                     raise ConfigurationError('unknown ACDC v2 export alias')
                 reg = registry(rgy, args.registry_name, hab)
-                record = wallet.db.issued.get((args.said,))
+                record = wallet.issuedRecord(args.said)
                 if record is None or record.registry != reg.regk:
                     raise ConfigurationError('ACDC v2 export requires an issued inventory credential')
                 acdc = wallet.issuedCredential(record.credential)
