@@ -148,7 +148,7 @@ def test_root_commit_receipt_intent_and_exact_ack_attempt_survive_restart(negoti
     case.state.retainEstablished(case.info, case.root, case.origin, receiptIntent=intent)
     case.state.db.close()
     case.state.db.reopen()
-    assert case.state.receiptCandidates(0) == [intent]
+    assert case.state.receiptCandidates(0).items == (intent,)
     assert case.state.receipt(body.said).bodyBytes == body.raw
     receipt = replies.receiptReply(body, case.confirm)
     frame = signed(case.discloser, receipt)
@@ -162,7 +162,7 @@ def test_root_commit_receipt_intent_and_exact_ack_attempt_survive_restart(negoti
     assert sent.state == 'sent' and sent.attempts == 1
     case.state.retainEstablished(case.info, case.root, case.origin, receiptIntent=intent)
     assert case.state.receipt(body.said) == sent
-    assert case.state.receiptCandidates(1000.0) == []
+    assert case.state.receiptCandidates(1000.0).items == ()
     assert case.state.attempt(receipt.said).essrBytes == packet
     assert case.state.markReceiptSent(launched) is None
 
@@ -188,7 +188,7 @@ def test_receipt_conflict_rolls_back_root_grants_jobs_and_pending(negotiation):
     assert case.state.origin(case.info.registry) is None
     assert case.state.assignment(case.info.registry, other.pre) is None
     assert case.state.proof(grant.said) is None
-    assert case.state.deliveryCandidates(0) == []
+    assert case.state.deliveryCandidates(0).items == ()
     assert case.state.hasPending(case.init.said, case.issuer.pre)
     assert case.state.receipt(intent.provision) == conflict
 
@@ -197,10 +197,10 @@ def test_volatile_candidate_cursor_advances_past_unready_first_rows(negotiation)
     """A bounded worker can reach later jobs without delaying unready members."""
     case = negotiation
     establish(case)
-    first = case.state.deliveryCandidates(0, limit=1)[0]
-    second = case.state.deliveryCandidates(0, limit=1, after=first.key)[0]
+    first = case.state.deliveryCandidates(0, limit=1).items[0]
+    second = case.state.deliveryCandidates(0, limit=1, after=first.key).items[0]
     assert second.key > first.key
-    assert case.state.deliveryCandidates(0, limit=1, after=second.key) == []
+    assert case.state.deliveryCandidates(0, limit=1, after=second.key).items == ()
     assert case.state.delivery(*first.key).retryAt == 0
     assert case.state.delivery(*first.key).attempts == 0
     for _ in range(2):
@@ -209,7 +209,7 @@ def test_volatile_candidate_cursor_advances_past_unready_first_rows(negotiation)
             case.discloser.pre, case.discloser.kever.lastEst.d, case.issuer.pre,
             b64encode(body.raw).decode('ascii'))
         case.state.retainEstablished(case.info, case.root, case.origin, receiptIntent=intent)
-    one = case.state.receiptCandidates(0, limit=1)[0]
-    two = case.state.receiptCandidates(0, limit=1, after=one.provision)[0]
+    one = case.state.receiptCandidates(0, limit=1).items[0]
+    two = case.state.receiptCandidates(0, limit=1, after=one.provision).items[0]
     assert two.provision > one.provision
-    assert case.state.receiptCandidates(0, limit=1, after=two.provision) == []
+    assert case.state.receiptCandidates(0, limit=1, after=two.provision).items == ()

@@ -17,6 +17,7 @@ from ..core import SerderKERI
 from ..help import helping
 from ..kering import AuthError, ConfigurationError, KeriError, MissingEntryError, ValidationError
 from .forwarding import StreamPoster
+from .registry_salt_state import SaltScanLimit
 
 
 class SaltTransportAttempt(doing.DoDoer):
@@ -227,6 +228,8 @@ class RegistrySaltDelivery(doing.DoDoer):
 
         HIO supplies tymth/tock/kwa. Yields scheduler ticks indefinitely; no new
         scheduler, parser or mailbox is created, and readiness never backs off.
+        Each tick examines at most SaltScanLimit persisted candidate rows;
+        page reads close their transactions before any scheduler yield.
         """
         self.wind(tymth)
         yield self.tock
@@ -239,19 +242,18 @@ class RegistrySaltDelivery(doing.DoDoer):
                     self.remove([attempt])
                 elif attempt.done:
                     self._finish(key, now)
-            budget = 32
+            budget = SaltScanLimit
             for receipt in (True, False):
                 if len(self.active) >= self.limit:
                     break
                 candidates = self.state.receiptCandidates if receipt else self.state.deliveryCandidates
-                rows = candidates(now, limit=min(self.limit, budget), after=self.cursors[receipt])
-                if not rows:
-                    self.cursors[receipt] = None
-                for row in rows:
-                    if len(self.active) >= self.limit:
-                        break
-                    budget -= 1
-                    self.cursors[receipt] = row.provision if receipt else row.key
+                # Reserve half the scan budget for provisions even when receipt
+                # history has no due items. Returned rows fit remaining I/O slots.
+                page = candidates(now, limit=self.limit - len(self.active),
+                    after=self.cursors[receipt], scanLimit=budget // 2 if receipt else budget)
+                budget -= page.examined
+                self.cursors[receipt] = page.after
+                for row in page.items:
                     self._start(row, receipt, now)
                 if budget == 0:
                     break

@@ -23,6 +23,21 @@ from .registry_salt_replies import (INIT_ROUTE, BIND_ROUTE, CONFIRM_ROUTE, ASSIG
 from .replying import parseReply
 
 
+SaltScanLimit = 32
+
+
+@dataclass(frozen=True)
+class SaltCandidatePage:
+    """One bounded scan: due items, exclusive continuation key, and examined rows.
+
+    after is None at the table tail. The caller owns this volatile continuation;
+    an empty items tuple can still require continuation through completed rows.
+    """
+    items: tuple
+    after: tuple | None
+    examined: int
+
+
 @dataclass(frozen=True)
 class PendingDH:
     """Exact recoverable local negotiation; private values never appear in repr."""
@@ -585,50 +600,58 @@ class RegistrySaltState:
         """Return one concrete public delivery row, or None; authorize no sender."""
         return self.db.saltDeliveries.get((registry, party, member, admission))
 
-    def deliveryCandidates(self, now, limit=32, after=None):
-        """Return at most limit due pending jobs for a caller-owned bounded worker.
+    def _candidatePage(self, table, now, limit, after, scanLimit):
+        """Seek strictly after a key and close the read transaction before returning.
 
-        now is Unix seconds and limit is a positive integer. Returned public
-        records are candidates only: revalidate membership, keys, and authority
-        before each attempt. after is a previous job.key; volatile cursors avoid
-        starvation without changing unready jobs' persistent retry state. This read neither increments retries nor sends work.
+        Inspect at most scanLimit rows and collect at most limit due records.
+        Both bounds include no authority check, signing, retry change, or I/O.
         """
         if (isinstance(now, bool) or not isinstance(now, (int, float))
                 or not math.isfinite(now) or now < 0
-                or isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+                or any(isinstance(bound, bool) or not isinstance(bound, int) or bound < 1
+                       for bound in (limit, scanLimit))):
             raise ValidationError('registry-salt candidate bounds are invalid')
-        candidates = []
-        for key, job in self.db.saltDeliveries.getTopItemIter():
-            if after is not None and tuple(key) <= tuple(after):
-                continue
-            if job.state == 'pending' and job.retryAt <= now:
-                candidates.append(job)
-                if len(candidates) == limit:
-                    break
-        return candidates
+        # Appending the minimum byte makes this lower bound exclusive, even
+        # when the saved row has since been deleted. No prefix walk is needed.
+        start = table._tokey(after) + b'\x00' if after is not None else b''
+        items, examined, last = [], 0, None
+        with self.db.env.begin(db=table.sdb, write=False, buffers=True) as txn:
+            cursor = txn.cursor()
+            positioned = cursor.set_range(start)
+            while positioned and examined < scanLimit and len(items) < limit:
+                key, value = cursor.item()
+                last = table._tokeys(key)
+                row = table._des(value)
+                examined += 1
+                if row.state == 'pending' and row.retryAt <= now:
+                    items.append(row)
+                positioned = cursor.next()
+            return SaltCandidatePage(tuple(items), last if positioned else None, examined)
+
+    def deliveryCandidates(self, now, limit=SaltScanLimit, after=None, *, scanLimit=SaltScanLimit):
+        """Return a bounded page of due pending delivery candidates.
+
+        now is Unix seconds, limit bounds returned items, scanLimit bounds all
+        examined rows, and after is the previous page's exclusive continuation.
+        Revalidate membership, keys, and authority before each actual attempt.
+        Completed or not-yet-due history advances after without adding items.
+        Invalid bounds raise ValidationError; no retry state or I/O changes.
+        """
+        return self._candidatePage(self.db.saltDeliveries, now, limit, after, scanLimit)
 
     def receipt(self, provisionSaid):
         """Return a durable post-commit receipt obligation, or None."""
         return self.db.saltReceipts.get((provisionSaid,))
 
-    def receiptCandidates(self, now, limit=32, after=None):
-        """Return due pending receipt intents without signing or counting attempts.
+    def receiptCandidates(self, now, limit=SaltScanLimit, after=None, *, scanLimit=SaltScanLimit):
+        """Return the same bounded page contract for post-commit receipt intents.
 
-        after is the previous provision SAID (or one-tuple). Reset a caller-owned
-        volatile cursor after an empty tail; readiness waits add no send attempts.
+        now/limit/scanLimit follow deliveryCandidates. after is a previous page
+        key or provision SAID. The read transaction closes before return, and
+        empty items require continuation until after is None. No signing occurs.
         """
-        if not math.isfinite(now) or now < 0 or isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
-            raise ValidationError('registry-salt candidate bounds are invalid')
-        result = []
         cursor = (after,) if isinstance(after, str) else tuple(after) if after is not None else None
-        for key, intent in self.db.saltReceipts.getTopItemIter():
-            if cursor is not None and tuple(key) <= cursor:
-                continue
-            if intent.state == 'pending' and intent.retryAt <= now:
-                result.append(intent)
-                if len(result) == limit:
-                    break
-        return result
+        return self._candidatePage(self.db.saltReceipts, now, limit, cursor, scanLimit)
 
     def attempt(self, replySaid):
         """Return one immutable exact provision/receipt attempt, or None."""

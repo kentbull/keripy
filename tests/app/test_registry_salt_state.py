@@ -144,7 +144,7 @@ def test_establishment_is_one_transaction_and_exact_retry_preserves_progress(neg
         case.state.openPending(*key)
     ciphertext = case.state.db.custody.get((case.info.registry,))
     assert case.state.origin(case.info.registry) == case.origin
-    assert len(case.state.deliveryCandidates(0, limit=1)) == 1
+    assert len(case.state.deliveryCandidates(0, limit=1).items) == 1
     first = replace(case.jobs[0], state='confirmed', provision=Diger(ser=b'provision').qb64,
         receipt=Diger(ser=b'receipt').qb64, attempts=2, retryAt=42.0)
     later = replace(case.jobs[1], retryAt=100.0)
@@ -153,11 +153,11 @@ def test_establishment_is_one_transaction_and_exact_retry_preserves_progress(neg
     case.state.retainEstablished(case.info, case.root, case.origin, case.jobs, key)
     assert case.state.db.custody.get((case.info.registry,)) == ciphertext
     assert case.state.delivery(*first.key) == first
-    assert case.state.deliveryCandidates(99.0) == []
-    assert case.state.deliveryCandidates(100.0) == [later]
+    assert case.state.deliveryCandidates(99.0).items == ()
+    assert case.state.deliveryCandidates(100.0).items == (later,)
     assert case.state.delivery(*later.key).attempts == 0
     case.state.db.saltDeliveries.pin(later.key, replace(later, state='blocked'))
-    assert case.state.deliveryCandidates(1000.0) == []
+    assert case.state.deliveryCandidates(1000.0).items == ()
     stored = Path(case.state.db.path, 'data.mdb').read_bytes()
     assert case.root.qb64b not in stored and case.root.raw not in stored
     changed = replace(case.origin, confirm=Diger(ser=b'other confirm').qb64)
@@ -201,7 +201,7 @@ def test_changed_pending_row_aborts_establishment(negotiation, monkeypatch):
         case.state.retainEstablished(case.info, case.root, case.origin, case.jobs, key)
     assert case.state.db.custody.get((case.info.registry,)) is None
     assert case.state.origin(case.info.registry) is None
-    assert case.state.deliveryCandidates(0) == []
+    assert case.state.deliveryCandidates(0).items == ()
     assert case.state.db.saltPending.get(key) == replacement
 
 

@@ -223,7 +223,7 @@ def replaceRepresentative(case, label):
     joined = joining.hby.joinGroupHab(role.gid, 'group', joining.person, proposed, proposed)
     assert joined.accepted
     old = role.nodes[0]
-    stale = next((job for job in first.service.state.deliveryCandidates(time(), limit=32)
+    stale = next((job for job in first.service.state.deliveryCandidates(time(), limit=32).items
                   if job.party == role.gid and job.member == old.person.pre), None)
     if stale is not None:
         with pytest.raises(ValidationError):

@@ -255,7 +255,7 @@ def test_single_parties_establish_same_root_with_explicit_pending_recovery(netwo
         assert service.state.origin(case.rip.said).confirm == confirm.said
         assert service.state.proof(init.said) and service.state.proof(bind.said)
         assert service.state.proof(confirm.said)
-        assert [job.member for job in service.state.deliveryCandidates(time())] == [case.habs[1 - index].pre]
+        assert [job.member for job in service.state.deliveryCandidates(time()).items] == [case.habs[1 - index].pre]
 
 
 def test_incoming_request_never_creates_local_dh_or_approval(network):
