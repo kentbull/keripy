@@ -19,6 +19,7 @@ from keri.help import helping
 from keri.kering import ConfigurationError, ValidationError
 from keri.peer import exchanging
 from .registry_custody import EncryptedCustody
+from .registry_salt_state import SaltOrigin, SaltDelivery, SaltRoster
 from .credential_disclosing import boundEvent
 
 
@@ -65,7 +66,7 @@ class WalletBaser(dbing.LMDBer):
     AltTailDirPath = '.keri/wallet'
 
     def reopen(self, **kwa):
-        """Open existing inventory indexes and the unchanged optional custody table.
+        """Open inventory and optional salt-lifecycle tables without reading secrets.
 
             Args:
                 **kwa: Ordinary LMDBer path/reopen settings.
@@ -77,6 +78,12 @@ class WalletBaser(dbing.LMDBer):
             decrypt secrets. Consent and its rebuildable credential index share a store."""
         super().reopen(**kwa)
         self.custody = koming.Komer(db=self, subkey='custody.', klas=EncryptedCustody)
+        # Registry-salt state shares this transaction boundary; opening these
+        # tables never decrypts or provisions an optional private capability.
+        self.saltPending = koming.Komer(db=self, subkey='salt-pending.', klas=EncryptedCustody)
+        self.saltOrigins = koming.Komer(db=self, subkey='salt-origins.', klas=SaltOrigin)
+        self.saltDeliveries = koming.Komer(db=self, subkey='salt-deliveries.', klas=SaltDelivery)
+        self.saltRosters = koming.Komer(db=self, subkey='salt-rosters.', klas=SaltRoster)
         self.issued = koming.Komer(db=self, subkey='issued.', klas=IssuedCredential)
         self.openings = subing.Suber(db=self, subkey='public-openings.')
         self.derivations = koming.Komer(db=self, subkey='derived-updates.', klas=DerivedUpdate)
