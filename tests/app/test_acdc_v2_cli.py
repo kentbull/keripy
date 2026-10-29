@@ -450,7 +450,7 @@ def test_acdc_v2_cli_public_update_after_bound_derived_predecessor():
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
-            marker = wallet.privateOpening(rgy.store.event(revoked['update']))
+            marker = wallet.reger.privateOpening(rgy.store.event(revoked['update']))
             assert (marker.acdc, marker.state, marker.bsn, marker.bd) == (issued['credential'], 'revoked', 1, current)
             assert wallet.publicOpening(rgy.registryByName('bound').store.headEvent(regid)) is None
         finally:
@@ -492,7 +492,7 @@ def test_public_transition_refuses_wrong_or_missing_local_opening():
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
-            marker = wallet.privateOpening(rgy.store.event(revoked['update']))
+            marker = wallet.reger.privateOpening(rgy.store.event(revoked['update']))
             assert (marker.acdc, marker.state) == (issued['credential'], 'revoked')
             # Put a real but wrong-event opening in the local proof table.
             wallet.reger.blinds.pin((revoked['update'],),

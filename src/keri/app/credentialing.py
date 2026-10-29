@@ -118,58 +118,6 @@ class Wallet:
         regeventing.vetBlind(blinder, blid=event.sad['b'])
         return blinder
 
-    def retainPrivateOpening(self, event, blinder):
-        """Retain an exact CESR opening as local credential proof, not publication.
-
-        Args:
-            event (SerderACDC): Native BUP whose commitment must match the opening.
-            blinder (Blinder): Possessed event-specific proof, never a registry salt.
-
-        Returns:
-            Blinder: The verified opening retained in Reger.
-
-        Raises:
-            ValidationError: The opening is malformed, mismatches the event or
-                conflicts with an already retained proof.
-
-        Public disclosure remains an explicit separate operation. Keeping the
-        actual proof avoids a second coordinate schema and reconstruction index.
-        """
-        if event is None or event.ilk != 'bup' or not isinstance(blinder, Blinder):
-            raise ValidationError('local opening requires an ACDC v2 blinded update')
-        regeventing.vetBlind(blinder, blid=event.sad['b'])
-        old = self.reger.blinds.get((event.said,))
-        if old is not None and old != blinder.qb64:
-            raise ValidationError('different opening is already retained for this event')
-        self.reger.blinds.put((event.said,), blinder.qb64)
-        return blinder
-
-    def privateOpening(self, event):
-        """Return an exact locally held opening after checking its BUP commitment.
-
-        Args:
-            event (SerderACDC): BUP whose local proof is requested.
-
-        Returns:
-            Blinder | None: Verified local opening, or None when absent.
-
-        Raises:
-            ValidationError: Stored proof is ambiguous or mismatches the event.
-
-        This does not publish proof, derive secrets or assert TEL acceptance.
-        """
-        if event is None or event.ilk != 'bup':
-            return None
-        raw = self.reger.blinds.get((event.said,))
-        if raw is None:
-            return None
-        candidates = regeventing._blindCandidates(raw)
-        if len(candidates) != 1:
-            raise ValidationError('retained local opening is ambiguous')
-        blinder = candidates[0]
-        regeventing.vetBlind(blinder, blid=event.sad['b'])
-        return blinder
-
     def recordIssued(self, acdc, update, *, blinder=None):
         """Record verified issuance, or return an identical historical record.
 
@@ -231,7 +179,7 @@ class Wallet:
         if stored is not None and stored.raw != acdc.raw:
             raise ValidationError('different credential bytes already occupy the Reger identifier')
         if proof is not None:
-            self.retainPrivateOpening(event, proof)
+            self.reger.retainPrivateOpening(event, proof)
         # Reuse Reger.logCred's credential/source representation and its normal
         # issuer index. One native LMDB transaction exposes the complete record;
         # no application rollback, retry journal or duplicate byte archive exists.
@@ -271,7 +219,7 @@ class Wallet:
         event = self.rgy.store.seqEvent(prefixer.qb64, number.num)
         if event is None or event.said != diger.qb64:
             raise ValidationError('issued source is not an accepted registry event')
-        proof = self.privateOpening(event)
+        proof = self.reger.privateOpening(event)
         bound = dict(bn=proof.bsn, bd=proof.bd) if proof is not None and proof.bsn is not None else {}
         return IssuedCredential(acdc.said, prefixer.qb64, acdc.israid, diger.qb64,
                                 b64encode(acdc.raw).decode('ascii'), 'base64', bound)

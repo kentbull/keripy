@@ -2494,6 +2494,63 @@ class Reger(LMDBer):
 
         return creds
 
+    def retainPrivateOpening(self, event, blinder):
+        """Retain an exact CESR opening as local credential proof, not publication.
+
+        Args:
+            event (SerderACDC): Native BUP whose commitment must match the opening.
+            blinder (Blinder): Possessed event-specific proof, never a registry salt.
+
+        Returns:
+            Blinder: The verified opening retained in Reger.
+
+        Raises:
+            ValidationError: The opening is malformed, mismatches the event or
+                conflicts with an already retained proof.
+
+        Public disclosure remains an explicit separate operation. Keeping the
+        actual proof avoids a second coordinate schema and reconstruction index.
+        """
+        from ..acdc import regeventing
+        from ..core import Blinder
+
+        if event is None or event.ilk != 'bup' or not isinstance(blinder, Blinder):
+            raise ValidationError('local opening requires an ACDC v2 blinded update')
+        regeventing.vetBlind(blinder, blid=event.sad['b'])
+        old = self.blinds.get((event.said,))
+        if old is not None and old != blinder.qb64:
+            raise ValidationError('different opening is already retained for this event')
+        self.blinds.put((event.said,), blinder.qb64)
+        return blinder
+
+    def privateOpening(self, event):
+        """Return an exact locally held opening after checking its BUP commitment.
+
+        Args:
+            event (SerderACDC): BUP whose local proof is requested.
+
+        Returns:
+            Blinder | None: Verified local opening, or None when absent.
+
+        Raises:
+            ValidationError: Stored proof is ambiguous or mismatches the event.
+
+        This does not publish proof, derive secrets or assert TEL acceptance.
+        """
+        from ..acdc import regeventing
+
+        if event is None or event.ilk != 'bup':
+            return None
+        raw = self.blinds.get((event.said,))
+        if raw is None:
+            return None
+        candidates = regeventing._blindCandidates(raw)
+        if len(candidates) != 1:
+            raise ValidationError('retained local opening is ambiguous')
+        blinder = candidates[0]
+        regeventing.vetBlind(blinder, blid=event.sad['b'])
+        return blinder
+
     def logCred(self, creder, prefixer, number, diger):
         """ Save the base credential and seals (est evt+sigs quad) with no indices.
 

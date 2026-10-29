@@ -156,20 +156,20 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         acdc = wallet.issuedCredential(case.issued['credential'])
         parameters = wallet.boundEvent(acdc, case.bound_args[1]) if bound else {}
         head = reg.store.headEvent(case.registry)
-        assert wallet.privateOpening(head).qb64 == case.proof.qb64
+        assert wallet.reger.privateOpening(head).qb64 == case.proof.qb64
         assert wallet.publicOpening(head) is None
         # Ordinary unanchored staging models interruption before its opening was retained.
         proof = wallet.custody.derive(case.registry, 3, acdc.said, 'issued', **parameters)
         staged = messaging.blindate(case.registry, head.said, proof.said, sn=3)
         reg.processEvent(staged)
-        assert wallet.privateOpening(staged) is None
+        assert wallet.reger.privateOpening(staged) is None
     resumed = invoke(case.alice, 'vc', 'registry', 'advance', '-a', 'self', '-r', 'r',
                      '-s', acdc.said, *case.bound_args)[0]
     assert resumed['accepted'] and resumed['update'] == staged.said and resumed['sn'] == 3
     with _owned_wallet(case.alice) as (_, rgy, wallet):
         reg = rgy.registryByName('r')
         assert reg.store.headEvent(case.registry).raw == staged.raw
-        assert wallet.privateOpening(staged).qb64 == proof.qb64
+        assert wallet.reger.privateOpening(staged).qb64 == proof.qb64
         assert wallet.publicOpening(staged) is None
     public = invoke(case.alice, 'vc', 'create', '--acdc-v2', '--public', '-a', 'self',
                     '-r', 'r', '--data', '{"status":"public successor"}')[0]
@@ -200,7 +200,7 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         with _owned_wallet(case.alice) as (hby, rgy, wallet):
             assert rgy.store.headEvent(conflict_reg).said == head.said
             assert rgy.store.event(pending.said).raw == pending.raw
-            assert wallet.privateOpening(pending) is None
+            assert wallet.reger.privateOpening(pending) is None
             assert hby.habByName('self').kever.serder.said == kel_head
 
 

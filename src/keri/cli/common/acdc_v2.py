@@ -328,7 +328,7 @@ class AcdcV2Author(doing.DoDoer):
         def acceptedOpening(event):
             """Read possessed public or private proof without reconstructing metadata."""
             opening = wallet.publicOpening(event)
-            return (opening, True) if opening is not None else (wallet.privateOpening(event), False)
+            return (opening, True) if opening is not None else (wallet.reger.privateOpening(event), False)
 
         if self.proposedEvent is not None:
             event = self.proposedEvent
@@ -349,7 +349,7 @@ class AcdcV2Author(doing.DoDoer):
             if event.sad.get('rd') != reg.regk or not matches(event, self.blinder):
                 raise ConfigurationError('group proposal does not bind the requested credential and state')
             if not public:
-                wallet.retainPrivateOpening(event, self.blinder)
+                wallet.reger.retainPrivateOpening(event, self.blinder)
             accepted = reg.store.seqEvent(reg.regk, ordinal)
             if accepted is not None and accepted.said == event.said:
                 return event
@@ -373,7 +373,7 @@ class AcdcV2Author(doing.DoDoer):
             if len(pending) != 1 or not matches(event, self.blinder) or event.sad['p'] != head.said:
                 raise ConfigurationError('registry has a different pending update; resolve it first')
             if not public:
-                wallet.retainPrivateOpening(event, self.blinder)
+                wallet.reger.retainPrivateOpening(event, self.blinder)
             return event
 
         if sn and head.ilk == 'bup':
@@ -386,7 +386,7 @@ class AcdcV2Author(doing.DoDoer):
                 makeOpening(sn)
             if matches(head, self.blinder) and (not public or self.publishOpening):
                 if not public:
-                    wallet.retainPrivateOpening(head, self.blinder)
+                    wallet.reger.retainPrivateOpening(head, self.blinder)
                 return head
 
         if bound and wallet.hby.kevers[acdc.iseaid].serder.said != boundEvent:
@@ -397,7 +397,7 @@ class AcdcV2Author(doing.DoDoer):
         if public:
             wallet.retainPublicOpening(event, proof)
         else:
-            wallet.retainPrivateOpening(event, proof)
+            wallet.reger.retainPrivateOpening(event, proof)
         reg.processEvent(event)
         return event
 
