@@ -119,3 +119,5 @@ class RegistrySaltService:
         prepared = self.custody.prepareRoot(info, root)
         with self.custody.db.env.begin(write=True) as txn:
             self.custody.retainPrepared(prepared, txn)
+        # Local processor completion only: no wire receipt or durable delivery state.
+        self.rvy.cues.append(dict(kin='registrySalt', said=serder.said, registry=rip.said))

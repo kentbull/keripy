@@ -312,3 +312,41 @@ def test_routed_salt_reply_supplies_registry_evidence_before_custody(network, un
     finally:
         notifier.noter.close()
         fresh.close()
+
+
+def test_explicit_salt_export_import_verifies_file_and_recipient(network):
+    """A new registry store imports ciphertext; existing custody cannot mask bad input."""
+    from keri.acdc import Regery
+    from keri.app.notifying import Notifier
+    from keri.cli.common.registry_salts import SaltPeer, exportReply, importReply
+    from keri.kering import ConfigurationError, MissingAuthAttachmentError
+
+    c = network
+    source = c.services[0]
+    issuer, holder = c.habs[:2]
+    source.custody.createCustody(c.rip.said, holder.pre)
+    body = source.makeReply(issuer, c.rip.said, holder.pre)
+    peer = SimpleNamespace(hby=source.hby, rgy=source.rgy)
+    wire = exportReply(peer, body, issuer.endorse(body, gvrsn=Vrsn_2_0))
+    fresh = Regery(c.hbys[1], name='salt-file-import', temp=True)
+    notifier = Notifier(c.hbys[1])
+    try:
+        target = SaltPeer(c.hbys[1], fresh, RegistryCustody(c.hbys[1], fresh), holder, notifier)
+        assert fresh.store.seqEvent(c.rip.said, 0) is None
+        importReply(target, wire, c.rip.said)
+        assert fresh.store.seqEvent(c.rip.said, 0).said == c.rip.said
+        assert target.service.custody._load(c.rip.said).salt == source.custody._load(c.rip.said).salt
+        with pytest.raises(ConfigurationError, match='selected registry'):
+            importReply(target, wire, c.habs[2].pre)
+        from keri.core import reply
+        stale = reply(pre=issuer.pre, route=body.route, data=body.sad['a'],
+                      stamp='2020-01-01T00:00:00.000000+00:00', version=Vrsn_2_0)
+        staleWire = exportReply(peer, stale, issuer.endorse(stale, gvrsn=Vrsn_2_0))
+        with pytest.raises(ConfigurationError, match='not accepted'):
+            importReply(target, staleWire, c.rip.said)
+        forged = exportReply(peer, body, c.habs[2].endorse(body, gvrsn=Vrsn_2_0))
+        with pytest.raises(MissingAuthAttachmentError):
+            importReply(target, forged, c.rip.said)
+    finally:
+        notifier.noter.close()
+        fresh.close()

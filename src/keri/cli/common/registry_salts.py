@@ -97,6 +97,42 @@ def command(args):
     return [SaltDoer(args)]
 
 
+def exportReply(peer, body, stream):
+    """Compose public registry evidence followed by the recipient-encrypted reply.
+
+    peer borrows the author stores; body and stream identify the fully signed
+    reply. The caller verifies its threshold before export. No plaintext salt,
+    local custody metadata, or new transfer format is serialized.
+    """
+    evidence = EvidenceContext(peer.hby, reger=peer.rgy.baser)
+    return evidence.clone([body.sad['a']['registry']]) + bytes(stream)
+
+
+def importReply(peer, raw, registry):
+    """Import an export file and require its final salt reply to verify now.
+
+    Public evidence is processed normally. Incomplete signature dependencies may
+    remain in ordinary escrows, but are not reported as a successful import.
+    Existing custody alone never establishes acceptance of this file.
+    """
+    remaining, last = bytearray(raw), None
+    parser = Parser(version=Vrsn_2_0)
+    while remaining:
+        size = len(remaining)
+        last = parser.parseOne(ims=remaining, processive=False)
+        if last is None or last.serder is None or len(remaining) >= size:
+            raise ConfigurationError('salt import requires complete CESR frames')
+    if (last is None or last.serder.ilk != 'rpy' or last.serder.route not in ROUTES
+            or last.serder.sad['a'].get('registry') != registry):
+        raise ConfigurationError('salt import must end with a reply for the selected registry')
+    before = len(peer.mux.rvy.cues)
+    peer.ingest(raw)
+    completed = any(cue.get('kin') == 'registrySalt' and cue.get('said') == last.serder.said
+                    for cue in list(peer.mux.rvy.cues)[before:])
+    if not completed:
+        raise ConfigurationError('salt reply was not accepted; inspect ordinary protocol dependencies')
+
+
 class SaltDoer(doing.DoDoer):
     """Own one command's open stores, finite deliveries and optional listener."""
 
@@ -156,6 +192,12 @@ class SaltDoer(doing.DoDoer):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
+        if args.operation == 'export':
+            self._require('output')
+            if args.endpoint or getattr(args, 'deliver', False) or args.proposal_output:
+                raise ConfigurationError('export writes a verified file; use send for delivery or proposals')
+        if args.operation == 'import':
+            self._require('input', 'registry')
         with acdc_v2.openedRegistry(args) as (hby, rgy), ExitStack() as activity:
             hab = hby.habByName(args.alias)
             if hab is None:
@@ -172,7 +214,7 @@ class SaltDoer(doing.DoDoer):
             activity.callback(self.remove, children)
             for path in args.evidence:
                 peer.ingest(Path(path).read_bytes())
-            if args.input:
+            if args.input and args.operation != 'import':
                 peer.ingest(Path(args.input).read_bytes())
             if args.operation == 'serve':
                 yield from self.serve(peer, activity)
@@ -181,6 +223,10 @@ class SaltDoer(doing.DoDoer):
                 self._require('registry')
                 print(json.dumps(dict(registry=args.registry,
                     custody_present=hby.ks.custody.get((args.registry,)) is not None)))
+                return
+            if args.operation == 'import':
+                importReply(peer, Path(args.input).read_bytes(), args.registry)
+                print(json.dumps(dict(registry=args.registry, custody_present=True)))
                 return
             if args.operation == 'receive':
                 self._require('input')
@@ -222,7 +268,7 @@ class SaltDoer(doing.DoDoer):
                     raise TimeoutError('registry salt reply awaits the group signing threshold')
                 yield self.tock
             if args.output:
-                write(args.output, stream)
+                write(args.output, exportReply(peer, body, stream) if args.operation == 'export' else stream)
             if args.endpoint:
                 yield from cesr_sending.send(self, args.endpoint, stream, args.timeout)
             if getattr(args, 'deliver', False):
@@ -239,8 +285,7 @@ class SaltDoer(doing.DoDoer):
         Completion means submission, not remote custody. Timeout or transport
         failure propagates without a retry or a delivery-state record.
         """
-        evidence = EvidenceContext(peer.hby, reger=peer.rgy.baser)
-        raw = evidence.clone([body.sad['a']['registry']]) + bytes(stream)
+        raw = exportReply(peer, body, stream)
         poster = StreamPoster(hby=peer.hby, hab=peer.member,
             recp=body.sad['a']['target'], topic='credential', version=Vrsn_2_0)
         children = poster.deliverStream(raw)

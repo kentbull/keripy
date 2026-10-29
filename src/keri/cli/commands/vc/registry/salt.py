@@ -5,11 +5,11 @@ from ....common import Parsery, registry_salts
 
 
 parser = argparse.ArgumentParser(description=__doc__, parents=[Parsery.keystore()])
-parser.add_argument('operation', choices=('send', 'approve', 'receive', 'status', 'serve'))
+parser.add_argument('operation', choices=('export', 'import', 'send', 'approve', 'receive', 'status', 'serve'))
 parser.add_argument('--alias', '-a', required=True, help='local logical issuer or discloser alias')
 parser.add_argument('--evidence', action='append', default=[], help='public CESR evidence file to verify first')
 parser.add_argument('--input', help='signed reply or member-proposal CESR file to receive')
-parser.add_argument('--output', help='create an exact authenticated public reply file')
+parser.add_argument('--output', help='create a signed encrypted reply file; export includes public KEL/TEL evidence')
 parser.add_argument('--proposal-output', help='create an exact member proposal file while awaiting quorum')
 parser.add_argument('--proposal', help='retained multisig/rpy proposal SAID to approve')
 parser.add_argument('--party', help='logical holder or discloser receiving the encrypted salt')
