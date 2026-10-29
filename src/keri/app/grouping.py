@@ -15,10 +15,11 @@ from ..core import (Number, Diger, Saider,
                     Revery, Parser, SerderKERI,
                     Serder, NumDex, SealSource, messagize, exchange)
 from ..peer import Exchanger, specialExchange, cloneMessage
-from ..peer.exchanging import serializeParsedSubstream
+from ..peer.exchanging import serializeParsedSubstream, loadParsedNestedSubstreams, verify
 
 from .delegating import Anchorer
 from .agenting import Receiptor, WitnessInquisitor
+from .group_members import AcceptedRoster, acceptedRoster
 
 logger = ogler.getLogger()
 
@@ -748,6 +749,94 @@ def multisigRpyExn(ghab, rpy, version=None, gvrsn=None, kind=None):
     exn = SerderKERI(raw=ims)
 
     return exn, bytearray(ims[exn.size:])
+
+
+def _replyRoster(hby, ghab, roster):
+    """Require this local group's exact current accepted signing snapshot."""
+    from .habbing import GroupHab
+
+    if (not isinstance(ghab, GroupHab) or not isinstance(roster, AcceptedRoster) or roster.group != ghab.pre
+            or hby.habs.get(ghab.pre) is not ghab or not ghab.accepted
+            or ghab.mhab is None):
+        raise ValidationError('reply approval requires a local accepted group roster')
+    current = acceptedRoster(hby, ghab.pre, tuple(member.aid for member in roster.members))
+    if current != roster or ghab.mhab.pre not in [member.aid for member in roster.members]:
+        raise ValidationError('reply approval group roster is stale or inconsistent')
+
+
+def _replyChild(ghab, child, validate):
+    """Check exact reply attribution and signature-only attachments before policy."""
+    serder = child.serder
+    if (not callable(validate) or not isinstance(serder, SerderKERI)
+            or serder.ilk != Ilks.rpy or not serder.verify()
+            or (serder.pvrsn == Vrsn_2_0 and serder.pre != ghab.pre)
+            or any(value for key, value in vars(child).items()
+                   if key not in ('serder', 'tsgs', 'cigars', 'local'))):
+        raise ValidationError('reply approval requires one group reply with signature attachments')
+    # Policy must raise on refusal. Merely returning False must never mean consent.
+    if validate(serder) is False:
+        raise ValidationError('reply approval domain policy declined the body')
+
+
+def replyProposal(hby, exc, mux, said, *, ghab, roster, validate):
+    """Inspect one authenticated retained v2 reply proposal without approving it.
+
+    Parameters: hby/exc/mux are caller-owned processors; said identifies a
+        retained /multisig/rpy wrapper; ghab is the local GroupHab; roster is
+        its trusted accepted snapshot; validate is a required domain-policy
+        callable that raises on rejection, run before user approval/display.
+    Returns: exact retained parsed reply child, including signature attachments.
+    Raises: ValidationError for missing authentication, mismatched group/member,
+        stale roster, malformed child or domain-policy refusal. Policy errors
+        propagate. This read path grants no local approval or reply authority.
+    """
+    _replyRoster(hby, ghab, roster)
+    wrapper = hby.db.exns.get(keys=said)
+    if (wrapper is None or wrapper.route != '/multisig/rpy'
+            or wrapper.pvrsn != Vrsn_2_0 or not exc.complete(said)
+            or wrapper.sad['a'].get('gid') != ghab.pre
+            or wrapper.pre not in [member.aid for member in roster.members]):
+        raise ValidationError('reply proposal requires an authenticated current group member wrapper')
+    verify(hby, wrapper)
+    children = loadParsedNestedSubstreams(hby, said)
+    mux.validate(wrapper, nests=children)
+    if len(children) != 1:
+        raise ValidationError('reply proposal requires exactly one retained child')
+    child = children[0]
+    _replyChild(ghab, child, validate)
+    _replyRoster(hby, ghab, roster)
+    return child
+
+
+def endorseReply(hby, ghab, child, *, roster, validate):
+    """Add explicit local approval to an exact policy-validated group reply.
+
+    Parameters: hby is caller-owned Habery; ghab is its accepted GroupHab;
+        child is the exact parsed reply; roster is its accepted signing snapshot;
+        validate is required domain policy, rerun immediately before signing.
+    Returns: (signed child stream, member wrapper, detached wrapper attachments).
+        The caller processes the local wrapper through its existing Exchanger/
+        Multiplexor to record approval and replay retained contributions.
+    Raises: ValidationError for invalid/stale roster, child or policy refusal.
+        Policy and signing errors propagate. No routes or processors are created.
+        The callback owns domain consent; this helper adds no application-secret
+        custody prerequisite beyond the group's existing signing operation.
+    """
+    _replyRoster(hby, ghab, roster)
+    _replyChild(ghab, child, validate)
+    _replyRoster(hby, ghab, roster)
+    local = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(ghab.endorse(child.serder, gvrsn=Vrsn_2_0)), processive=False)[0]
+    # Reparse a copy so retries cannot mutate the retained proposal object.
+    signed = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(serializeParsedSubstream(child)), processive=False)[0]
+    signed.tsgs.extend(local.tsgs)
+    signed.cigars.extend(local.cigars)
+    stream = messagize(signed.serder, tsgs=signed.tsgs or None,
+                       cigars=signed.cigars or None, gvrsn=Vrsn_2_0)
+    wrapper, attachments = multisigRpyExn(ghab, stream, version=Vrsn_2_0,
+                                         gvrsn=Vrsn_2_0, kind=Kinds.json)
+    return stream, wrapper, attachments
 
 
 def multisigExn(ghab, exn, version=None, kind=None):

@@ -16,15 +16,16 @@ from prettytable import PrettyTable
 
 from ...common import Parsery, setupHby, printIdentifier, parseVersion
 
-from ....kering import (TraitCodex, ConfigurationError,
+from ....kering import (TraitCodex, ConfigurationError, KeriError, Roles,
                         Kinds, Ilks, MissingAnchorError, MissingRegistryError, ValidationError,
                         Version, Vrsn_1_0, Vrsn_2_0)
-from ....app import (HaberyDoer, MailboxDirector, WitnessInquisitor,
+from ....app import (GroupHab, HaberyDoer, MailboxDirector, WitnessInquisitor,
                      Notifier, Multiplexor, Counselor, Organizer, Poster,
                      multisigInceptExn, multisigInteractExn, multisigRotateExn,
                      multisigRpyExn, multisigRegistryInceptExn, multisigIssueExn,
                      multisigRevokeExn)
-from ....app.grouping import loadHandlers
+from ....app.grouping import loadHandlers, replyProposal, endorseReply
+from ....app.group_members import acceptedRoster
 from ....app.acdc_v2_grouping import RegistryApproval
 from ....app.forwarding import StreamPoster
 from ....app.evidencing import ServiceConfig
@@ -207,7 +208,7 @@ class JoinDoer(doing.DoDoer):
             if done:
                 self.notifier.noter.notes.rem(keys=keys)
 
-            elif done is not None or route not in ('/multisig/rip', '/multisig/bup'):
+            elif done is not None or route not in ('/multisig/rip', '/multisig/bup', '/multisig/rpy'):
                 delete = input(f"\nDelete event [Y|n]? ")
                 if delete in ("Y", "y"):
                     self.notifier.noter.notes.rem(keys=keys)
@@ -706,6 +707,9 @@ class JoinDoer(doing.DoDoer):
             bool: True when the reply is approved and processed, otherwise False
             """
         said = attrs["d"]
+        retained = self.hby.db.exns.get(keys=said)
+        if retained is not None and retained.pvrsn == Vrsn_2_0:
+            return (yield from self.rpyV2(attrs))
         exn, pathed = cloneMessage(self.hby, said=said)
 
         sender = exn.ked['i']
@@ -753,7 +757,8 @@ class JoinDoer(doing.DoDoer):
             self.psr.parseOne(ims=bytes(anc))
 
             # Now sign the event and parse it with our signatures
-            anc = hab.endorse(rserder, framed=False)
+            anc = hab.endorse(rserder, framed=False,
+                              gvrsn=rserder.gvrsn or rserder.pvrsn)
             self.psr.parseOne(ims=bytes(anc))
 
             smids = hab.db.signingMembers(pre=hab.pre)
@@ -778,6 +783,90 @@ class JoinDoer(doing.DoDoer):
             return True
 
         return False
+
+    def rpyV2(self, attrs):
+        """Approve an exact retained v2 endpoint reply through existing group owners.
+
+        Parameters: attrs identifies the retained /multisig/rpy notification.
+        Returns: True after exact endpoint acceptance and finite fanout, False
+            after decline, or None for unsupported policy or pending acceptance.
+        Raises: ValidationError for invalid wrapper, group or endpoint semantics.
+            Unsupported domain routes receive no prompt or local signature.
+        """
+        wrapper = self.hby.db.exns.get(keys=attrs['d'])
+        if wrapper is None or wrapper.route != attrs['r']:
+            raise ValidationError('reply notification has no matching retained proposal')
+        hab = self.hby.habs.get(wrapper.sad['a'].get('gid'))
+        if not isinstance(hab, GroupHab):
+            raise ValidationError('reply proposal requires a local group')
+        roster = acceptedRoster(self.hby, hab.pre, hab.smids)
+
+        def validateEndpoint(serder):
+            """Validate the installed endpoint policy before prompt and before signing."""
+            if serder.route != '/end/role/add':
+                raise ConfigurationError('reply domain policy is not installed')
+            data = serder.sad['a']
+            if not isinstance(data, dict) or not {'cid', 'role', 'eid'} <= set(data):
+                raise ValidationError('endpoint reply is missing controller, role or endpoint')
+            try:
+                if (Prefixer(qb64=data['cid']).qb64 != data['cid']
+                        or Prefixer(qb64=data['eid']).qb64 != data['eid']
+                        or data['cid'] != hab.pre or data['role'] not in Roles):
+                    raise ValueError
+            except (KeriError, ValueError, TypeError):
+                raise ValidationError('endpoint reply has invalid controller, role or endpoint') from None
+
+        try:
+            child = replyProposal(self.hby, self.exc, self.mux, wrapper.said,
+                ghab=hab, roster=roster, validate=validateEndpoint)
+        except ConfigurationError:
+            print('Reply proposal pending: its domain approval policy is unavailable.')
+            return None
+        data = child.serder.sad['a']
+        cid, role, eid = data['cid'], data['role'], data['eid']
+        contact = self.org.get(wrapper.pre) or {}
+        endpoint = self.org.get(eid) or {}
+        print(f"\nEndpoint Role Authorization (from {contact.get('alias', wrapper.pre)}):")
+        print(f'    Controller: {hab.name} ({cid})')
+        print(f'    Role: {role.capitalize()}')
+        print(f"    Endpoint Provider: {endpoint.get('alias', 'Unknown Endpoint')} ({eid})")
+        if not self.auto and input('\nApprove exact endpoint reply [Y|n]? ') not in ('', 'y', 'Y'):
+            return False
+
+        signed, proposal, attachments = endorseReply(self.hby, hab, child,
+            roster=roster, validate=validateEndpoint)
+        self.psr.parse(ims=bytearray(signed), local=True)
+        self.psr.parse(ims=bytearray(proposal.raw + attachments), local=True)
+        deliveries = []
+        deadline = time.monotonic() + self.timeout
+        try:
+            for member in roster.members:
+                if member.aid == hab.mhab.pre:
+                    continue
+                poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member.aid,
+                                      topic='multisig', version=Vrsn_2_0)
+                poster.send(proposal, attachment=attachments, gvrsn=Vrsn_2_0)
+                children = poster.deliver()
+                deliveries.extend(children)
+                self.extend(children)
+            while True:
+                self.rvy.processEscrowReply()
+                accepted = self.hby.db.eans.get(keys=(cid, role, eid))
+                complete = (accepted is not None and accepted.qb64 == child.serder.said
+                            and hab.loadEndRole(cid=cid, role=role, eid=eid))
+                if complete and all(delivery.done for delivery in deliveries):
+                    break
+                if time.monotonic() >= deadline:
+                    if not complete:
+                        print('Reply proposal pending: the exact endpoint reply is not accepted.')
+                        return None
+                    print('Some member deliveries did not complete before timeout.')
+                    break
+                yield self.tock
+        finally:
+            self.remove(deliveries)
+        print(f'End role authorization added for role {role}')
+        return True
 
     def vcp(self, attrs):
         """  Handle issue messages

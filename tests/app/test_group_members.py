@@ -1,11 +1,11 @@
-"""Real accepted group/member history bounds local registry-salt recipients."""
+"""Real accepted group/member history bounds rosters and encryption recipients."""
 
 from dataclasses import asdict, replace
 
 import pytest
 
 from keri import Vrsn_2_0
-from keri.app.registry_members import acceptedRoster, currentRecipientKey
+from keri.app.group_members import acceptedRoster, currentRecipientKey
 from keri.core import MtrDex, Parser, eventing
 from keri.core.signing import Encrypter
 from keri.kering import ValidationError
