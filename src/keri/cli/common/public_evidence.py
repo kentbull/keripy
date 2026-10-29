@@ -23,7 +23,6 @@ from keri.app.evidencing import EvidenceContext, KEL_DEPENDENCIES, signedQuery
 from keri.cli.common import acdc_v2, setupHby
 from keri.core import Parser, SerderKERI, Number
 from keri.kering import ConfigurationError
-from keri.help import helping
 from keri.peer import exchanging
 
 
@@ -167,43 +166,32 @@ def kel(args, operation):
 
 
 def observerOptions(parser):
-    """Add explicit configured-source trust and observation-age options."""
-    parser.add_argument('--require-fresh', action='store_true',
-                        help='require a recent observation from the authenticated HTTPS source')
-    parser.add_argument('--max-age', type=float, help='maximum observation age in seconds; requires --require-fresh')
+    """Add TLS trust settings for the configured query source."""
     parser.add_argument('--observer-ca-file', help='absolute CA bundle path for the queried HTTPS source')
     parser.add_argument('--observer-cert-name', help='expected DNS certificate name for an IP source URL')
 
 
 @dataclass(frozen=True)
-class ObserverPolicy:
-    """One configured query source and optional observation-age requirement.
+class ObserverConnection:
+    """TLS settings for one configured query source.
 
     TLS authenticates this service connection, while ordinary processors verify
     issuer evidence. Neither establishes global latest state. These settings
     never configure the independent recipient delivery endpoint.
     """
     url: str | None
-    maximumAge: float | None = None
     cafilepath: str | None = None
     certedhost: str | None = None
 
     @classmethod
     def fromArgs(cls, args, url):
         """Validate source-only options before stores or sockets are opened."""
-        required = getattr(args, 'require_fresh', False)
-        maximum = getattr(args, 'max_age', None)
         ca = getattr(args, 'observer_ca_file', None)
         name = getattr(args, 'observer_cert_name', None)
         if url is None:
-            if required or maximum is not None or ca is not None or name is not None:
+            if ca is not None or name is not None:
                 raise ConfigurationError('observer policy requires an actual registry query source')
             return cls(None)
-        if required:
-            if maximum is None or not math.isfinite(maximum) or maximum <= 0:
-                raise ConfigurationError('--require-fresh needs an explicit positive finite --max-age')
-        elif maximum is not None:
-            raise ConfigurationError('--max-age requires --require-fresh')
         try:
             target = urlsplit(url)
             target.port
@@ -212,8 +200,8 @@ class ObserverPolicy:
         if (target.scheme not in ('http', 'https') or not target.hostname
                 or target.username is not None or target.password is not None or target.fragment):
             raise ConfigurationError('observer source requires an uncredentialed HTTP(S) URL without a fragment')
-        if (required or ca is not None or name is not None) and target.scheme != 'https':
-            raise ConfigurationError('observer trust and freshness options require HTTPS')
+        if (ca is not None or name is not None) and target.scheme != 'https':
+            raise ConfigurationError('observer TLS options require HTTPS')
         if ca is not None:
             path = Path(ca).expanduser()
             if not path.is_absolute() or not path.is_file():
@@ -233,7 +221,7 @@ class ObserverPolicy:
                         raise ConfigurationError('observer certificate name must be a non-empty DNS name')
                 else:
                     raise ConfigurationError('observer certificate name must be a DNS name')
-        return cls(url, maximum if required else None, ca, name)
+        return cls(url, ca, name)
 
     def clientOptions(self):
         """Pass only selected trust settings through HIO's existing TLS contract."""
@@ -242,57 +230,25 @@ class ObserverPolicy:
             options['cafilepath'] = self.cafilepath
         if self.certedhost is not None:
             options['certedhost'] = self.certedhost
-        if self.maximumAge is not None:
-            options['redirectable'] = False
         return options
-
-    def observedAt(self, response):
-        """Return an aware observation only when explicit freshness is required."""
-        if self.maximumAge is None:
-            return None
-        try:
-            stamp = helping.fromIso8601(response.get('headers', {}).get('observer-observed-at'))
-            if stamp.utcoffset() is None:
-                raise ValueError('observation timestamp has no timezone')
-        except (TypeError, ValueError) as error:
-            raise ConfigurationError('observer response requires an aware observed-at timestamp') from error
-        self.checkAge(stamp)
-        return stamp
-
-    def checkAge(self, stamp):
-        """Check wall-clock age at the decision, without inferring issuer freshness."""
-        age = (helping.nowUTC() - stamp).total_seconds()
-        if age < 0 or age > self.maximumAge:
-            raise ConfigurationError('observer observation is future-dated or stale')
-
-    def recheck(self, evidence, observations):
-        """Recheck transient facts after all syncs and before authoring or consent."""
-        for regid, said, stamp in observations:
-            self.checkAge(stamp)
-            head = evidence.store.headEvent(regid)
-            if head is None or head.said != said:
-                raise ConfigurationError('observer observation no longer names the local registry head')
 
 
 def verifiedRegistryResponse(evidence, regid, response):
-    """Ingest once and require the exact advertised/requested registry result.
+    """Ingest CESR evidence and require acceptance for the requested registry.
 
     ``evidence`` is the caller's existing EvidenceContext. Its ordinary processors
     authenticate the body; this CLI postcondition neither authenticates the HTTP
-    source nor establishes observation freshness. A declared fresh CESR response
-    must have no pending/rejected work and its returned, local and advertised
-    requested heads must agree, or ConfigurationError is raised.
+    source nor establishes globally latest state. Returned registry evidence must
+    be accepted by the ordinary processors and agree with the local registry head.
     """
     if response.get('status') != 200:
         raise ConfigurationError(f"observer HTTP status {response.get('status')}")
     headers = response.get('headers', {})
-    if (headers.get('observer-evidence-state') != 'fresh'
-            or headers.get('content-type', '').split(';')[0] != CESR_CONTENT_TYPE):
-        raise ConfigurationError('observer response requires declared fresh CESR evidence')
+    if headers.get('content-type', '').split(';')[0] != CESR_CONTENT_TYPE:
+        raise ConfigurationError('registry response requires CESR evidence')
     result = evidence.ingest(response['body'])
     head = evidence.store.headEvent(regid)
     if (result['pending'] or result['rejected'] or head is None
-            or head.said != headers.get('observer-registry-head')
             or result['heads'].get(regid) != head.said):
         raise ConfigurationError('observer evidence failed exact registry synchronization')
     return head
@@ -343,7 +299,7 @@ class Request(doing.DoDoer):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
-        policy = ObserverPolicy.fromArgs(args, args.endpoint if self.operation == 'query' else None)
+        policy = ObserverConnection.fromArgs(args, args.endpoint if self.operation == 'query' else None)
         target = urlsplit(args.endpoint)
         if target.scheme not in ('http', 'https') or not target.hostname:
             raise ConfigurationError('public evidence requests require an HTTP(S) endpoint')
@@ -378,9 +334,8 @@ class Request(doing.DoDoer):
                     print(json.dumps(dict(accepted=True, result=result)))
                 else:
                     head = verifiedRegistryResponse(evidence, args.registry, response)
-                    policy.observedAt(response)
                     digest = write(args.output, bytes(response['body']))
-                    print(json.dumps(dict(accepted=True, fresh=policy.maximumAge is not None, registry=args.registry,
+                    print(json.dumps(dict(accepted=True, registry=args.registry,
                         head=head.said, sn=head.sn, output=args.output, sha256=digest)))
             finally:
                 self.remove([owner, evidence])

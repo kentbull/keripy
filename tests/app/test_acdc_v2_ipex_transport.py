@@ -2,7 +2,6 @@
 from contextlib import contextmanager, nullcontext
 from datetime import timedelta
 import ssl
-import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import ipaddress
@@ -66,7 +65,7 @@ class Sender(ExchangeDoer):
 
 
 @contextmanager
-def registry_response(tmp_path, case, monkeypatch, *, tls=False, observed="current", redirect=None):
+def registry_response(tmp_path, case, monkeypatch, *, tls=False):
     """Serve real signed registry evidence to the commands' ordinary processors."""
     source, srgy = _persistent_registry_owners(tmp_path, 'sync-source')
     target, rgy = _persistent_registry_owners(tmp_path, 'sync-target')
@@ -101,7 +100,6 @@ def registry_response(tmp_path, case, monkeypatch, *, tls=False, observed="curre
             assert result['heads'][requested[0].said] == requested[2].said
         selected = other if case == 'unrelated' else requested
         body = stream(selected if case == 'matching' else selected[:2])
-        advertised = selected[2].said if case in ('matching', 'stale-prefix', 'mismatched-head') else selected[1].said
 
         requests = []
 
@@ -109,28 +107,11 @@ def registry_response(tmp_path, case, monkeypatch, *, tls=False, observed="curre
             def do_POST(self):
                 self.rfile.read(int(self.headers['Content-Length']))
                 requests.append(self.path)
-                response_body, response_head = body, advertised
-                if case.startswith('multiple'):
-                    if len(requests) == 1:
-                        selected = requested[:2] if case == 'multiple-moved' else requested
-                        response_body, response_head = stream(selected), selected[-1].said
-                    else:
-                        if case == 'multiple-aged':
-                            time.sleep(1.2)
-                        response_body = stream(requested + other if case == 'multiple-moved' else other)
-                        response_head = other[-1].said
-                self.send_response(302 if redirect else 202 if case == 'wrong-status' else 200)
-                if redirect:
-                    self.send_header('Location', redirect)
+                self.send_response(202 if case == 'wrong-status' else 200)
                 self.send_header('Content-Type', 'text/plain' if case == 'wrong-media' else 'application/cesr')
-                self.send_header('Observer-Evidence-State', 'fresh')
-                self.send_header('Observer-Registry-Head', response_head)
-                stamp = helping.nowIso8601() if observed == 'current' else observed
-                if stamp is not None:
-                    self.send_header('Observer-Observed-At', stamp)
-                self.send_header('Content-Length', str(len(response_body)))
+                self.send_header('Content-Length', str(len(body)))
                 self.end_headers()
-                self.wfile.write(response_body)
+                self.wfile.write(body)
 
             def log_message(self, *args):
                 pass
@@ -170,7 +151,7 @@ def registry_response(tmp_path, case, monkeypatch, *, tls=False, observed="curre
         source.close()
 
 
-@pytest.mark.parametrize('case', ['unrelated', 'stale-prefix', 'mismatched-head',
+@pytest.mark.parametrize('case', ['unrelated', 'stale-prefix',
                                   'wrong-media', 'wrong-status', 'matching'])
 def test_ipex_synchronization_requires_exact_requested_result(tmp_path, monkeypatch, capsys, case):
     """A response must prove the requested operation before the real Apply is authored."""
@@ -203,7 +184,6 @@ def test_public_query_old_exact_prefix_is_synchronized_without_freshness(tmp_pat
         doing.Doist(real=True, tock=0.01, limit=2).do(doers=[public_evidence.Request(args, 'query')])
         result = json.loads(capsys.readouterr().out)
         assert result['accepted'] and result['head'] == fixture.requested[1].said
-        assert result['fresh'] is False
         assert output.read_bytes() == fixture.body
         assert fixture.ingested == [fixture.body]
         regid, head = args.registry, result['head']
@@ -242,106 +222,39 @@ def observer_certificates(tmp_path):
     return paths
 
 
-@pytest.mark.parametrize('case', ['http', 'missing', 'malformed', 'naive', 'future', 'stale', 'valid', 'dns-valid', 'ip-valid', 'ordinary'])
-def test_explicit_observer_freshness(tmp_path, monkeypatch, capsys, observer_certificates, case):
-    """Only explicit authenticated, recent observations authorize a fresh query result."""
-    stamps = {'ordinary': 'not-a-time', 'missing': None, 'malformed': 'not-a-time', 'naive': '2026-10-27T00:00:00',
-        'future': helping.toIso8601(helping.nowUTC() + timedelta(days=1)),
-        'stale': helping.toIso8601(helping.nowUTC() - timedelta(days=1))}
-    with registry_response(tmp_path, 'matching', monkeypatch,
-            tls=False if case == 'http' else observer_certificates[0],
-            observed=stamps.get(case, 'current')) as fixture:
-        output = tmp_path / 'observed.cesr'
+@pytest.mark.parametrize('host, cert_name', [('localhost', None), ('127.0.0.1', None), ('127.0.0.1', 'localhost')])
+def test_observer_tls_accepts_configured_authority(tmp_path, monkeypatch, capsys, observer_certificates, host, cert_name):
+    """TLS trust protects the source connection; CESR processors still verify its evidence."""
+    with registry_response(tmp_path, 'matching', monkeypatch, tls=observer_certificates[0]) as fixture:
         args = SimpleNamespace(name=fixture.target.name, base=fixture.target.base, bran=None,
-            alias='actor', endpoint=(fixture.url.replace('127.0.0.1', 'localhost') if case == 'dns-valid' else fixture.url) + '?scope=exact', timeout=2, registry=fixture.requested[0].said,
-            output=str(output), require_fresh=case != 'ordinary', max_age=None if case == 'ordinary' else 10,
-            observer_ca_file=None if case == 'http' else str(observer_certificates[0]),
-            observer_cert_name=None if case in ('http', 'dns-valid', 'ip-valid') else 'localhost')
+            alias='actor', endpoint=fixture.url.replace('127.0.0.1', host), timeout=2,
+            registry=fixture.requested[0].said, output=str(tmp_path / 'observed.cesr'),
+            observer_ca_file=str(observer_certificates[0]), observer_cert_name=cert_name)
+        doing.Doist(real=True, tock=0.01, limit=3).do(doers=[public_evidence.Request(args, 'query')])
+        assert json.loads(capsys.readouterr().out)['accepted']
+        assert Path(args.output).read_bytes() == fixture.body
+        assert fixture.ingested == [fixture.body]
+
+
+@pytest.mark.parametrize('failure', ['ca', 'name'])
+def test_observer_tls_connection_refuses_other_authority(tmp_path, monkeypatch, observer_certificates, failure):
+    """A wrong TLS authority cannot authorize output or reach evidence processing."""
+    with registry_response(tmp_path, 'matching', monkeypatch, tls=observer_certificates[0]) as fixture:
+        args = SimpleNamespace(name=fixture.target.name, base=fixture.target.base, bran=None,
+            alias='actor', endpoint=fixture.url, timeout=2, registry=fixture.requested[0].said,
+            output=str(tmp_path / 'refused.cesr'),
+            observer_ca_file=str(observer_certificates[failure == 'ca']),
+            observer_cert_name='wrong.example' if failure == 'name' else 'localhost')
         doer = public_evidence.Request(args, 'query')
-        if case in ('valid', 'dns-valid', 'ip-valid', 'ordinary'):
+        with pytest.raises((ConfigurationError, ssl.SSLCertVerificationError)):
             doing.Doist(real=True, tock=0.01, limit=3).do(doers=[doer])
-            result = json.loads(capsys.readouterr().out)
-            assert result['fresh'] is (case != 'ordinary')
-            assert output.read_bytes() == fixture.body
-            assert fixture.ingested == [fixture.body]
-            assert fixture.requests == ['/?scope=exact']
-        else:
-            with pytest.raises(ConfigurationError):
-                doing.Doist(real=True, tock=0.01, limit=3).do(doers=[doer])
-            assert not output.exists()
-            assert fixture.ingested == ([] if case == 'http' else [fixture.body])
-
-
-@pytest.mark.parametrize('failure', ['ca', 'name', 'redirect'])
-def test_fresh_observer_connection_refuses_other_authority(tmp_path, monkeypatch, observer_certificates, failure):
-    """A wrong TLS authority or redirect cannot authorize output or reach another source."""
-    visits = []
-
-    class Other(BaseHTTPRequestHandler):
-        def do_GET(self):
-            visits.append(self.path)
-            self.send_response(200)
-            self.end_headers()
-
-        do_POST = do_GET
-
-        def log_message(self, *args):
-            pass
-
-    other = ThreadingHTTPServer(('127.0.0.1', 0), Other)
-    thread = Thread(target=other.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
-    thread.start()
-    try:
-        with registry_response(tmp_path, 'matching', monkeypatch, tls=observer_certificates[0],
-                redirect=f'http://127.0.0.1:{other.server_port}/' if failure == 'redirect' else None) as fixture:
-            args = SimpleNamespace(name=fixture.target.name, base=fixture.target.base, bran=None,
-                alias='actor', endpoint=fixture.url, timeout=2, registry=fixture.requested[0].said,
-                output=str(tmp_path / 'refused.cesr'), require_fresh=True, max_age=10,
-                observer_ca_file=str(observer_certificates[failure == 'ca']),
-                observer_cert_name='wrong.example' if failure == 'name' else 'localhost')
-            doer = public_evidence.Request(args, 'query')
-            with pytest.raises((ConfigurationError, ssl.SSLCertVerificationError)):
-                doing.Doist(real=True, tock=0.01, limit=3).do(doers=[doer])
-            assert fixture.ingested == [] and not Path(args.output).exists()
-            assert not any(isinstance(child, (http.clienting.ClientDoer, EvidenceContext))
-                           for child in doer.doers)
-        assert visits == []
-    finally:
-        other.shutdown()
-        other.server_close()
-        thread.join(timeout=2)
-        assert not thread.is_alive()
-
-
-@pytest.mark.parametrize('case', ['multiple-valid', 'multiple-aged', 'multiple-moved'])
-def test_ipex_freshness_rechecks_all_synchronized_registries(tmp_path, monkeypatch, capsys, observer_certificates, case):
-    """Later real fetches cannot age out or advance an earlier observation before Apply."""
-    with registry_response(tmp_path, case, monkeypatch, tls=observer_certificates[0]) as fixture:
-        args = SimpleNamespace(name=fixture.target.name, base=fixture.target.base, bran=None,
-            alias='actor', timeout=3, input=None,
-            registry=[fixture.requested[0].said, fixture.other[0].said], observer=fixture.url,
-            require_fresh=True, max_age=1 if case == 'multiple-aged' else 10,
-            observer_ca_file=str(observer_certificates[0]), observer_cert_name='localhost',
-            proposal=None, proposal_output=None, recipient=fixture.issuer.pre,
-            message='', time=None, plan=json.dumps([[Diger(ser=b'schema').qb64, '/', ['a/value']]]),
-            output=None, endpoint=None)
-        doer = ExchangeDoer(args, 'apply')
-        if case == 'multiple-valid':
-            doing.Doist(real=True, tock=0.01, limit=5).do(doers=[doer])
-            assert json.loads(capsys.readouterr().out)['accepted']
-        else:
-            with pytest.raises(ConfigurationError, match='stale|no longer names'):
-                doing.Doist(real=True, tock=0.01, limit=5).do(doers=[doer])
-            assert list(fixture.target.db.exns.getTopItemIter()) == []
-        assert len(fixture.ingested) == 2 and len(fixture.requests) == 2
+        assert fixture.ingested == [] and not Path(args.output).exists()
+        assert not any(isinstance(child, (http.clienting.ClientDoer, EvidenceContext))
+                       for child in doer.doers)
 
 
 @pytest.mark.parametrize('url, options', [
-    (None, {'require_fresh': True}), (None, {'observer_ca_file': '/unused'}),
-    ('https://observer.example/', {'max_age': 0}),
-    ('https://observer.example/', {'require_fresh': True}),
-    *[('https://observer.example/', {'require_fresh': True, 'max_age': value})
-      for value in (0, -1, float('inf'), float('nan'))],
+    (None, {'observer_ca_file': '/unused'}),
     ('http://observer.example/', {'observer_cert_name': 'observer.example'}),
     ('https://user:pass@observer.example/', {}), ('https://observer.example/#part', {}),
     ('https://observer.example/', {'observer_cert_name': 'other.example'}),
@@ -349,21 +262,9 @@ def test_ipex_freshness_rechecks_all_synchronized_registries(tmp_path, monkeypat
     ('https://observer.example/', {'observer_ca_file': 'relative.pem'}),
 ])
 def test_observer_policy_refuses_misapplied_options(url, options):
-    """Reject orphaned, insecure, invalid-age and ambiguous source settings before I/O."""
+    """Reject orphaned, insecure and ambiguous source settings before I/O."""
     with pytest.raises(ConfigurationError):
-        public_evidence.ObserverPolicy.fromArgs(SimpleNamespace(**options), url)
-
-
-def test_observation_age_bounds_are_inclusive(monkeypatch):
-    """The declared policy accepts exactly zero through max-age, with no clock-skew allowance."""
-    now = helping.nowUTC()
-    monkeypatch.setattr(helping, 'nowUTC', lambda: now)
-    policy = public_evidence.ObserverPolicy('https://observer.example/', maximumAge=10)
-    for age in (0, 10):
-        policy.checkAge(now - timedelta(seconds=age))
-    for age in (-0.001, 10.001):
-        with pytest.raises(ConfigurationError):
-            policy.checkAge(now - timedelta(seconds=age))
+        public_evidence.ObserverConnection.fromArgs(SimpleNamespace(**options), url)
 
 
 @pytest.mark.parametrize('verb', ['apply', 'offer', 'agree', 'grant', 'admit', 'spurn', 'receive', 'query'])
@@ -375,8 +276,8 @@ def test_observer_options_are_explicit_in_every_cli(verb):
               'endpoint': 'https://observer.example/', 'registry': 'registry', 'output': 'unused.cesr'}
     argv = [item for action in module.parser._actions if action.required
             for item in (f'--{action.dest}', values[action.dest])]
-    args = module.parser.parse_args(argv + ['--require-fresh', '--max-age', '10'])
-    assert args.require_fresh and args.max_age == 10
+    args = module.parser.parse_args(argv + ['--observer-cert-name', 'localhost'])
+    assert args.observer_cert_name == "localhost"
     if verb != 'query':
         with pytest.raises(ConfigurationError):
             doers = module.handler(args)

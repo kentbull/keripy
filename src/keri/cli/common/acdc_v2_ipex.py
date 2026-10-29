@@ -26,7 +26,7 @@ from keri.kering import (ConfigurationError, ExtractionError, MissingChainError,
 from keri.peer import exchanging
 from keri.db import openLMDB
 from keri.cli.common import acdc_v2, cesr_sending
-from keri.cli.common.public_evidence import ObserverPolicy, observerOptions, verifiedRegistryResponse
+from keri.cli.common.public_evidence import ObserverConnection, observerOptions, verifiedRegistryResponse
 
 
 class Notices:
@@ -119,8 +119,7 @@ def options(parser, *, send=False):
     parser is mutated in place and returns no result. send additionally exposes
     an explicit HTTP(S)/TCP endpoint. ACDC v2 selection remains opt-in; observer
     synchronization, public file handoff, and group proposals are explicit inputs,
-    not switches that disable core verification. For receive, observation freshness
-    controls apply to initial synchronization, not continuous intake monitoring."""
+    not switches that disable core verification."""
     acdc_v2.options(parser)
     parser.add_argument('--input', help='receive signed CESR evidence before this operation')
     parser.add_argument('--observer', help='configured ACDC v2 observer URL')
@@ -172,8 +171,7 @@ class ExchangeDoer(doing.DoDoer):
         args = self.args
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be positive and finite')
-        policy = ObserverPolicy.fromArgs(args, args.observer if args.registry else None)
-        observations = []
+        policy = ObserverConnection.fromArgs(args, args.observer if args.registry else None)
         derives = getattr(args, 'derive', False)
         with (acdc_v2.opened(args, custody=derives) as (hby, rgy, wallet),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections,
@@ -210,10 +208,7 @@ class ExchangeDoer(doing.DoDoer):
                 response = yield from self.request(args.observer, signedQuery(hab, 'tels', {'i': regid}),
                                                    **policy.clientOptions())
                 head = verifiedRegistryResponse(peer.evidence, regid, response)
-                if (stamp := policy.observedAt(response)) is not None:
-                    observations.append((regid, head.said, stamp))
                 peer.process()
-            policy.recheck(peer.evidence, observations)
             if self.verb == 'receive':
                 app = falcon.App()
                 intake = Intake(peer)
@@ -342,7 +337,6 @@ class ExchangeDoer(doing.DoDoer):
                 peer.ingest(raw)
             if not peer.exc.complete(exn.said):
                 raise ConfigurationError('locally authored IPEX message is pending verification')
-            policy.recheck(peer.evidence, observations)
             # Group threshold/receipt waits do not preserve an earlier use verdict.
             if self.verb == 'grant' and exn.sad['a'].get('o'):
                 if wallet.verification.evaluateGrant(exn.said) is not True:

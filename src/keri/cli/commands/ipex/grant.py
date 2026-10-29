@@ -69,7 +69,7 @@ def handler(args):
         finite/positive, or opening the selected existing legacy identity fails."""
     if args.acdc_v2:
         return [acdc_v2_ipex.ExchangeDoer(args, 'grant')]
-    acdc_v2_ipex.ObserverPolicy.fromArgs(args, None)
+    acdc_v2_ipex.ObserverConnection.fromArgs(args, None)
     if any(getattr(args, key, None) for key in ('from_grant', 'disclose', 'refresh', 'derive', 'opening', 'bound_event', 'observer', 'registry', 'proposal', 'proposal_output')):
         raise ConfigurationError('ACDC v2 presentation options require --acdc-v2')
     if not math.isfinite(args.timeout) or args.timeout <= 0:
