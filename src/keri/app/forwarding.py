@@ -203,21 +203,36 @@ class Poster(doing.DoDoer):
         """
         msg = self._frame(serder, atc, gvrsn)
         for ctrl, locs in ends.items():
+            if self.version.major >= 2:
+                yield from self._deliverStream(hab, ctrl, locs, msg)
+                continue
             witer = messengerFrom(hab=hab, pre=ctrl, urls=locs)
-            witer.msgs.append(bytearray(msg))  # make a copy
+            witer.msgs.append(bytearray(msg))
             self.extend([witer])
-
             while not witer.idle:
-                _ = (yield self.tock)
-
+                yield self.tock
             self.remove([witer])
+
+    def _deliverStream(self, hab, recipient, urls, msg):
+        """Send one complete native stream using the existing finite transport.
+
+        Completion means transport submission, not authenticated peer acceptance.
+        Cancel the owned messenger before returning or unwinding the caller.
+        """
+        messenger = streamMessengerFrom(hab=hab, pre=recipient, urls=urls, msg=msg)
+        self.extend([messenger])
+        try:
+            while not messenger.done:
+                yield self.tock
+        finally:
+            self.remove([messenger])
 
     def forward(self, hab, ends, recp, serder, atc, topic, *, gvrsn=None):
         """Forward through one mailbox using legacy V1 or existing native V2 framing.
 
         gvrsn identifies input attachments, defaulting to this poster's version.
-        The generator retains existing transport ownership and waits for idle;
-        malformed V2 input raises ValueError before any bytes are queued.
+        The generator owns its transport until native finite completion or the
+        legacy idle cue. Malformed V2 input raises ValueError before queuing.
         """
         # If we are one of the mailboxes, just store locally in mailbox
         owits = oset(ends.keys())
@@ -248,16 +263,16 @@ class Poster(doing.DoDoer):
                                        version=Vrsn_1_0, kind=self.kind)
             ims = hab.endorse(serder=fwd, last=False, framed=True, gvrsn=self.version)
 
-        # Transpose the signatures to point to the new location
-        witer = messengerFrom(hab=hab, pre=mbx, urls=mailbox)
         msg.extend(ims)
         msg.extend(atc)
-
-        witer.msgs.append(bytearray(msg))  # make a copy
-        self.extend([witer])
-
-        while not witer.idle:
-            _ = (yield self.tock)
+        if self.version.major >= 2:
+            yield from self._deliverStream(hab, mbx, mailbox, msg)
+        else:
+            witer = messengerFrom(hab=hab, pre=mbx, urls=mailbox)
+            witer.msgs.append(bytearray(msg))
+            self.extend([witer])
+            while not witer.idle:
+                yield self.tock
 
     def forwardToWitness(self, hab, ends, recp, serder, atc, topic, *, gvrsn=None):
         """Use the same mailbox construction and input genus contract for a witness."""

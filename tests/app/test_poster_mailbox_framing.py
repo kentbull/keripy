@@ -2,17 +2,18 @@
 
 from types import SimpleNamespace
 
+import falcon
 import pytest
 from hio.base import doing
-from hio.core import tcp
+from hio.core import http, tcp
 
 from keri import Vrsn_1_0, Vrsn_2_0
 from keri.app import (openHab, Mailboxer, ForwardHandler, Poster, MailboxDirector,
                       Multiplexor, multisigInceptExn)
-from keri.app import forwarding
-from keri.app.agenting import TCPMessenger
+from keri.app import forwarding, httping
+from keri.app.agenting import TCPMessenger, TCPStreamMessenger
 from keri.app.grouping import loadHandlers
-from keri.core import Parser
+from keri.core import Parser, SerderKERI
 from keri.peer import Exchanger
 from keri.kering import Roles, Schemes
 from tests.app.test_acdc_v2_groups import Notices
@@ -36,10 +37,19 @@ def sendViaTcp(hby, sender, recipient, witness, poster, child, attachments, vers
                     serder=child, attachment=attachments, gvrsn=proposalVersion)
         doist.deeds.extend(doist.enter(doers=[tcp.ServerDoer(server=server), poster]))
 
+        transports = []
+
         def delivered():
-            """Observe actual messenger completion and exact server-side socket bytes."""
-            transport = next((item for item in poster.doers if isinstance(item, TCPMessenger)), None)
-            return (transport is not None and transport.sent and poster.sent(child.said)
+            """Retain the actual owner even after finite delivery removes it."""
+            for item in poster.doers:
+                if isinstance(item, (TCPMessenger, TCPStreamMessenger)) and item not in transports:
+                    transports.append(item)
+            if not transports:
+                return False
+            transport = transports[0]
+            if isinstance(transport, TCPStreamMessenger):
+                return transport.done and poster.sent(child.said) and bool(received(server))
+            return (transport.sent and poster.sent(child.said)
                     and received(server) == transport.sent[0])
 
         advance(doist, delivered)
@@ -49,9 +59,48 @@ def sendViaTcp(hby, sender, recipient, witness, poster, child, attachments, vers
         server.close()
 
 
+def sendViaHttp(hby, sender, recipient, witness, poster, child, attachments, version, proposalVersion):
+    """Run the existing mailbox test through the actual queued HTTP transport."""
+    captured = []
+
+    class Intake:
+        def on_post(self, req, rep):
+            if httping.CESR_ATTACHMENT_HEADER in req.headers:
+                request = httping.parseCesrHttpRequest(req)
+                stream = SerderKERI(sad=request.payload).raw + request.attachments.encode()
+            else:
+                stream = req.bounded_stream.read()
+            captured.append(stream)
+            rep.status = falcon.HTTP_204
+
+        on_put = on_post
+
+    app = falcon.App()
+    app.add_route('/', Intake())
+    server = http.Server(servant=tcp.Server(ha=('127.0.0.1', 0)), app=app)
+    assert server.reopen()
+    server.servant.eha = server.servant.ha
+    doist = doing.Doist(tock=0.01)
+    try:
+        evidence = witness.replay(gvrsn=version)
+        evidence.extend(recipient.makeEndRole(eid=witness.pre, role=Roles.mailbox,
+            version=version, gvrsn=version))
+        evidence.extend(witness.makeLocScheme(url=f'http://127.0.0.1:{server.servant.ha[1]}',
+            scheme=Schemes.http, version=version, gvrsn=version))
+        hby.psr.parse(ims=evidence)
+        poster.send(dest=recipient.pre, topic='multisig', hab=sender,
+            serder=child, attachment=attachments, gvrsn=proposalVersion)
+        doist.deeds.extend(doist.enter(doers=[http.ServerDoer(server), poster]))
+        advance(doist, lambda: poster.sent(child.said) and bool(captured))
+        return b''.join(captured)
+    finally:
+        doist.exit()
+        server.close()
+
+
 @pytest.mark.parametrize('version, proposalVersion', [(Vrsn_1_0, Vrsn_1_0),
     (Vrsn_2_0, Vrsn_1_0), (Vrsn_2_0, Vrsn_2_0)])
-@pytest.mark.parametrize('method', ['forward', 'forwardToWitness', 'sendDirect', 'local', 'tcp'])
+@pytest.mark.parametrize('method', ['forward', 'forwardToWitness', 'sendDirect', 'local', 'tcp', 'http'])
 def test_poster_proposal_reaches_mailbox_recipient_group_quorum(version, proposalVersion, method, monkeypatch):
     """Verify actual witness intake and recipient replay with both real group signatures.
 
@@ -83,13 +132,19 @@ def test_poster_proposal_reaches_mailbox_recipient_group_quorum(version, proposa
             groups[0].msgOwnInception(allowPartiallySigned=True, gvrsn=version), version=proposalVersion)
         original = Parser(version=proposalVersion).parse(
             ims=bytearray(child.raw + attachments), processive=False)[0]
-        captured = SimpleNamespace(msgs=[], idle=True)
-        if method != 'tcp':
+        captured = SimpleNamespace(msgs=[], idle=True, done=True)
+        if method not in ('tcp', 'http'):
             monkeypatch.setattr(forwarding, 'messengerFrom', lambda **kwa: captured)
+
+            def captureStream(**kwa):
+                captured.msgs.append(bytearray(kwa['msg']))
+                return captured
+
+            monkeypatch.setattr(forwarding, 'streamMessengerFrom', captureStream)
         mailbox = Mailboxer(name='poster-framing', temp=True)
         try:
             poster = Poster(hby, version=version, mbx=mailbox if method == 'local' else None)
-            if method != 'tcp':
+            if method not in ('tcp', 'http'):
                 monkeypatch.setattr(poster, 'extend', lambda children: None)
             if version == Vrsn_2_0 and proposalVersion == Vrsn_1_0 and method == 'forward':
                 with pytest.raises(ValueError, match='Expected one forwarding payload'):
@@ -101,8 +156,9 @@ def test_poster_proposal_reaches_mailbox_recipient_group_quorum(version, proposa
                     serder=child, atc=attachments, gvrsn=proposalVersion))
                 stream = captured.msgs[0]
             else:
-                if method == 'tcp':
-                    wire = sendViaTcp(hby, sender, recipient, witness, poster, child,
+                if method in ('tcp', 'http'):
+                    send = sendViaTcp if method == 'tcp' else sendViaHttp
+                    wire = send(hby, sender, recipient, witness, poster, child,
                                       attachments, version, proposalVersion)
                 else:
                     endpoint = sender.pre if method == 'local' else witness.pre
