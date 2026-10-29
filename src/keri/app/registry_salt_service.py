@@ -533,28 +533,46 @@ class RegistrySaltService:
         if not self.rvy.acceptReply(serder=body, saider=diger, route=route,
                                    aid=body.pre, cigars=cigars, tsgs=tsgs):
             raise UnverifiedReplyError('registry-salt reply has not satisfied its logical signing threshold')
-        kever = self.hby.kevers.get(body.pre)
-        if kever is None:
-            raise MissingEntryError('registry-salt live signing state is unavailable')
-        if kever.prefixer.transferable:
-            if cigars or not tsgs or any((aid.qb64, number.sn, digest.qb64) !=
-                    (body.pre, kever.lastEst.s, kever.lastEst.d) for aid, number, digest, _ in tsgs):
-                raise ValidationError('registry-salt live signatures require current explicit establishment')
-        elif tsgs or not cigars or any(cigar.verfer.qb64 != body.pre for cigar in cigars):
-            raise ValidationError('registry-salt nontransferable reply has another signer')
-        # Revery may have reached threshold using separately delivered partial
-        # frames. Archive its accepted aggregate, not just the last packet.
-        groups = [group for group in fetchTsgs(self.hby.db.tsgs, diger)
-                  if (group[0].qb64, group[1].sn, group[2].qb64) ==
-                     (body.pre, kever.lastEst.s, kever.lastEst.d)]
-        couples = []
-        for verfer, cigar in self.hby.db.scgs.get((body.said,)):
-            if verfer.qb64 == body.pre:
-                cigar.verfer = verfer
-                couples.append(cigar)
-        frame = bytes(messagize(body, cigars=couples or None, tsgs=groups or None, gvrsn=Vrsn_2_0))
-        verifyArchivedReply(self.hby, self.parser, frame, route, body.pre)
-        return frame
+        try:
+            kever = self.hby.kevers.get(body.pre)
+            if kever is None:
+                raise MissingEntryError('registry-salt live signing state is unavailable')
+            if kever.prefixer.transferable:
+                if cigars or not tsgs or any((aid.qb64, number.sn, digest.qb64) !=
+                        (body.pre, kever.lastEst.s, kever.lastEst.d) for aid, number, digest, _ in tsgs):
+                    raise ValidationError('registry-salt live signatures require current explicit establishment')
+            elif tsgs or not cigars or any(cigar.verfer.qb64 != body.pre for cigar in cigars):
+                raise ValidationError('registry-salt nontransferable reply has another signer')
+            # Revery may have reached threshold using separately delivered partial
+            # frames. Archive its accepted aggregate, not just the last packet.
+            groups = [group for group in fetchTsgs(self.hby.db.tsgs, diger)
+                      if (group[0].qb64, group[1].sn, group[2].qb64) ==
+                         (body.pre, kever.lastEst.s, kever.lastEst.d)]
+            couples = []
+            for verfer, cigar in self.hby.db.scgs.get((body.said,)):
+                if verfer.qb64 == body.pre:
+                    cigar.verfer = verfer
+                    couples.append(cigar)
+            frame = bytes(messagize(body, cigars=couples or None, tsgs=groups or None, gvrsn=Vrsn_2_0))
+            verifyArchivedReply(self.hby, self.parser, frame, route, body.pre)
+            return frame
+        except UnverifiedReplyError:
+            raise
+        except ValidationError:
+            self._discardRejected(body, diger, route)
+            raise
+
+    def _discardRejected(self, body, diger, route):
+        """Remove terminal reply artifacts through their owner, preserving accepted proofs.
+
+        body/diger/route identify the exact rejected live statement. A replay
+        with outdated attachment authority must not erase previously accepted
+        transcript history. Pending dependencies remain in ordinary Revery
+        escrow; KRAM keeps its separately bounded replay-protection record.
+        """
+        self.hby.db.rpes.rem(keys=route, val=diger)
+        if self.state.proof(body.said) is None:
+            self.rvy.removeReply(diger)
 
     @staticmethod
     def _origin(init, bind, confirm):
@@ -971,7 +989,7 @@ class RegistrySaltService:
         except (MissingEntryError, ConfigurationError, AuthError):
             raise UnverifiedReplyError('registry-salt authenticated reply is waiting for local evidence or custody') from None
         except ValidationError:
-            self.hby.db.rpes.rem(keys=route, val=diger)
+            self._discardRejected(serder, diger, route)
             raise
         except (OSError, RuntimeError, lmdb.Error):
             raise UnverifiedReplyError('registry-salt authenticated retention is pending retry') from None
