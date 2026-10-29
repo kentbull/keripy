@@ -9,9 +9,10 @@ import re
 
 import pysodium
 
-from ..core import Counter, Codens, Diger, MtrDex, Texter
+from ..core import Bexter, Counter, Codens, Diger, MtrDex, Prefixer, Texter
 from ..kering import DecryptError, Kinds, ValidationError, Version, Vrsn_1_0
 from ..peer import specialExchange
+from ..spac import PayloadTyper, PayloadTypes
 from .replying import parseReply
 
 
@@ -33,7 +34,11 @@ def envelope(hab, msg, recipient, verfer, *, version=Version, kind=Kinds.json,
         Diger(qb64=dig)
         q.update(sn=f'{sn:x}', dig=dig, key=verfer.qb64)
     pubkey = pysodium.crypto_sign_pk_to_box_pk(verfer.raw)
-    raw = pysodium.crypto_box_seal(bytes(msg), pubkey)
+    # Match StreamPoster._chunk: SCS type, authenticated source, and a complete
+    # padding primitive precede the ordinary CESR payload inside the ciphertext.
+    plain = (PayloadTyper(type=PayloadTypes.SCS).qb64b + hab.kever.prefixer.qb64b
+             + Bexter(bext='').qb64b + bytes(msg))
+    raw = pysodium.crypto_box_seal(plain, pubkey)
     texter = Texter(raw=raw)
     essr, _ = specialExchange(sender=hab.pre, route='/essr/req', modifiers=q,
                               diger=Diger(ser=raw, code=MtrDex.Blake3_256),
@@ -135,7 +140,12 @@ class EssrReplyHandler:
             verfer = self._verfer(serder)
             if self.hab.mgr.aeid and self.hab.mgr.decrypter is None:
                 raise DecryptError("ESSR recipient keystore is locked")
-            plain = self.hab.mgr.decrypt(qb64=essr, verfers=[verfer])
+            plain = bytearray(self.hab.mgr.decrypt(qb64=essr, verfers=[verfer]))
+            tag = self.parser.extract(plain, PayloadTyper)
+            source = self.parser.extract(plain, Prefixer)
+            self.parser.extract(plain, Bexter)
+            if tag.type != PayloadTypes.SCS or source.qb64 != serder.pre:
+                raise ValidationError("Invalid ESSR payload sender or type")
             parsed = parseReply(self.parser, plain, self.allowedRoutes)
         except DecryptError:
             raise ValidationError("ESSR recipient keystore is locked") from None

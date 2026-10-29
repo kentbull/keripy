@@ -2,12 +2,14 @@
 from contextlib import ExitStack
 
 import pytest
+import pysodium
 
 from keri.app import openCF, openHab, openHby
 from keri.app.essring import EssrReplyHandler, envelope
-from keri.core import (Counter, Codens, Diger, Kramer, Parser, Texter, reply)
+from keri.core import (Bexter, Counter, Codens, Diger, Kramer, Parser, Prefixer, Texter, reply)
 from keri.kering import Kinds, Vrsn_1_0, Vrsn_2_0, ValidationError
 from keri.peer import Exchanger, specialExchange
+from keri.spac import PayloadTyper, PayloadTypes
 
 
 ROUTE = '/test/registry-salt'
@@ -52,9 +54,9 @@ def seal(alice, bob, msg, version):
                     establishment=(bob.kever.lastEst.s, bob.kever.lastEst.d))
 
 
-def rewrite_outer(alice, stream, version, *, signer=None, q=None, corrupt=False):
+def rewrite_outer(alice, stream, version, *, signer=None, q=None, corrupt=False, ciphertext=None):
     parsed = Parser(version=version).parseOne(ims=bytearray(stream), processive=False)
-    ciphertext = parsed.essrs[0].raw
+    ciphertext = parsed.essrs[0].raw if ciphertext is None else ciphertext
     if corrupt:
         ciphertext = bytes([ciphertext[0] ^ 1]) + ciphertext[1:]
     serder = parsed.serder
@@ -77,12 +79,35 @@ def test_authenticated_ultimate_reply(peers):
     parsed = Parser(version=version).parseOne(ims=bytearray(stream), processive=False)
     assert parsed.serder.ked['q']['dest'] == bob.pre
     assert b'ciphertext-placeholder' not in stream
-    assert bob.mgr.decrypt(qb64=parsed.essrs[0].raw, verfers=bob.kever.verfers) == msg
+    plain = bytearray(bob.mgr.decrypt(qb64=parsed.essrs[0].raw, verfers=bob.kever.verfers))
+    assert parser.extract(plain, PayloadTyper).type == PayloadTypes.SCS
+    assert parser.extract(plain, Prefixer).qb64 == alice.pre
+    assert parser.extract(plain, Bexter).bext == ''
+    assert plain == msg
     with pytest.raises(Exception):
         carol.mgr.decrypt(qb64=parsed.essrs[0].raw, verfers=carol.kever.verfers)
     parser.parse(ims=bytearray(stream), local=False)
     assert len(owner.accepted) == 1
     assert bhby.db.exns.get(keys=(parsed.serder.said,)) is not None
+
+
+@pytest.mark.parametrize('fault', ['type', 'source', 'missing-header'])
+def test_rejects_authenticated_outer_with_invalid_scs_header(peers, fault):
+    """A valid outer signature cannot authorize a different encrypted SCS source."""
+    version, alice, bob, carol, bhby, parser, owner = peers
+    msg = inner(alice, version)
+    wire = seal(alice, bob, msg, version)
+    outer = Parser(version=version).parseOne(ims=bytearray(wire), processive=False)
+    tag = PayloadTypes.HOP if fault == 'type' else PayloadTypes.SCS
+    source = carol.pre if fault == 'source' else alice.pre
+    plain = (PayloadTyper(type=tag).qb64b + source.encode() + Bexter(bext='').qb64b + msg)
+    if fault == 'missing-header':
+        plain = msg
+    key = pysodium.crypto_sign_pk_to_box_pk(bob.kever.verfers[0].raw)
+    cipher = pysodium.crypto_box_seal(bytes(plain), key)
+    changed = rewrite_outer(alice, wire, version, q=outer.serder.sad['q'], ciphertext=cipher)
+    parser.parse(ims=changed, local=False)
+    assert owner.accepted == []
 
 
 @pytest.mark.parametrize('fault', ['outer-signer', 'outer-src', 'recipient', 'key-binding',
