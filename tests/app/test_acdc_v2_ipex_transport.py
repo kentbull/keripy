@@ -19,7 +19,7 @@ from keri.kering import ConfigurationError
 from keri import Vrsn_2_0
 from keri.acdc import Registrar, acdcmap
 from keri.acdc.sectioning import SectionBaser
-from keri.app.credentialing import Wallet, WalletBaser
+from keri.app.credentialing import Wallet
 from keri.app.evidencing import EvidenceContext
 from keri.core import Counter, Codens, Diger
 from keri.help import helping
@@ -69,13 +69,12 @@ def registry_response(tmp_path, case, monkeypatch, *, tls=False):
     """Serve real signed registry evidence to the commands' ordinary processors."""
     source, srgy = _persistent_registry_owners(tmp_path, 'sync-source')
     target, rgy = _persistent_registry_owners(tmp_path, 'sync-target')
-    wallet = Wallet(target, rgy, db=WalletBaser(name=target.name, base=target.base,
-        headDirPath=str(tmp_path), temp=False))
+    wallet = Wallet(target, rgy)
     sections = SectionBaser(name=target.name, base=target.base,
         headDirPath=str(tmp_path), temp=False)
     server = thread = None
     try:
-        assert all(Path(owner.path).is_relative_to(tmp_path) for owner in (wallet.db, sections))
+        assert all(Path(owner.path).is_relative_to(tmp_path) for owner in (wallet.reger, sections))
         issuer = source.makeHab(name='issuer')
         target.makeHab(name='actor')
         registries = []
@@ -432,12 +431,11 @@ def test_http_intake_accepts_streamposter_put_without_changing_verification(tmp_
 
     source, srgy = _persistent_registry_owners(tmp_path, 'http-source')
     target, rgy = _persistent_registry_owners(tmp_path, 'http-target')
-    wallet = Wallet(target, rgy, db=WalletBaser(name=target.name, base=target.base,
-        headDirPath=str(tmp_path), temp=False))
+    wallet = Wallet(target, rgy)
     sections = SectionBaser(name=target.name, base=target.base,
         headDirPath=str(tmp_path), temp=False)
     try:
-        assert all(Path(owner.path).is_relative_to(tmp_path) for owner in (wallet.db, sections))
+        assert all(Path(owner.path).is_relative_to(tmp_path) for owner in (wallet.reger, sections))
         sender = source.makeHab(name='sender', version=Vrsn_1_0)
         recipient = target.makeHab(name='recipient')
         actual = acdc_v2_ipex.Peer(target, rgy, wallet, sections)

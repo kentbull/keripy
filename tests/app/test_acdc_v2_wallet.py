@@ -11,7 +11,7 @@ from keri import Vrsn_2_0, Kinds
 from keri.acdc import Regery, Registrar, acdcmap, blindate, grant, admit, loadHandlers
 from keri.acdc.regbasing import RegBaser
 from keri.acdc.regeventing import Rever
-from keri.app.credentialing import Wallet, WalletBaser
+from keri.app.credentialing import Wallet
 from keri.app.registry_custody import RegistryCustody
 from keri.app.configing import Configer
 from keri.app.habbing import openHby
@@ -108,8 +108,8 @@ def _custody_issuance_case(tmp_path):
         receive(issuer, hhab.replay(gvrsn=Vrsn_2_0))
         receive(holder, ihab.replay(gvrsn=Vrsn_2_0))
         irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
-        iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
-        hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        iwallet = Wallet(issuer, irgy)
+        hwallet = Wallet(holder, hrgy)
         iwallet.custody = RegistryCustody(issuer, irgy)
         hwallet.custody = RegistryCustody(holder, hrgy)
         try:
@@ -128,7 +128,7 @@ def _custody_issuance_case(tmp_path):
             salt = iwallet.custody._load(registry.regk).salt
             retained = iwallet.hby.ks.custody.get((registry.regk,))
             assert retained.aeid == issuer.mgr.aeid and salt not in retained.cipher
-            assert salt.encode() not in Path(iwallet.db.path, 'data.mdb').read_bytes()
+            assert salt.encode() not in Path(iwallet.reger.path, 'data.mdb').read_bytes()
             # Receiver accepts normal signed KEL and foreign ACDC v2 registry events, never copied accepted rows.
             receive(holder, ihab.replay(gvrsn=Vrsn_2_0))
             receiver = Rever(db=holder.db, reger=hrgy.baser)
@@ -155,8 +155,8 @@ def test_encrypted_custody_future_derivation_after_reopen(tmp_path, capsys):
     with (encrypted('custody-issuer', tmp_path, case.issuerKey) as issuer,
           encrypted('custody-holder', tmp_path, case.holderKey) as holder):
         irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
-        iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
-        hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        iwallet = Wallet(issuer, irgy)
+        hwallet = Wallet(holder, hrgy)
         iwallet.custody = RegistryCustody(issuer, irgy)
         hwallet.custody = RegistryCustody(holder, hrgy)
         try:
@@ -187,8 +187,8 @@ def test_encrypted_custody_handoff_and_keeper_binding_after_reopen(tmp_path, cap
           encrypted('custody-holder', tmp_path, holderKey) as holder):
         ihab, hhab = issuer.habByPre(case.controller), holder.habByPre(case.discloser)
         irgy, hrgy = regery(issuer, tmp_path), regery(holder, tmp_path)
-        iwallet = Wallet(issuer, irgy, db=WalletBaser(name=issuer.name, headDirPath=str(tmp_path)))
-        hwallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        iwallet = Wallet(issuer, irgy)
+        hwallet = Wallet(holder, hrgy)
         iwallet.custody = RegistryCustody(issuer, irgy)
         hwallet.custody = RegistryCustody(holder, hrgy)
         try:
@@ -213,7 +213,7 @@ def test_encrypted_custody_handoff_and_keeper_binding_after_reopen(tmp_path, cap
     # Reopen actual encrypted Habery, RegBaser and wallet from disk with the same private key.
     with encrypted('custody-holder', tmp_path, holderKey) as holder:
         hrgy = regery(holder, tmp_path)
-        wallet = Wallet(holder, hrgy, db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(holder, hrgy)
         wallet.custody = RegistryCustody(holder, hrgy)
         try:
             assert holder.habByPre(discloser)
@@ -260,8 +260,7 @@ def test_real_partial_and_full_grants_retain_separate_explicit_admissions(tmp_pa
         notices = Notices()
         exc = Exchanger(hby=holder, handlers=[])
         loadHandlers(holder, exc, notices, rgy=hrgy)
-        wallet = Wallet(holder, hrgy, exc=exc,
-                        db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(holder, hrgy, exc=exc)
         try:
             full = acdcmap(israid=ihab.pre, uuid=Noncer().qb64, iseaid=hhab.pre,
                 attribute={'d': '', 'u': Noncer().qb64,
@@ -305,15 +304,14 @@ def test_real_partial_and_full_grants_retain_separate_explicit_admissions(tmp_pa
         finally:
             # Discard only this test-owned application store. The next process
             # must recover both admissions from Habery exchange evidence alone.
-            wallet.db.close(clear=True)
+            wallet.reger.close(clear=True)
             wallet.close()
             hrgy.close()
     with encrypted('inventory-holder', tmp_path, holderKey) as holder:
         hrgy = regery(holder, tmp_path)
         exc = Exchanger(hby=holder, handlers=[])
         loadHandlers(holder, exc, Notices(), rgy=hrgy)
-        wallet = Wallet(holder, hrgy, exc=exc,
-                        db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(holder, hrgy, exc=exc)
         try:
             assert len(wallet.admissions(full.said)) == 2
             assert {record.admit for record in wallet.inventory()['held']} == {pair[1] for pair in pairs}
@@ -335,7 +333,7 @@ def test_unencrypted_keeper_cannot_create_private_custody(tmp_path):
         None. Assertions check the stated evidence boundary."""
     with openHby(name='unencrypted-custody', temp=True, version=Vrsn_2_0) as hby:
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy)
         wallet.custody = RegistryCustody(hby, rgy)
         try:
             with pytest.raises(AuthError, match='encrypted Keeper'):
@@ -373,8 +371,7 @@ def test_handlerless_retention_cannot_become_wallet_admission_after_registration
         rgy = regery(holder, tmp_path)
         exc = Exchanger(hby=holder, handlers=[])
         loadHandlers(holder, exc, Notices(), rgy=rgy)
-        wallet = Wallet(holder, rgy, exc=exc,
-                        db=WalletBaser(name=holder.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(holder, rgy, exc=exc)
         try:
             assert exc.complete(gexn.said) and exc.complete(aexn.said)
             with pytest.raises(ValidationError, match='semantic acceptance'):
@@ -419,7 +416,7 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
     with encrypted(name, tmp_path, key) as issuer:
         hab = issuer.makeHab(name='issuer')
         rgy = regery(issuer, tmp_path)
-        wallet = Wallet(issuer, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = Wallet(issuer, rgy)
         try:
             registry = Registrar(rgy=rgy).makeRegistry(name='binary', prefix=hab.pre)
             rip = rgy.store.event(registry.regk)
@@ -465,7 +462,7 @@ def test_accepted_issuance_preserves_binary_credentials_after_reopen(tmp_path, k
             rgy.close()
     with encrypted(name, tmp_path, key) as issuer:
         rgy = regery(issuer, tmp_path)
-        wallet = Wallet(issuer, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = Wallet(issuer, rgy)
         try:
             assert rgy.store.head(regid).qb64 == head
             assert wallet.issuedCredential(said).raw == raw
@@ -490,7 +487,7 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
     with encrypted('bound-wallet', tmp_path, key) as hby:
         issuer, issuee = hby.makeHab(name='issuer'), hby.makeHab(name='issuee')
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy)
         try:
             registry = Registrar(rgy=rgy).makeRegistry(name='bound', prefix=issuer.pre)
             rip = rgy.store.event(registry.regk)
@@ -514,7 +511,7 @@ def test_bound_issuance_retains_exact_historical_coordinates_after_reopen(tmp_pa
             rgy.close()
     with encrypted('bound-wallet', tmp_path, key) as hby:
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy)
         try:
             assert wallet.recordIssued(acdc, update.said) == record
             wallet.custody = RegistryCustody(hby, rgy)
@@ -552,7 +549,7 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
     with encrypted(name, tmp_path, key) as hby:
         issuer, holder = hby.makeHab(name='issuer'), hby.makeHab(name='holder')
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy)
         try:
             with openLMDB(**sectionOpts) as sections:
                 peer = Peer(hby, rgy, wallet, sections)
@@ -622,7 +619,7 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
             rgy.close()
     with encrypted(name, tmp_path, key) as hby:
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy)
         try:
             with openLMDB(**sectionOpts) as sections:
                 peer = Peer(hby, rgy, wallet, sections)
@@ -714,8 +711,7 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
         rgy = regery(hby, tmp_path)
         exc = Exchanger(hby=hby, handlers=[])
         verification = dispatching.loadHandlers(hby, exc, Notices(), rgy, graphPolicy=ScorePolicy())
-        wallet = Wallet(hby, rgy, exc=exc, verification=verification,
-                        db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy, exc=exc, verification=verification)
         try:
             child = acdcmap(israid=issuer.pre, iseaid=holder.pre, attribute={'d': '', 'score': 90})
             origin = acdcmap(israid=issuer.pre, iseaid=holder.pre,
@@ -740,7 +736,7 @@ def test_configured_average_admission_and_reopen_preserve_policy(tmp_path, opera
         rgy = regery(hby, tmp_path)
         exc = Exchanger(hby=hby, handlers=[])
         dispatching.loadHandlers(hby, exc, Notices(), rgy)
-        wallet = Wallet(hby, rgy, exc=exc, db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy, exc=exc)
         try:
             # Both signed Admits remain history without a second application
             # consent record. Fresh use still requires the current graph policy.

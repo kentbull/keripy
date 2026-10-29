@@ -326,39 +326,9 @@ class AcdcV2Author(doing.DoDoer):
                     and proof.acdc == acdc.said and proof.state == state)
 
         def acceptedOpening(event):
-            """Classify one accepted predecessor from retained public or derived proof."""
+            """Read possessed public or private proof without reconstructing metadata."""
             opening = wallet.publicOpening(event)
-            if opening is not None:
-                return opening, True
-            if wallet.hby.ks.custody.get((reg.regk,)) is None:
-                return None, False
-            if wallet.custody is None:
-                wallet.custody = RegistryCustody(wallet.hby, wallet.rgy)
-            ordinal = Number(numh=event.sad['n']).num
-            retained = wallet.db.derivations.get((event.said,))
-            if retained is not None:
-                priorBound = (dict(bound=True, bsn=retained.bound['bn'], bd=retained.bound['bd'])
-                              if retained.bound else {})
-                candidate = wallet.custody.derive(
-                    reg.regk, ordinal, retained.credential, retained.state, **priorBound)
-                return (candidate, False) if candidate.said == event.sad.get('b') else (None, False)
-
-            # Reger's source seal identifies an original issuance even when
-            # no per-event derivation coordinates were retained. Match that
-            # exact accepted event; unrelated later updates are not guessed.
-            candidates = {}
-            for retained in wallet.issuedRecords():
-                if retained.registry != reg.regk or retained.update != event.said:
-                    continue
-                priorBound = (dict(bound=True, bsn=retained.bound['bn'], bd=retained.bound['bd'])
-                              if retained.bound else {})
-                candidate = wallet.custody.derive(
-                    reg.regk, ordinal, retained.credential, 'issued', **priorBound)
-                if candidate.said == event.sad.get('b'):
-                    candidates[candidate.qb64] = candidate
-            if len(candidates) == 1:
-                return next(iter(candidates.values())), False
-            return None, False
+            return (opening, True) if opening is not None else (wallet.privateOpening(event), False)
 
         if self.proposedEvent is not None:
             event = self.proposedEvent
@@ -379,7 +349,7 @@ class AcdcV2Author(doing.DoDoer):
             if event.sad.get('rd') != reg.regk or not matches(event, self.blinder):
                 raise ConfigurationError('group proposal does not bind the requested credential and state')
             if not public:
-                wallet.retainDerivedUpdate(event, self.blinder)
+                wallet.retainPrivateOpening(event, self.blinder)
             accepted = reg.store.seqEvent(reg.regk, ordinal)
             if accepted is not None and accepted.said == event.said:
                 return event
@@ -403,7 +373,7 @@ class AcdcV2Author(doing.DoDoer):
             if len(pending) != 1 or not matches(event, self.blinder) or event.sad['p'] != head.said:
                 raise ConfigurationError('registry has a different pending update; resolve it first')
             if not public:
-                wallet.retainDerivedUpdate(event, self.blinder)
+                wallet.retainPrivateOpening(event, self.blinder)
             return event
 
         if sn and head.ilk == 'bup':
@@ -411,12 +381,12 @@ class AcdcV2Author(doing.DoDoer):
                 self.blinder, self.publishOpening = acceptedOpening(head)
                 if self.blinder is None:
                     raise ConfigurationError(
-                        'accepted bup has neither a retained public opening nor matching derived custody')
+                        'accepted bup has no retained public or private opening')
             else:
                 makeOpening(sn)
             if matches(head, self.blinder) and (not public or self.publishOpening):
                 if not public:
-                    wallet.retainDerivedUpdate(head, self.blinder)
+                    wallet.retainPrivateOpening(head, self.blinder)
                 return head
 
         if bound and wallet.hby.kevers[acdc.iseaid].serder.said != boundEvent:
@@ -427,7 +397,7 @@ class AcdcV2Author(doing.DoDoer):
         if public:
             wallet.retainPublicOpening(event, proof)
         else:
-            wallet.retainDerivedUpdate(event, proof)
+            wallet.retainPrivateOpening(event, proof)
         reg.processEvent(event)
         return event
 

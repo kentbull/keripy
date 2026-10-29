@@ -13,7 +13,7 @@ from keri import Vrsn_2_0
 from keri.acdc import Regery, Registrar, acdcmap
 from keri.acdc.regeventing import vet, vetBlind
 from keri.app import openHby
-from keri.app.credentialing import DerivedUpdate, Wallet
+from keri.app.credentialing import Wallet
 from keri.app.evidencing import EvidenceContext
 from keri.cli import commands
 from keri.cli.common.acdc_v2 import AcdcV2Author
@@ -450,10 +450,8 @@ def test_acdc_v2_cli_public_update_after_bound_derived_predecessor():
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
-            marker = wallet.db.derivations.get((revoked['update'],))
-            assert marker == DerivedUpdate(issued['credential'], 'revoked',
-                                           dict(bn=1, bd=current))
-            assert not hasattr(marker, 'salt')
+            marker = wallet.privateOpening(rgy.store.event(revoked['update']))
+            assert (marker.acdc, marker.state, marker.bsn, marker.bd) == (issued['credential'], 'revoked', 1, current)
             assert wallet.publicOpening(rgy.registryByName('bound').store.headEvent(regid)) is None
         finally:
             wallet.close()
@@ -476,8 +474,8 @@ def test_acdc_v2_cli_public_update_after_bound_derived_predecessor():
             rgy.close()
 
 
-def test_public_transition_refuses_wrong_or_missing_derived_update_coordinates():
-    """Fail closed when a later accepted derived head lacks exact durable coordinates."""
+def test_public_transition_refuses_wrong_or_missing_local_opening():
+    """Fail closed when a later accepted head lacks its exact local CESR proof."""
     name = 'derived-coordinate-refusal-' + uuid.uuid4().hex
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
@@ -494,10 +492,11 @@ def test_public_transition_refuses_wrong_or_missing_derived_update_coordinates()
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
-            marker = wallet.db.derivations.get((revoked['update'],))
-            assert marker == DerivedUpdate(issued['credential'], 'revoked', {})
-            wallet.db.derivations.pin(
-                (revoked['update'],), DerivedUpdate(issued['credential'], 'issued', {}))
+            marker = wallet.privateOpening(rgy.store.event(revoked['update']))
+            assert (marker.acdc, marker.state) == (issued['credential'], 'revoked')
+            # Put a real but wrong-event opening in the local proof table.
+            wallet.reger.blinds.pin((revoked['update'],),
+                wallet.reger.blinds.get((issued['update'],)))
         finally:
             wallet.close()
             rgy.close()
@@ -505,20 +504,20 @@ def test_public_transition_refuses_wrong_or_missing_derived_update_coordinates()
                  '--data', '{"role":"Blocked successor"}']
     refused = command(name, *successor)
     assert refused.returncode != 0
-    assert 'neither a retained public opening nor matching derived custody' in refused.stdout
+    assert 'does not reproduce the anchored blid' in refused.stdout
 
     with openHby(name=name, base='acdc-v2-cli-test', temp=False, bran=PASSCODE,
                  version=Vrsn_2_0) as hby:
         rgy = Regery(hby=hby, name=name, base=hby.base)
         wallet = Wallet(hby, rgy)
         try:
-            assert wallet.db.derivations.rem((revoked['update'],))
+            assert wallet.reger.blinds.rem((revoked['update'],))
         finally:
             wallet.close()
             rgy.close()
     refused = command(name, *successor)
     assert refused.returncode != 0
-    assert 'neither a retained public opening nor matching derived custody' in refused.stdout
+    assert 'accepted bup has no retained public or private opening' in refused.stdout
     status = invoke(name, 'vc', 'registry', 'status', '--acdc-v2', '-r', 'private')[0]
     assert status['head'] == revoked['update'] and status['sn'] == 2
     assert status['registry'] == regid

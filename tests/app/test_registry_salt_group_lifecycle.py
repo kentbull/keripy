@@ -8,7 +8,6 @@ import pytest
 from keri import Vrsn_2_0
 from keri.acdc.messaging import blindate, regcept
 from keri.acdc.regeventing import Rever, vetBlind
-from keri.app.credentialing import WalletBaser
 from keri.app.essring import EssrReplyHandler, envelope
 from keri.app.evidencing import ServiceConfig
 from keri.app.grouping import Multiplexor, loadHandlers, multisigRpyExn, replyProposal, endorseReply
@@ -37,11 +36,10 @@ def closeRegistry(rgy):
 
 
 def attachService(case, node):
-    """Compose one caller-owned wallet and normal live pipeline for this actual member."""
+    """Compose registry custody and the normal live pipeline for this actual member."""
     rgy = regery(node.hby, case.path)
     case.stack.callback(closeRegistry, rgy)
-    db = WalletBaser(name=node.hby.name, headDirPath=str(case.path))
-    case.stack.callback(db.close)
+
     custody = RegistryCustody(node.hby, rgy)
     exc = Exchanger(node.hby, handlers=[])
     mux = Multiplexor(node.hby, Notices(), exc=exc, rgy=Rever(db=node.hby.db, reger=rgy.baser))

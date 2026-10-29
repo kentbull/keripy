@@ -5,7 +5,7 @@ import pytest
 from keri import Vrsn_2_0
 from keri.acdc import Registrar
 from keri.acdc.regeventing import Rever
-from keri.app.credentialing import Wallet, WalletBaser
+from keri.app.credentialing import Wallet
 from keri.app.evidencing import ServiceConfig
 from keri.app.registry_custody import RegistryCustody
 from keri.app.registry_salt_service import RegistrySaltService
@@ -35,10 +35,9 @@ def network(tmp_path, request):
             assert rgy.store.seqEvent(rip.said, 0).said == rip.said
         services, parsers = [], []
         for hby, rgy in zip(hbys, rgys):
-            db = WalletBaser(name=hby.name, headDirPath=str(tmp_path))
-            stack.callback(db.close)
             custody = RegistryCustody(hby, rgy)
-            wallet = Wallet(hby, rgy, db=db, custody=custody)
+            wallet = Wallet(hby, rgy, custody=custody)
+            stack.callback(wallet.close)
             rvy = Revery(db=hby.db)
             kvy = Kevery(db=hby.db, rvy=rvy,
                 kramer=Kramer(db=hby.db, cf=ServiceConfig()), lax=False, local=False)
@@ -174,8 +173,6 @@ def groupServiceNetwork(tmp_path):
             assert rgy.store.seqEvent(rip.said, 0).said == rip.said
         services = []
         for index, (hby, rgy) in enumerate(zip(hbys, rgys)):
-            db = WalletBaser(name=hby.name, headDirPath=str(tmp_path))
-            stack.callback(db.close)
             custody = RegistryCustody(hby, rgy)
             rvy = owners[index].mux.rvy if index < 3 else Revery(db=hby.db)
             service = RegistrySaltService(hby, rgy, custody, rvy)

@@ -11,7 +11,6 @@ from types import SimpleNamespace
 import pytest
 
 from keri.acdc import messaging
-from keri.app.credentialing import DerivedUpdate
 from keri.cli.common import acdc_v2
 from keri.core import Blinder, BlindState, BoundState
 
@@ -56,7 +55,7 @@ def _owned_wallet(name):
         hby, rgy, wallet = owners
         root = Path(os.environ['KERIPY_TEST_STORE_ROOT'])
         assert all(Path(owner.path).is_relative_to(root) for owner in
-                   (hby.ks, hby.db, hby.cf, rgy.baser, wallet.db))
+                   (hby.ks, hby.db, hby.cf, rgy.baser, wallet.reger))
         yield owners
 
 
@@ -138,7 +137,7 @@ def _public_blind_cli_case(tmp_path, *, bound=False):
 
 @pytest.mark.parametrize('bound', [False, True])
 def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
-    """Retain exact new/staged derivations across reopen and a public successor."""
+    """Retain exact CESR proofs across reopen and a public successor."""
     case = _public_blind_cli_case(tmp_path, bound=bound)
     bob, registry, initial, granted = case.bob, case.registry, case.initial, case.granted
     opening_args, held_opening = case.opening_args, case.held_opening
@@ -157,21 +156,20 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         acdc = wallet.issuedCredential(case.issued['credential'])
         parameters = wallet.boundEvent(acdc, case.bound_args[1]) if bound else {}
         head = reg.store.headEvent(case.registry)
-        coordinates = dict(bn=case.proof.bsn, bd=case.proof.bd) if bound else {}
-        assert wallet.db.derivations.get((head.said,)) == DerivedUpdate(acdc.said, 'issued', coordinates)
+        assert wallet.privateOpening(head).qb64 == case.proof.qb64
         assert wallet.publicOpening(head) is None
-        # Ordinary unanchored staging models interruption before coordinates were retained.
+        # Ordinary unanchored staging models interruption before its opening was retained.
         proof = wallet.custody.derive(case.registry, 3, acdc.said, 'issued', **parameters)
         staged = messaging.blindate(case.registry, head.said, proof.said, sn=3)
         reg.processEvent(staged)
-        assert wallet.db.derivations.get((staged.said,)) is None
+        assert wallet.privateOpening(staged) is None
     resumed = invoke(case.alice, 'vc', 'registry', 'advance', '-a', 'self', '-r', 'r',
                      '-s', acdc.said, *case.bound_args)[0]
     assert resumed['accepted'] and resumed['update'] == staged.said and resumed['sn'] == 3
     with _owned_wallet(case.alice) as (_, rgy, wallet):
         reg = rgy.registryByName('r')
         assert reg.store.headEvent(case.registry).raw == staged.raw
-        assert wallet.db.derivations.get((staged.said,)) == DerivedUpdate(acdc.said, 'issued', coordinates)
+        assert wallet.privateOpening(staged).qb64 == proof.qb64
         assert wallet.publicOpening(staged) is None
     public = invoke(case.alice, 'vc', 'create', '--acdc-v2', '--public', '-a', 'self',
                     '-r', 'r', '--data', '{"status":"public successor"}')[0]
@@ -202,7 +200,7 @@ def test_public_kel_and_explicit_blind_commands(tmp_path, bound):
         with _owned_wallet(case.alice) as (hby, rgy, wallet):
             assert rgy.store.headEvent(conflict_reg).said == head.said
             assert rgy.store.event(pending.said).raw == pending.raw
-            assert wallet.db.derivations.get((pending.said,)) is None
+            assert wallet.privateOpening(pending) is None
             assert hby.habByName('self').kever.serder.said == kel_head
 
 

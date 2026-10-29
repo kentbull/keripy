@@ -472,10 +472,10 @@ class Advance(acdc_v2.AcdcV2Author):
                 if len(staged) != 1 or staged[0].sad.get('b') != nextproof.said or staged[0].sad.get('p') != head.said:
                     raise ConfigurationError('registry has different pending authoring work')
                 event = staged[0]
-                wallet.retainDerivedUpdate(event, nextproof)
+                wallet.retainPrivateOpening(event, nextproof)
             else:
                 event = messaging.blindate(reg.regk, head.said, nextproof.said, sn=head.sn + 1)
-                wallet.retainDerivedUpdate(event, nextproof)
+                wallet.retainPrivateOpening(event, nextproof)
                 reg.processEvent(event)
             workers = [HaberyDoer(habery=hby), Receiptor(hby=hby)]
             self.extend(workers)

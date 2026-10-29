@@ -2328,6 +2328,11 @@ class Reger(LMDBer):
 
         # Holds the credential
         self.creds = SerderSuber(db=self, subkey="creds.", klas=SerderACDC)
+        # Native CESR event openings are credential proof material, analogous to
+        # the signature proofs below. Key by TEL event SAID and vet against that
+        # event before use. This local table is not the public registry cache;
+        # it contains no reusable registry salts or delivery/consent state.
+        self.blinds = Suber(db=self, subkey='blds.')
 
         # database of anchors to credentials.  prefix is either AID with direct credential
         # anchor or TEL event AID (same as credential SAID) when credential uses revocation registry

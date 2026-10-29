@@ -8,7 +8,7 @@ from keri import Vrsn_2_0
 from keri.acdc import Registrar, acdcmap, admit, blindate, grant, loadHandlers
 from keri.app import openHby
 from keri.app.configing import Configer
-from keri.app.credentialing import Wallet, WalletBaser
+from keri.app.credentialing import Wallet
 from keri.app.registry_custody import RegistryCustody
 from keri.core import Blinder, Signer
 from keri.kering import AuthError, ConfigurationError, ValidationError
@@ -31,7 +31,7 @@ def test_explicit_custody_provisioning_allows_public_prefix_but_never_recreates_
     with encrypted('custody-history', tmp_path, key) as hby:
         issuer = hby.makeHab(name='issuer')
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy)
         try:
             registry = Registrar(rgy=rgy).makeRegistry(name='mixed', prefix=issuer.pre)
             rip = rgy.store.event(registry.regk)
@@ -79,7 +79,7 @@ def test_fresh_blinded_issuance_requires_supplied_common_verifier_opening(tmp_pa
     with openHby(name='supplied-opening', version=Vrsn_2_0) as hby:
         issuer = hby.makeHab(name='issuer')
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy, db=WalletBaser(name=hby.name, headDirPath=str(tmp_path)))
+        wallet = Wallet(hby, rgy)
         try:
             registry = Registrar(rgy=rgy).makeRegistry(name='explicit', prefix=issuer.pre)
             rip = rgy.store.event(registry.regk)
@@ -140,8 +140,7 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
         stack.callback(rgy.close)
         exc = Exchanger(holder, handlers=[])
         loadHandlers(holder, exc, Notices(), rgy=rgy)
-        wallet = Wallet(holder, rgy, exc=exc,
-                        db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = Wallet(holder, rgy, exc=exc)
         stack.callback(wallet.close)
         assert wallet.custody is None
         if custodyState == 'unencrypted':
@@ -182,8 +181,7 @@ def test_holder_retained_admission_and_onward_presentation_ignore_custody_after_
         hexc, vexc = Exchanger(holder, handlers=[]), Exchanger(verifier, handlers=[])
         loadHandlers(holder, hexc, Notices(), rgy=hrgy)
         loadHandlers(verifier, vexc, Notices(), rgy=vrgy)
-        wallet = Wallet(holder, hrgy, exc=hexc,
-                        db=WalletBaser(name=name, headDirPath=str(tmp_path)))
+        wallet = Wallet(holder, hrgy, exc=hexc)
         stack.callback(wallet.close)
         assert wallet.custody is None
         inventory = wallet.inventory()

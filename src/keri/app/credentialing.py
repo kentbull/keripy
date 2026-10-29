@@ -1,4 +1,4 @@
-"""Explicit ACDC v2 credential inventory over ordinary LMDB application records.
+"""Native credential operations over existing Reger and Habery protocol records.
 
 Private derivation custody is an optional registry_custody collaborator. Ordinary
 issued/admitted inventory and retained disclosure retrieval never load its salt.
@@ -16,7 +16,6 @@ from base64 import b64encode
 from keri.acdc import regeventing
 from keri.acdc.ipexing import AcdcV2IpexVerification
 from keri.core import Blinder, BoundState, Number, SerderACDC, Prefixer, Diger, Saider
-from keri.db import dbing, koming
 from keri.kering import ConfigurationError, ValidationError
 from keri.peer import exchanging
 from keri.vdr.eventing import Reger
@@ -40,14 +39,6 @@ class IssuedCredential:
 
 
 @dataclass
-class DerivedUpdate:
-    """Non-secret coordinates needed to reproduce one derived registry opening."""
-    credential: str
-    state: str
-    bound: dict = field(default_factory=dict)
-
-
-@dataclass
 class AdmittedCredential:
     """Explicit local consent to one exact grant/admit disclosure pair.
 
@@ -61,42 +52,19 @@ class AdmittedCredential:
     admitted: str
 
 
-class WalletBaser(dbing.LMDBer):
-    """Remaining derivation coordinates pending removal; no credential inventory."""
-    TailDirPath = 'keri/wallet'
-    AltTailDirPath = '.keri/wallet'
-
-    def reopen(self, **kwa):
-        """Open only the remaining derivation-coordinate table.
-
-            Args:
-                **kwa: Ordinary LMDBer path/reopen settings.
-
-            Returns:
-                bool: Whether the application environment is open.
-
-            Only per-event derivation coordinates remain here.
-            Admissions are read from ordinary signed IPEX exchanges; private
-            registry salts belong to the existing Keeper."""
-        super().reopen(**kwa)
-        self.derivations = koming.Komer(db=self, subkey='derived-updates.', klas=DerivedUpdate)
-        return self.opened
-
-
 class Wallet:
     """Issued records and authenticated retained IPEX disclosure retrieval.
 
     Optional RegistryCustody is an explicit collaborator for callers that derive
     openings. Inventory itself never invokes it or reads encrypted salt records.
     """
-    def __init__(self, hby, rgy, *, exc=None, db=None, reger=None, verification=None, custody=None):
+    def __init__(self, hby, rgy, *, exc=None, reger=None, verification=None, custody=None):
         """Compose local inventory and ACDC v2 IPEX verification without loading secrets.
 
         Args:
             hby (Habery): Authenticated local identity and retained exchange owner.
             rgy (Regery): ACDC v2 registry evidence owner.
             exc (Exchanger | None): Router used to check retained completion.
-            db (WalletBaser | None): Remaining derivation-coordinate store.
             reger (Reger | None): Borrow an existing credential owner, or open one
                 that this facade closes. Native and legacy bytes use its normal tables.
             verification (AcdcV2IpexVerification | None): Explicit context returned by
@@ -113,15 +81,8 @@ class Wallet:
         self.verification = (verification if verification is not None
                              else AcdcV2IpexVerification(hby, rgy))
         self.reger = reger if reger is not None else Reger(
-            name=hby.name, base=hby.base, temp=hby.temp)
+            name=hby.name, base=hby.base, temp=hby.db.temp, headDirPath=hby.db.headDirPath)
         self.ownsReger = reger is None
-        try:
-            self.db = db if db is not None else WalletBaser(
-                name=hby.name, base=hby.base, temp=hby.temp)
-        except Exception:
-            if self.ownsReger:
-                self.reger.close()
-            raise
 
     def boundEvent(self, acdc, said):
         """Resolve a selected accepted, witnessed issuee KEL event for derivation.
@@ -172,18 +133,57 @@ class Wallet:
         regeventing.vetBlind(blinder, blid=event.sad['b'])
         return blinder
 
-    def retainDerivedUpdate(self, event, blinder):
-        """Retain non-secret coordinates for exact future derivation of ``event``."""
+    def retainPrivateOpening(self, event, blinder):
+        """Retain an exact CESR opening as local credential proof, not publication.
+
+        Args:
+            event (SerderACDC): Native BUP whose commitment must match the opening.
+            blinder (Blinder): Possessed event-specific proof, never a registry salt.
+
+        Returns:
+            Blinder: The verified opening retained in Reger.
+
+        Raises:
+            ValidationError: The opening is malformed, mismatches the event or
+                conflicts with an already retained proof.
+
+        Public disclosure remains an explicit separate operation. Keeping the
+        actual proof avoids a second coordinate schema and reconstruction index.
+        """
         if event is None or event.ilk != 'bup' or not isinstance(blinder, Blinder):
-            raise ValidationError('derived update requires an ACDC v2 blinded update')
+            raise ValidationError('local opening requires an ACDC v2 blinded update')
         regeventing.vetBlind(blinder, blid=event.sad['b'])
-        bound = (dict(bn=blinder.bsn, bd=blinder.bd) if blinder.bsn is not None else {})
-        record = DerivedUpdate(blinder.acdc, blinder.state, bound)
-        old = self.db.derivations.get((event.said,))
-        if old is not None and old != record:
-            raise ValidationError('different derivation coordinates are already retained for this event')
-        self.db.derivations.pin((event.said,), record)
-        return record
+        old = self.reger.blinds.get((event.said,))
+        if old is not None and old != blinder.qb64:
+            raise ValidationError('different opening is already retained for this event')
+        self.reger.blinds.put((event.said,), blinder.qb64)
+        return blinder
+
+    def privateOpening(self, event):
+        """Return an exact locally held opening after checking its BUP commitment.
+
+        Args:
+            event (SerderACDC): BUP whose local proof is requested.
+
+        Returns:
+            Blinder | None: Verified local opening, or None when absent.
+
+        Raises:
+            ValidationError: Stored proof is ambiguous or mismatches the event.
+
+        This does not publish proof, derive secrets or assert TEL acceptance.
+        """
+        if event is None or event.ilk != 'bup':
+            return None
+        raw = self.reger.blinds.get((event.said,))
+        if raw is None:
+            return None
+        candidates = regeventing._blindCandidates(raw)
+        if len(candidates) != 1:
+            raise ValidationError('retained local opening is ambiguous')
+        blinder = candidates[0]
+        regeventing.vetBlind(blinder, blid=event.sad['b'])
+        return blinder
 
     def recordIssued(self, acdc, update, *, blinder=None):
         """Record verified issuance, or return an identical historical record.
@@ -245,8 +245,8 @@ class Wallet:
         stored = self.reger.creds.get((acdc.said,))
         if stored is not None and stored.raw != acdc.raw:
             raise ValidationError('different credential bytes already occupy the Reger identifier')
-        if proof is not None and proof.clan == BoundState:
-            self.retainDerivedUpdate(event, proof)
+        if proof is not None:
+            self.retainPrivateOpening(event, proof)
         # Reuse Reger.logCred's credential/source representation and its normal
         # issuer index. One native LMDB transaction exposes the complete record;
         # no application rollback, retry journal or duplicate byte archive exists.
@@ -274,8 +274,8 @@ class Wallet:
             ValidationError: Retained source coordinates disagree with accepted TEL.
 
         Raw bytes are serialized for the existing CLI view only; there is no
-        base64 credential row. Bound coordinates temporarily come from the
-        remaining derivation table until that separate dependency is removed.
+        base64 credential row. Bound coordinates are read from the exact
+        retained CESR proof rather than a separate derivation metadata record.
         """
         acdc = self.reger.creds.get((credential,))
         source = self.reger.cancs.get((credential,))
@@ -286,8 +286,8 @@ class Wallet:
         event = self.rgy.store.seqEvent(prefixer.qb64, number.num)
         if event is None or event.said != diger.qb64:
             raise ValidationError('issued source is not an accepted registry event')
-        metadata = self.db.derivations.get((diger.qb64,))
-        bound = metadata.bound if metadata is not None else {}
+        proof = self.privateOpening(event)
+        bound = dict(bn=proof.bsn, bd=proof.bd) if proof is not None and proof.bsn is not None else {}
         return IssuedCredential(acdc.said, prefixer.qb64, acdc.israid, diger.qb64,
                                 b64encode(acdc.raw).decode('ascii'), 'base64', bound)
 
@@ -474,6 +474,5 @@ class Wallet:
                 None. Habery/Regery and a borrowed Reger remain caller-owned.
                 An internally opened Reger closes here. RegistryCustody uses
                 the independently owned Keeper; no secret is exported."""
-        self.db.close()
         if self.ownsReger:
             self.reger.close()

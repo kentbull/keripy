@@ -132,7 +132,7 @@ def isolate_keri_store_roots(tmp_path_factory):
     """Share one owned persistent-store root with this session's CLI children.
 
     Each serial session or xdist worker owns a separate temporary subtree.
-    LMDBer supplies the roots inherited by Keeper, Baser, RegBaser, WalletBaser
+    LMDBer supplies the roots inherited by Keeper, Baser, RegBaser, Reger
     and SectionBaser; Configer supplies the config root. Child Python processes
     apply the same defaults through test-only sitecustomize before running the
     genuine CLI. Existing PYTHONPATH entries and temp=True stores are unchanged.
