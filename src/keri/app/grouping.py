@@ -1016,7 +1016,7 @@ class Multiplexor:
 
     """
 
-    def __init__(self, hby, notifier, *, exc=None, rgy=None):
+    def __init__(self, hby, notifier, *, exc=None, rgy=None, kvy=None, rvy=None):
         """Create Multiplexor for local database and Habs
 
         Parameters:
@@ -1027,17 +1027,31 @@ class Multiplexor:
             exc (Exchanger | None): Shared concrete exchange processor for approved child
             replay; None creates the existing empty-handler Exchanger.
             rgy (Rever | None): ACDC v2 registry processor for approved TEL child replay.
+            kvy (Kevery | None), rvy (Revery | None): Matching caller-owned pair
+                for approved child replay. Supply both or neither. An injected
+                pair keeps its existing reply routes, cues and KRAM policy;
+                the caller owns registration and escrow scheduling.
 
         Returns:
             None. Habery, notifier, and injected processors remain caller-owned; this
-            object creates no autonomous approval or scheduling lifecycle."""
+            object creates no autonomous approval or scheduling lifecycle.
+
+        Raises:
+            ValidationError: An injected pair is incomplete or belongs to a
+                different database/reply owner.
+        """
+        if (kvy is None) != (rvy is None):
+            raise ValidationError('group replay requires both borrowed KEL and reply processors')
+        if kvy is not None and (kvy.db is not hby.db or rvy.db is not hby.db or kvy.rvy is not rvy):
+            raise ValidationError('group replay processors must share the selected Habery and reply owner')
         self.hby = hby
-        self.rtr = Router()
-        self.rvy = Revery(db=self.hby.db, rtr=self.rtr)
+        self.rtr = rvy.rtr if rvy is not None else Router()
+        self.rvy = rvy if rvy is not None else Revery(db=self.hby.db, rtr=self.rtr)
         self.exc = exc if exc is not None else Exchanger(hby=self.hby, handlers=[])
         self.rgy = rgy
-        self.kvy = Kevery(db=self.hby.db, lax=False, local=False, rvy=self.rvy)
-        self.kvy.registerReplyRoutes(router=self.rtr)
+        self.kvy = kvy if kvy is not None else Kevery(db=self.hby.db, lax=False, local=False, rvy=self.rvy)
+        if kvy is None:
+            self.kvy.registerReplyRoutes(router=self.rtr)
 
         self.notifier = notifier
 
