@@ -888,6 +888,21 @@ def multisigExn(ghab, exn, version=None, kind=None):
     return wexn, atc
 
 
+def validateRegistryAnchor(event, anchor, controller):
+    """Require this profile's single sequence/digest TEL seal before consent.
+
+    Args: event is the exact native TEL body; anchor is the proposed KEL body;
+        controller is the group AID expected to sign it.
+    Returns: None. Raises ValidationError for another controller, event type,
+        version, seal form, or additional seals. This local proposal restriction
+        does not narrow the seal forms accepted by the underlying TEL verifier.
+    """
+    if (anchor.pvrsn != Vrsn_2_0 or anchor.pre != controller
+            or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
+            or anchor.sad.get('a') != [dict(s=event.sad['n'], d=event.said)]):
+        raise ValidationError('group proposal does not exclusively anchor the requested TEL with one s,d seal')
+
+
 def multisigRipExn(ghab, rip, anc):
     """Wrap an exact ACDC v2 registry inception and its proposed group KEL anchor.
 
@@ -948,6 +963,7 @@ def _multisigRegistryExn(ghab, tel, anc, *, ilk):
     event = children[0].serder
     if event.ilk != ilk or event.pvrsn != Vrsn_2_0:
         raise ValueError(f'ACDC v2 multisig {ilk} proposal requires a {ilk} event')
+    validateRegistryAnchor(event, children[1].serder, ghab.pre)
     wrapper = exchange(sender=ghab.mhab.pre, route=f'/multisig/{ilk}',
         attributes=dict(gid=ghab.pre, tel=event.said,
                         anc=children[1].serder.said), version=Vrsn_2_0,
@@ -1125,13 +1141,9 @@ class Multiplexor:
                     or not tel.verify() or not anchor.verify()
                     or tel.said != payload.get('tel') or anchor.said != payload.get('anc')):
                 raise ValidationError('invalid ACDC v2 registry proposal bodies')
-            regid = tel.said if tel.ilk == Ilks.rip else tel.sad['rd']
             if tel.ilk == Ilks.rip and tel.sad['i'] != anchor.pre:
                 raise ValidationError('ACDC v2 registry inception has a different controller')
-            if not any(seal in anchor.sad.get('a', []) for seal in
-                       (dict(d=tel.said), dict(s=tel.sad['n'], d=tel.said),
-                        dict(i=regid, s=tel.sad['n'], d=tel.said))):
-                raise ValidationError('ACDC v2 registry proposal KEL does not seal its TEL')
+            validateRegistryAnchor(tel, anchor, payload.get('gid'))
             esaid = anchor.said
         else:
             if len(nests) != 1:

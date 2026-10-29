@@ -258,6 +258,64 @@ def test_registry_handlers_reject_wrong_tel_ilk_before_save(members, route, ilk)
     assert groups[1].kever.sn == 0
 
 
+@pytest.mark.parametrize('ilk', ['rip', 'bup'])
+@pytest.mark.parametrize('form', ['couple', 'digest', 'triple', 'extra'])
+def test_registry_proposal_seal_policy_is_identical_before_consent(members, monkeypatch, ilk, form):
+    """Builder, remote intake and approval share one exact anchor contract.
+
+    Digest/triple seals remain valid core evidence forms, but this narrowly
+    scoped group signing proposal supports only one sequence/digest couple.
+    A signed unsupported proposal must not become a notice awaiting consent.
+    """
+    from keri.app.grouping import multisigRipExn, multisigBupExn
+    from keri.core import Codens, Counter, SerderKERI, exchange
+    from keri.peer.exchanging import serializeParsedSubstream
+
+    hbys, groups, rgys, owners = members
+    rip = regcept(groups[0].pre)
+    if ilk == 'bup':
+        initial, atc = owners[0].approveRegistry(rip)
+        event, anchor, _ = owners[1].registryProposal(initial.raw + atc)
+        approved, atc = owners[1].approveRegistry(event, anchor)
+        owners[0].receive(approved.raw + atc)
+        assert rgys[0].store.headEvent(rip.said).said == rip.said
+    event = rip if ilk == 'rip' else blindate(rip.said, rip.said, Diger(ser=b'private').qb64)
+    couple = dict(s=event.sad['n'], d=event.said)
+    seals = dict(couple=[couple], digest=[dict(d=event.said)],
+                 triple=[dict(i=rip.said, **couple)],
+                 extra=[couple, dict(d=Diger(ser=b'unrelated').qb64)])[form]
+    stream = groups[0].interact(data=seals, version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+    anchor = SerderKERI(raw=stream)
+    footer = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+    builder = multisigRipExn if ilk == 'rip' else multisigBupExn
+    if form == 'couple':
+        wrapper, atc = builder(groups[0], event.raw + footer, stream)
+        proposed, exact, _ = owners[1].registryProposal(wrapper.raw + atc)
+        assert proposed.raw == event.raw and exact.raw == anchor.raw
+        owners[1].approveRegistry(proposed, exact)
+        return
+
+    with pytest.raises(ValidationError, match='one s,d seal'):
+        builder(groups[0], event.raw + footer, stream)
+    with pytest.raises(ValidationError, match='one s,d seal'):
+        owners[1].approveRegistry(event, anchor)
+    # Bypass the local builder to represent an authenticated foreign sender.
+    wrapper = exchange(sender=groups[0].mhab.pre, route=f'/multisig/{ilk}',
+        attributes=dict(gid=groups[0].pre, tel=event.said, anc=anchor.said),
+        version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+    children = [Parser(version=Vrsn_2_0).parse(ims=bytearray(raw),
+        processive=False)[0] for raw in (event.raw + footer, stream)]
+    message = groups[0].mhab.endorse(wrapper, gvrsn=Vrsn_2_0,
+        nests=[serializeParsedSubstream(child) for child in children])
+    notices = []
+    monkeypatch.setattr(owners[1].mux.notifier, 'add', notices.append)
+    with pytest.raises(ValidationError, match='registry proposal is not authenticated'):
+        owners[1].registryProposal(message)
+    assert hbys[1].db.exns.get((wrapper.said,)) is None
+    assert not hbys[1].db.maids.get((anchor.said,))
+    assert notices == []
+
+
 def test_registry_builders_reject_wrong_route_and_removed_route(members):
     """Make route contracts explicit at authoring and reject the removed wrapper.
 

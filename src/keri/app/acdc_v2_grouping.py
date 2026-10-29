@@ -8,7 +8,7 @@ from ..core import (Blinder, BlindState, BoundState, Codens, Counter, Diger,
 from ..kering import ConfigurationError, Ilks, MissingRegistryError, ValidationError
 from ..peer.exchanging import serializeParsedSubstream
 from .grouping import (Counselor, Multiplexor, loadHandlers,
-                       multisigExn, multisigRipExn, multisigBupExn)
+                       multisigExn, multisigRipExn, multisigBupExn, validateRegistryAnchor)
 from .habbing import GroupHab
 from .indirecting import MailboxDirector
 from .forwarding import StreamPoster
@@ -347,9 +347,7 @@ class RegistryApproval:
                 author = self.ghab.rotate if self.ghab.kever.estOnly else self.ghab.interact
                 stream = author(data=[seal], version=Vrsn_2_0, gvrsn=Vrsn_2_0)
                 anchor = SerderKERI(raw=stream)
-        if (anchor.pre != self.ghab.pre or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
-                or anchor.sad.get('a') != [seal]):
-            raise ValidationError('group proposal does not exclusively anchor the requested TEL')
+        validateRegistryAnchor(event, anchor, self.ghab.pre)
         if anchor.ilk in (Ilks.rot, Ilks.drt):
             stream = self.ghab.rotate(serder=anchor, smids=self.ghab.smids,
                 rmids=self.ghab.rmids, gvrsn=Vrsn_2_0)
