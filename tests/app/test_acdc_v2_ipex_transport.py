@@ -19,7 +19,6 @@ from keri.kering import ConfigurationError
 from keri import Vrsn_2_0
 from keri.acdc import Registrar, acdcmap
 from keri.acdc.sectioning import SectionBaser
-from keri.app.credentialing import Wallet
 from keri.app.evidencing import EvidenceContext
 from keri.core import Counter, Codens, Diger
 from keri.help import helping
@@ -69,12 +68,11 @@ def registry_response(tmp_path, case, monkeypatch, *, tls=False):
     """Serve real signed registry evidence to the commands' ordinary processors."""
     source, srgy = _persistent_registry_owners(tmp_path, 'sync-source')
     target, rgy = _persistent_registry_owners(tmp_path, 'sync-target')
-    wallet = Wallet(target, rgy)
     sections = SectionBaser(name=target.name, base=target.base,
         headDirPath=str(tmp_path), temp=False)
     server = thread = None
     try:
-        assert all(Path(owner.path).is_relative_to(tmp_path) for owner in (wallet.reger, sections))
+        assert Path(sections.path).is_relative_to(tmp_path)
         issuer = source.makeHab(name='issuer')
         target.makeHab(name='actor')
         registries = []
@@ -131,9 +129,9 @@ def registry_response(tmp_path, case, monkeypatch, *, tls=False):
 
         monkeypatch.setattr(EvidenceContext, 'ingest', ingest)
         # Substitute only owner acquisition; transport and all acceptance processors are real.
-        monkeypatch.setattr(acdc_v2, 'opened', lambda *args, **kwa: nullcontext((target, rgy, wallet)))
+        monkeypatch.setattr(acdc_v2, 'openedRegistry', lambda *args, **kwa: nullcontext((target, rgy)))
         monkeypatch.setattr(acdc_v2_ipex, 'openLMDB', lambda **kwa: nullcontext(sections))
-        yield SimpleNamespace(target=target, rgy=rgy, wallet=wallet, requested=requested,
+        yield SimpleNamespace(target=target, rgy=rgy, requested=requested,
             body=body, ingested=ingested, issuer=issuer, other=other, requests=requests, url=f'{"https" if tls else "http"}://127.0.0.1:{server.server_port}/')
     finally:
         if server is not None:
@@ -143,7 +141,6 @@ def registry_response(tmp_path, case, monkeypatch, *, tls=False):
             thread.join(timeout=2)
             assert not thread.is_alive()
         sections.close()
-        wallet.close()
         rgy.close()
         target.close()
         srgy.close()
@@ -431,14 +428,13 @@ def test_http_intake_accepts_streamposter_put_without_changing_verification(tmp_
 
     source, srgy = _persistent_registry_owners(tmp_path, 'http-source')
     target, rgy = _persistent_registry_owners(tmp_path, 'http-target')
-    wallet = Wallet(target, rgy)
     sections = SectionBaser(name=target.name, base=target.base,
         headDirPath=str(tmp_path), temp=False)
     try:
-        assert all(Path(owner.path).is_relative_to(tmp_path) for owner in (wallet.reger, sections))
+        assert Path(sections.path).is_relative_to(tmp_path)
         sender = source.makeHab(name='sender', version=Vrsn_1_0)
         recipient = target.makeHab(name='recipient')
-        actual = acdc_v2_ipex.Peer(target, rgy, wallet, sections)
+        actual = acdc_v2_ipex.Peer(target, rgy, sections)
         app = falcon.App()
         app.add_route('/', Intake(actual))
         transport = testing.TestClient(app)
@@ -472,7 +468,7 @@ def test_http_intake_accepts_streamposter_put_without_changing_verification(tmp_
         assert response.status_code == 202, response.text
         assert actual.exc.complete(streamed.said)
         assert target.db.exns.get((streamed.said,)).raw == streamed.raw
-        assert wallet.inventory() == {'issued': [], 'held': []}
+        assert actual.verification.admissions() == []
 
         for headers, raw in (({'CESR-Genus': '3'}, apply.raw),
                              ({'CESR-ATTACHMENT': ''}, apply.raw + apply.raw)):
@@ -481,7 +477,6 @@ def test_http_intake_accepts_streamposter_put_without_changing_verification(tmp_
             assert response.status_code == 400
     finally:
         sections.close()
-        wallet.close()
         rgy.close()
         target.close()
         srgy.close()

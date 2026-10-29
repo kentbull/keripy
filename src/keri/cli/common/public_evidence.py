@@ -387,8 +387,8 @@ def opening(args):
             if args.from_grant:
                 # Reuse the same retained semantic context as ordinary holder
                 # presentation; possession of a grant reference is not consent.
-                peer = Peer(hby, rgy, wallet, sections)
-                acdc = wallet.verification.heldCredential(args.from_grant)['credential']
+                peer = Peer(hby, rgy, sections)
+                acdc = peer.verification.heldCredential(args.from_grant)['credential']
                 if acdc.said != args.said:
                     raise ConfigurationError('admitted grant does not bind the requested credential')
             else:
@@ -516,15 +516,15 @@ def inspect(args):
             ConfigurationError: Exchange is unknown, route is unavailable, or fresh ACDC v2
             semantic revalidation refuses it. Missing/invalid proof errors propagate.
 
-        Registry, wallet, and section store contexts own cleanup; inspection creates no admission,
+        Registry and section store contexts own cleanup; inspection creates no admission,
         observer freshness, or private derivation authority."""
         yield tock
         from keri.acdc.sectioning import SectionBaser
         from keri.cli.common.acdc_v2_ipex import Peer
         from keri.db import openLMDB
-        with (acdc_v2.opened(args) as (hby, rgy, wallet),
+        with (acdc_v2.openedRegistry(args) as (hby, rgy),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections):
-            peer = Peer(hby, rgy, wallet, sections)
+            peer = Peer(hby, rgy, sections)
             event = hby.db.exns.get((args.said,))
             if event is None:
                 raise ConfigurationError('exchange is not accepted')

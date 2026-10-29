@@ -1,4 +1,4 @@
-"""ACDC v2 IPEX command composition using retained wallet views and core proofs."""
+"""ACDC v2 IPEX command composition using retained exchange evidence and core proofs."""
 from contextlib import ExitStack
 from dataclasses import asdict, replace
 import json
@@ -16,7 +16,9 @@ from keri.acdc.regeventing import issuerRegistry
 from keri.acdc.sectioning import SectionBaser, Sectioner
 from keri.app import GroupHab, Notifier
 from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
-from keri.app.credential_disclosing import registryProof
+from keri.app.credential_disclosing import boundEvent, registryProof
+from keri.app.credentialing import Wallet
+from keri.app.registry_custody import RegistryCustody
 from keri.app.httping import CESR_CONTENT_TYPE, CESR_ATTACHMENT_HEADER
 from keri.app.indirecting import createHttpServer
 from keri.app.evidencing import EvidenceContext, signedQuery, KEL_DEPENDENCIES
@@ -44,16 +46,15 @@ class Notices:
 class Peer:
     """Share core proof processors between command intake and explicit admission.
 
-    The caller owns identity, registry, wallet, and independent section stores.
+    The caller owns identity, registry, and independent section stores.
     The peer composes verification and escrow processing; it grants no automatic
     wallet consent and does not weaken the ACDC v2 KRAM requirement."""
-    def __init__(self, hby, rgy, wallet, sections, *, graphPolicy=None):
+    def __init__(self, hby, rgy, sections, *, graphPolicy=None):
         """Share section evidence and ACDC v2 IPEX verification policy across intake and admission.
 
         Args:
             hby (Habery): Authenticated local identity and KEL/EXN evidence.
             rgy (Regery): ACDC v2 registry evidence owner.
-            wallet (Wallet): Inventory owner configured to use this peer's context.
             sections (SectionBaser): Independently received section store; caller
                 owns closing it, including across CLI invocations/reopen.
             graphPolicy: Optional explicit graph validity/averaging policy.
@@ -61,13 +62,12 @@ class Peer:
         Returns:
             None
         """
-        self.hby, self.rgy, self.wallet = hby, rgy, wallet
+        self.hby, self.rgy = hby, rgy
         self.evidence = EvidenceContext(hby, reger=rgy.baser)
         self.exc = exchanging.Exchanger(hby, handlers=[])
         self.scy = Sectioner(db=hby.db, sections=sections)
-        wallet.verification = ipexing.loadHandlers(hby, self.exc, Notices(), rgy,
+        self.verification = ipexing.loadHandlers(hby, self.exc, Notices(), rgy,
                                                   graphPolicy=graphPolicy, sections=sections)
-        wallet.exc = self.exc
         self.parser = Parser(kvy=self.evidence.kvy, rgy=self.evidence.rever,
                              exc=self.exc, scy=self.scy, version=Vrsn_2_0, local=False)
 
@@ -173,13 +173,21 @@ class ExchangeDoer(doing.DoDoer):
             raise ConfigurationError('--timeout must be positive and finite')
         policy = ObserverConnection.fromArgs(args, args.observer if args.registry else None)
         derives = getattr(args, 'derive', False)
-        with (acdc_v2.opened(args, custody=derives) as (hby, rgy, wallet),
+        with (acdc_v2.openedRegistry(args) as (hby, rgy),
               openLMDB(cls=SectionBaser, name=args.name, base=args.base, temp=False) as sections,
               ExitStack() as activity):
             hab = hby.habByName(args.alias)
             if hab is None:
                 raise ConfigurationError('unknown ACDC v2 IPEX alias')
-            peer = Peer(hby, rgy, wallet, sections)
+            peer = Peer(hby, rgy, sections)
+            custody = RegistryCustody(hby, rgy) if derives else None
+            # Only authoring from a locally issued credential needs Reger.
+            # Receive, negotiation, admission, retained presentation and proposal
+            # approval use the peer's existing exchange evidence directly.
+            wallet = None
+            if self.verb in ('grant', 'offer') and not args.from_grant and not args.proposal:
+                wallet = Wallet(hby, rgy, verification=peer.verification)
+                activity.callback(wallet.close)
             # This command owns KRAM maintenance, including when a group shares
             # the peer's Kramer. Stop child work before the stores leave scope.
             self.extend([peer.evidence])
@@ -232,7 +240,7 @@ class ExchangeDoer(doing.DoDoer):
             elif self.verb in ('grant', 'offer'):
                 held = None
                 if args.from_grant:
-                    held = wallet.verification.heldCredential(args.from_grant)
+                    held = peer.verification.heldCredential(args.from_grant)
                     credential = held['credential']
                     artifacts = held['artifacts']
                 else:
@@ -270,11 +278,12 @@ class ExchangeDoer(doing.DoDoer):
                         if len(candidates) != 1:
                             raise ConfigurationError('held disclosure has no unique issuer registry reference')
                         regid = candidates.pop()
-                    origin = self.registryOrigin(wallet, rgy, credential, regid,
+                    origin = self.registryOrigin(hby, rgy, credential, regid, custody=custody,
                         retained=peer.exc.routes['/ipex/grant']._blindProofs(node))
                 elif regid := (issuerRegistry(credential) or
                                wallet.issuedRecord(credential.said).registry):
-                    origin = self.registryOrigin(wallet, rgy, credential, regid)
+                    origin = self.registryOrigin(hby, rgy, credential, regid, custody=custody,
+                        issued=wallet.issuedRecord(credential.said))
                 else:
                     if credential.israid != hab.pre:
                         raise ConfigurationError('credential issuer proof is unavailable')
@@ -292,7 +301,7 @@ class ExchangeDoer(doing.DoDoer):
                         if prior.route not in ('/ipex/apply', '/ipex/agree'):
                             raise ConfigurationError('grant prior must be apply or agree')
                         kwargs[prior.route.rsplit('/', 1)[1]] = prior
-                    if wallet.verification.evaluateSelected(origin, artifacts) is not True:
+                    if peer.verification.evaluateSelected(origin, artifacts) is not True:
                         raise ConfigurationError('credential graph is false or unresolved')
                     exn, attachment = ipexing.grant(hab, args.recipient, args.message,
                         origin=origin, artifacts=artifacts, dt=args.time, **kwargs)
@@ -309,7 +318,7 @@ class ExchangeDoer(doing.DoDoer):
                 grant = hby.db.exns.get((args.said,))
                 if grant is None or not peer.exc.routes['/ipex/grant'].verifyAccepted(args.said):
                     raise ConfigurationError('grant has not passed ACDC v2 IPEX verification')
-                if wallet.verification.evaluateGrant(args.said) is not True:
+                if peer.verification.evaluateGrant(args.said) is not True:
                     raise ConfigurationError('credential graph is false or unresolved')
                 exn, attachment = ipexing.admit(hab, args.message, grant, dt=args.time)
             else:
@@ -339,13 +348,13 @@ class ExchangeDoer(doing.DoDoer):
                 raise ConfigurationError('locally authored IPEX message is pending verification')
             # Group threshold/receipt waits do not preserve an earlier use verdict.
             if self.verb == 'grant' and exn.sad['a'].get('o'):
-                if wallet.verification.evaluateGrant(exn.said) is not True:
+                if peer.verification.evaluateGrant(exn.said) is not True:
                     raise ConfigurationError('credential graph is false or unresolved')
             elif self.verb == 'admit':
-                if wallet.verification.evaluateGrant(exn.sad['p']) is not True:
+                if peer.verification.evaluateGrant(exn.sad['p']) is not True:
                     raise ConfigurationError('credential graph is false or unresolved')
             if self.verb == 'admit':
-                wallet.verification.validateAdmission(args.said, exn.said, consent=True)
+                peer.verification.validateAdmission(args.said, exn.said, consent=True)
             if args.output:
                 with Path(args.output).open('xb') as stream:
                     stream.write(bytes(hab.replay(gvrsn=Vrsn_2_0)) + raw)
@@ -356,13 +365,15 @@ class ExchangeDoer(doing.DoDoer):
             print(json.dumps(dict(exchange=exn.said, accepted=True, transmitted=delivered,
                                   admitted=self.verb == 'admit')))
 
-    def registryOrigin(self, wallet, rgy, credential, regid, *, retained=()):
+    def registryOrigin(self, hby, rgy, credential, regid, *, retained=(), custody=None, issued=None):
         """Return the credential stream with exact verified registry opening evidence.
 
-        wallet supplies inventory and optional custody, rgy the accepted public TEL,
+        hby supplies accepted KEL evidence, rgy the accepted public TEL,
         credential the unchanged retained disclosure, and regid its issuer registry.
+        custody optionally derives openings; issued optionally supplies the exact
+        original issuer-bound coordinates. Held views need no issuer storage.
         retained contains received Blinders; --opening files add event-specific CESR
-        Blinders, never salts. Only composed wallet.custody derives missing openings.
+        Blinders, never salts. Only explicitly supplied custody derives missing openings.
         Walk from the accepted head through vacuous updates to the disclosed binding;
         common vetBlind/vetBound checks bind every opening before it is attached.
         An omitted issuer registry gets the exact binding event reference. Public
@@ -372,9 +383,8 @@ class ExchangeDoer(doing.DoDoer):
         retained = list(retained)
         for path in getattr(self.args, 'opening', []):
             retained.append(acdc_v2.loadOpening(path))
-        explicit = (wallet.boundEvent(credential, self.args.bound_event)
+        explicit = (boundEvent(hby, credential, self.args.bound_event)
                     if self.args.bound_event else {})
-        issued = wallet.issuedRecord(credential.said)
 
         def derive(update, target, state):
             """Apply the selected custody's existing bound coordinates to this event."""
@@ -383,10 +393,10 @@ class ExchangeDoer(doing.DoDoer):
                 parameters = dict(bound=True, bsn=issued.bound['bn'], bd=issued.bound['bd'])
             if parameters and not target:
                 parameters = dict(bound=True, bsn=0, bd='')
-            return wallet.custody.derive(regid, update.sn, target, state, **parameters)
+            return custody.derive(regid, update.sn, target, state, **parameters)
 
-        return registryProof(wallet.hby, rgy, credential, regid, retained=retained,
-                             derive=derive if wallet.custody is not None else None)
+        return registryProof(hby, rgy, credential, regid, retained=retained,
+                             derive=derive if custody is not None else None)
 
     def checkProposal(self, exn, args):
         """Refuse a group proposal that contradicts the explicit command selection.

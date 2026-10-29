@@ -526,7 +526,7 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
     """Use actual Peer parsing for schema-before/schema-after Grant arrival and retained revalidation without widening the partial view.
 
     Parameters:
-        tmp_path: Pytest-owned persistent identity, registry, section, and wallet directories.
+        tmp_path: Pytest-owned persistent identity, registry, and section directories.
         arrival: Whether the independent schema arrives before or after the Grant.
         schemaUse: Whether the schema constrains the node itself or a disclosed edge.
 
@@ -545,10 +545,9 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
     with encrypted(name, tmp_path, key) as hby:
         issuer, holder = hby.makeHab(name='issuer'), hby.makeHab(name='holder')
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy)
         try:
             with openLMDB(**sectionOpts) as sections:
-                peer = Peer(hby, rgy, wallet, sections)
+                peer = Peer(hby, rgy, sections)
                 # This non-default schema exists only in the independent section.
                 section = messaging.sectschema({'$id': '', 'version': '1.0.0',
                     'title': 'independent own or edge constraint', 'type': 'object'})
@@ -602,42 +601,40 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
                         assert peer.exc.complete(gexn.said)
                         assert hby.db.emse.get((gexn.said, schema)) is None
                         with pytest.raises(MissingSchemaError):
-                            wallet.verification.evaluateGrant(gexn.said)
+                            peer.verification.evaluateGrant(gexn.said)
                 if arrival == 'after':
                     peer.ingest(wire(section))
                 if arrival != 'restart':
                     assert peer.exc.complete(gexn.said)
-                    assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
+                    assert peer.verification.verifyAccepted(gexn.said, '/ipex/grant')
             # Reopen the section owner and construct the peer again. The delayed
             # case also reopens the Habery below before receiving its dependency.
         finally:
-            wallet.close()
             rgy.close()
     with encrypted(name, tmp_path, key) as hby:
         rgy = regery(hby, tmp_path)
-        wallet = Wallet(hby, rgy)
         try:
             with openLMDB(**sectionOpts) as sections:
-                peer = Peer(hby, rgy, wallet, sections)
+                peer = Peer(hby, rgy, sections)
                 if arrival == 'restart':
                     if schemaUse == 'own':
                         assert hby.db.emse.get((gexn.said, schema)) is not None
                     else:
                         assert peer.exc.complete(gexn.said)
                         with pytest.raises(MissingSchemaError):
-                            wallet.verification.evaluateGrant(gexn.said)
+                            peer.verification.evaluateGrant(gexn.said)
                     peer.ingest(wire(section))
                 assert peer.exc.complete(gexn.said)
-                assert wallet.verification.verifyAccepted(gexn.said, '/ipex/grant')
-                assert wallet.verification.evaluateGrant(gexn.said) is True
+                assert peer.verification.verifyAccepted(gexn.said, '/ipex/grant')
+                assert peer.verification.evaluateGrant(gexn.said) is True
                 aexn, aatc = admit(hby.habByName('holder'), 'retain this exact view', gexn)
                 peer.ingest(aexn.raw + aatc)
-                wallet.verification.validateAdmission(gexn.said, aexn.said, consent=True)
-                before = wallet.verification.heldCredential(gexn.said)
+                peer.verification.validateAdmission(gexn.said, aexn.said, consent=True)
+                before = peer.verification.heldCredential(gexn.said)
                 # Cache a fuller attribute section. Retained evidence and any
                 # caller projecting that evidence still see only the original.
                 peer.ingest(wire(messaging.sectattr(full.sad['a'])))
-                after = wallet.verification.heldCredential(gexn.said)
+                after = peer.verification.heldCredential(gexn.said)
                 assert after['proof'] == before['proof']
                 retained = after['credential'] if schemaUse == 'own' else next(
                     nest.serder for nest in loadParsedNestedSubstreams(hby, gexn.said)
@@ -645,7 +642,6 @@ def test_peer_independent_schema_arrival_and_retained_revalidation(tmp_path, arr
                 assert isinstance(retained.sad['a']['private'], str)
                 assert hby.db.schema.get(schema) is None
         finally:
-            wallet.close()
             rgy.close()
 
 

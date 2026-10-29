@@ -901,8 +901,8 @@ def test_cli_proposer_and_imported_approval_gate_before_member_signature(members
             return
         @contextmanager
         def opened(args, **kwa):
-            yield hby, rgy, wallet
-        monkeypatch.setattr(acdc_v2_ipex.acdc_v2, 'opened', opened)
+            yield hby, rgy
+        monkeypatch.setattr(acdc_v2_ipex.acdc_v2, 'openedRegistry', opened)
         completed = []
         if boundary == 'completion':
             # Keep the real Peer, but explicitly select this application's policy.
