@@ -8,7 +8,7 @@ from ..core import (Blinder, BlindState, BoundState, Codens, Counter, Diger,
 from ..kering import ConfigurationError, Ilks, ValidationError
 from ..peer.exchanging import serializeParsedSubstream
 from .grouping import (Counselor, Multiplexor, loadHandlers,
-                       multisigExn, multisigRegistryExn)
+                       multisigExn, multisigRipExn, multisigBupExn)
 from .habbing import GroupHab
 from .indirecting import MailboxDirector
 from .forwarding import StreamPoster
@@ -147,7 +147,7 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
             signature and cannot substitute for approveRegistry."""
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False) or []
         proposals = [dom for dom in parsed if dom.serder.ilk == Ilks.exn
-                     and dom.serder.route == '/multisig/registry']
+                     and dom.serder.route in ('/multisig/rip', '/multisig/bup')]
         if len(proposals) != 1:
             raise ValidationError('expected one ACDC v2 registry proposal')
         self.receive(stream)
@@ -241,7 +241,8 @@ class AcdcV2GroupCoordinator(doing.DoDoer):
                if opening is not None else
                event.raw + Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
         self.rever.processEvent(event)
-        wrapper, attachments = multisigRegistryExn(self.ghab, tel, stream)
+        propose = multisigRipExn if event.ilk == Ilks.rip else multisigBupExn
+        wrapper, attachments = propose(self.ghab, tel, stream)
         self.receive(wrapper.raw + attachments)  # explicit local approval
         self.counselor.start(self.ghab, Prefixer(qb64=self.ghab.pre),
                              Number(num=anchor.sn), Diger(qb64=anchor.said))

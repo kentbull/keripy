@@ -276,7 +276,8 @@ class MultisigNotificationHandler:
     def verify(self, serder, attachments=None, nests=None):
         """Validate a multisig EXN before the exchanger saves it."""
         try:
-            return self.mux.validate(serder=serder, nests=nests) is not None
+            return (serder.route == self.resource
+                    and self.mux.validate(serder=serder, nests=nests) is not None)
         except (ValidationError, ValueError, KeyError, TypeError, AttributeError):
             return False
 
@@ -313,7 +314,8 @@ def loadHandlers(exc, mux):
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rev", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/exn", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rpy", mux=mux))
-    exc.addHandler(MultisigNotificationHandler(resource="/multisig/registry", mux=mux))
+    exc.addHandler(MultisigNotificationHandler(resource="/multisig/rip", mux=mux))
+    exc.addHandler(MultisigNotificationHandler(resource="/multisig/bup", mux=mux))
 
 
 def multisigInceptExn(hab, smids, rmids, icp, delegator=None, version=None, gvrsn=None, kind=None):
@@ -797,31 +799,68 @@ def multisigExn(ghab, exn, version=None, kind=None):
     return wexn, atc
 
 
-def multisigRegistryExn(ghab, tel, anc):
-    """Propose exact ACDC v2 registry TEL and group KEL bodies without custody secrets.
+def multisigRipExn(ghab, rip, anc):
+    """Wrap an exact ACDC v2 registry inception and its proposed group KEL anchor.
+
+    The local member endorses the proposal. GroupHab and Counselor still own
+    group signing and completion; the wrapper itself grants no approval.
 
     Args:
-        ghab (GroupHab): Group whose local member signs the proposal wrapper.
-        tel (bytes): One serialized ACDC v2 registry event with any attachments.
-        anc (bytes): One serialized group key event intended to seal that TEL event.
+        ghab (GroupHab): Group whose local member endorses the wrapper.
+        rip (bytes): One exact registry inception stream with attachments.
+        anc (bytes): One proposed controlling KEL event with attachments.
 
     Returns:
-        tuple[Serder, bytearray]: Signed /multisig/registry wrapper and attachments
-        nesting both exact parsed child streams in TEL/KEL order.
+        tuple: Member-signed wrapper and detached attachments, in TEL/KEL order.
 
     Raises:
-        ValueError: Either input does not parse as exactly one event.
+        ValueError: A child is not one event or the TEL is not a v2 inception.
+    """
+    return _multisigRegistryExn(ghab, rip, anc, ilk=Ilks.rip)
 
-    This builder commits to supplied bodies; Multiplexor validates their relationship
-    and each participant must explicitly approve before ordinary event processing."""
+
+def multisigBupExn(ghab, bup, anc):
+    """Wrap an exact ACDC v2 blindable update and its proposed group KEL anchor.
+
+    Supplied attachments may disclose an explicitly public event opening. This
+    builder neither derives openings nor accesses registry custody secrets.
+
+    Args:
+        ghab (GroupHab): Group whose local member endorses the wrapper.
+        bup (bytes): One exact blinded update stream with supplied attachments.
+        anc (bytes): One proposed controlling KEL event with attachments.
+
+    Returns:
+        tuple: Member-signed wrapper and detached attachments, in TEL/KEL order.
+
+    Raises:
+        ValueError: A child is not one event or the TEL is not a v2 blinded update.
+    """
+    return _multisigRegistryExn(ghab, bup, anc, ilk=Ilks.bup)
+
+
+def _multisigRegistryExn(ghab, tel, anc, *, ilk):
+    """Endorse two exact child streams under the route for the required TEL ilk.
+
+    Multiplexor validates their commitments, controller, and anchor relationship
+    before storing the proposal. The builder rejects a TEL for the wrong route.
+
+    ghab, tel and anc supply the member signer and exact child streams; ilk
+    selects the required TEL type. Return the wrapper and detached attachments.
+    This factors the former fork multisigRegistryExn construction, introduced
+    in 93fef663f53ee49187747caf207bc9173c9b6fc1, into per-event contracts.
+    """
     children = []
     for stream in (tel, anc):
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stream), processive=False)
         if len(parsed) != 1:
             raise ValueError('ACDC v2 registry proposal requires one TEL and one KEL event')
         children.append(parsed[0])
-    wrapper = exchange(sender=ghab.mhab.pre, route='/multisig/registry',
-        attributes=dict(gid=ghab.pre, tel=children[0].serder.said,
+    event = children[0].serder
+    if event.ilk != ilk or event.pvrsn != Vrsn_2_0:
+        raise ValueError(f'ACDC v2 multisig {ilk} proposal requires a {ilk} event')
+    wrapper = exchange(sender=ghab.mhab.pre, route=f'/multisig/{ilk}',
+        attributes=dict(gid=ghab.pre, tel=event.said,
                         anc=children[1].serder.said), version=Vrsn_2_0,
         gvrsn=Vrsn_2_0, kind=Kinds.json)
     msg = ghab.mhab.endorse(wrapper, last=False, framed=False, gvrsn=Vrsn_2_0,
@@ -977,18 +1016,21 @@ class Multiplexor:
         ovrsn = serder.pvrsn
         exnSaid = serder.said
 
+        if route in ('/multisig/rip', '/multisig/bup') and ovrsn != Vrsn_2_0:
+            raise ValidationError('ACDC v2 registry proposal requires a v2 wrapper')
+
         if ovrsn.major == Vrsn_1_0.major:
             if embed is None or "d" not in embed:
                 return
 
             # Preserve the legacy V1 aggregation key for both single- and multi-child wrappers
             esaid = embed["d"]
-        elif route == '/multisig/registry':
+        elif route in ('/multisig/rip', '/multisig/bup'):
             if len(nests) != 2 or not isinstance(payload, dict):
                 raise ValidationError('ACDC v2 registry proposal requires TEL and KEL children')
             children = [nest['serder'] if isinstance(nest, dict) else nest.serder for nest in nests]
             tel, anchor = children
-            if (tel.ilk not in (Ilks.rip, Ilks.bup)
+            if (tel.ilk != route.rsplit('/', 1)[-1]
                     or tel.pvrsn.major != 2 or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
                     or anchor.pre != payload.get('gid')
                     or not tel.verify() or not anchor.verify()
@@ -1072,7 +1114,7 @@ class Multiplexor:
                 gid = payload["gid"]
                 if gid not in self.hby.habs:
                     raise ValueError(f"invalid request to participate in group, not member of gid={gid}")
-                if ovrsn.major == 2 and route in ('/multisig/registry', '/multisig/exn'):
+                if ovrsn.major == 2 and route in ('/multisig/rip', '/multisig/bup', '/multisig/exn'):
                     if sender not in self.hby.db.signingMembers(pre=gid):
                         raise ValueError('v2 multisig proposal sender is not a signing member')
 

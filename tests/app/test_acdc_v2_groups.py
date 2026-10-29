@@ -9,7 +9,7 @@ from keri.acdc.messaging import blindate, regcept
 from keri.app import openHby
 from keri.app.acdc_v2_grouping import AcdcV2GroupCoordinator
 from keri.core import Blinder, Diger, Number, Parser, messagize
-from keri.kering import ValidationError, MissingSchemaError
+from keri.kering import Kinds, ValidationError, MissingSchemaError
 from keri.peer import Exchanger
 
 
@@ -96,6 +96,8 @@ def test_registry_quorum_and_explicit_member_approval(members):
     hbys, groups, rgys, owners = members
     rip = regcept(groups[0].pre)
     first, atc = owners[0].approveRegistry(rip)
+    assert first.route == '/multisig/rip'
+    assert '/multisig/registry' not in owners[0].exc.routes
     assert rgys[0].store.headEvent(rip.said) is None
     proposal = first.raw + atc
     event, anchor, opening = owners[1].registryProposal(proposal)
@@ -118,6 +120,7 @@ def test_registry_quorum_and_explicit_member_approval(members):
     opening = Blinder.blind(sn=1, acdc=credential.said, state='issued')
     issued = blindate(rip.said, rip.said, opening.said)
     first, atc = owners[0].approveRegistry(issued, opening=opening)
+    assert first.route == '/multisig/bup'
     event, anchor, disclosed = owners[1].registryProposal(first.raw + atc)
     assert disclosed.qb64 == opening.qb64
     assert rgys[1].store.headEvent(rip.said).said == rip.said
@@ -128,6 +131,30 @@ def test_registry_quorum_and_explicit_member_approval(members):
     # Exact old proposal replay cannot lower the accepted ACDC v2 registry TEL head.
     owners[0].receive(proposal)
     assert rgys[0].store.headEvent(rip.said).said == issued.said
+
+
+def test_blinded_registry_approval_needs_no_opening(members):
+    """Approve an exact bup commitment without disclosing or deriving its opening."""
+    _, groups, rgys, owners = members
+    rip = regcept(groups[0].pre)
+    first, atc = owners[0].approveRegistry(rip)
+    event, anchor, _ = owners[1].registryProposal(first.raw + atc)
+    second, atc = owners[1].approveRegistry(event, anchor)
+    owners[0].receive(second.raw + atc)
+
+    opening = Blinder.blind(sn=1, acdc=Diger(ser=b'private credential').qb64, state='issued')
+    bup = blindate(rip.said, rip.said, opening.said)
+    first, atc = owners[0].approveRegistry(bup)
+    proposal = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(first.raw + atc), processive=False)[0]
+    assert first.route == '/multisig/bup'
+    assert not proposal.nests[0].bsqs and not proposal.nests[0].bsss
+    assert opening.qb64b not in first.raw + atc
+    event, anchor, disclosed = owners[1].registryProposal(first.raw + atc)
+    assert disclosed is None
+    second, atc = owners[1].approveRegistry(event, anchor)
+    owners[0].receive(second.raw + atc)
+    assert all(rgy.store.headEvent(rip.said).said == bup.said for rgy in rgys[:2])
 
 
 def test_group_ipex_uses_real_threshold_and_shared_semantic_handler(members):
@@ -179,6 +206,92 @@ def test_acdc_v2_registry_approval_refuses_different_tel(members):
     substitute = regcept(groups[0].pre)
     with pytest.raises(ValidationError, match='exclusively anchor'):
         owners[1].approveRegistry(substitute, anchor)
+
+
+@pytest.mark.parametrize('route,ilk', [
+    ('/multisig/rip', 'bup'),
+    ('/multisig/bup', 'rip'),
+    ('/multisig/rip', 'icp'),
+    ('/multisig/bup', 'icp'),
+])
+def test_registry_handlers_reject_wrong_tel_ilk_before_save(members, route, ilk):
+    """Reject signed proposals whose TEL child does not match the route.
+
+    Real independent members authenticate the wrapper, while the handler must
+    reject its shape before retaining proposal children or recording approval.
+    """
+    from keri.core import Codens, Counter, SerderKERI, exchange
+    from keri.peer.exchanging import serializeParsedSubstream
+
+    hbys, groups, rgys, owners = members
+    rip = regcept(groups[0].pre)
+    if ilk == 'bup':
+        event = blindate(rip.said, rip.said, Diger(ser=b'private event').qb64)
+    elif ilk == 'icp':
+        event = SerderKERI(raw=groups[0].msgOwnInception(gvrsn=Vrsn_2_0))
+    else:
+        event = rip
+    anchorStream = groups[0].interact(data=[dict(s=event.sad.get('n', '0'), d=event.said)],
+        version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+    anchor = SerderKERI(raw=anchorStream)
+    wrapper = exchange(sender=groups[0].mhab.pre, route=route,
+        attributes=dict(gid=groups[0].pre, tel=event.said, anc=anchor.said),
+        version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+    footer = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+    children = [Parser(version=Vrsn_2_0).parse(ims=bytearray(stream),
+        processive=False)[0] for stream in (event.raw + footer, anchorStream)]
+    message = groups[0].mhab.endorse(wrapper, last=False, framed=False,
+        gvrsn=Vrsn_2_0, nests=[serializeParsedSubstream(child) for child in children])
+
+    parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(message), processive=False)
+    assert len(parsed) == 1 and parsed[0].serder.said == wrapper.said
+    assert parsed[0].serder.route == route and len(parsed[0].nests) == 2
+    with pytest.raises(ValidationError, match='invalid ACDC v2 registry proposal bodies'):
+        owners[1].mux.validate(parsed[0].serder, nests=parsed[0].nests)
+    with pytest.raises(ValidationError, match='registry proposal is not authenticated'):
+        owners[1].registryProposal(message)
+    assert hbys[1].db.exns.get((wrapper.said,)) is None
+    assert not hbys[1].db.enst.get((wrapper.said,))
+    assert not hbys[1].db.meids.get((anchor.said,))
+    assert not hbys[1].db.maids.get((anchor.said,))
+    assert rgys[1].store.headEvent(rip.said) is None
+    assert groups[1].kever.sn == 0
+
+
+def test_registry_builders_reject_wrong_route_and_removed_route(members):
+    """Make route contracts explicit at authoring and reject the removed wrapper.
+
+    Neither route selection nor proposal inspection may sign an unrelated TEL.
+    """
+    from keri import Vrsn_1_0
+    from keri.app.grouping import multisigRipExn, multisigBupExn
+    from keri.peer import specialExchange
+    from keri.core import Codens, Counter, exchange
+
+    _, groups, _, owners = members
+    rip = regcept(groups[0].pre)
+    bup = blindate(rip.said, rip.said, Diger(ser=b'private event').qb64)
+    anchor = groups[0].interact(data=[dict(s='0', d=rip.said)],
+        version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+    footer = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+    with pytest.raises(ValueError, match='requires a rip event'):
+        multisigRipExn(groups[0], bup.raw + footer, anchor)
+    with pytest.raises(ValueError, match='requires a bup event'):
+        multisigBupExn(groups[0], rip.raw + footer, anchor)
+
+    wrapper = exchange(sender=groups[0].mhab.pre, route='/multisig/registry',
+        attributes=dict(gid=groups[0].pre), version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+    message = groups[0].mhab.endorse(wrapper, last=False, framed=False, gvrsn=Vrsn_2_0)
+    assert '/multisig/registry' not in owners[1].exc.routes
+    with pytest.raises(ValidationError, match='expected one ACDC v2 registry proposal'):
+        owners[1].registryProposal(message)
+
+    for route in ('/multisig/rip', '/multisig/bup'):
+        legacy, _ = specialExchange(sender=groups[0].mhab.pre, route=route,
+            attributes=dict(gid=groups[0].pre), version=Vrsn_1_0)
+        with pytest.raises(ValidationError, match='requires a v2 wrapper'):
+            owners[1].mux.validate(legacy)
+        assert not owners[1].exc.routes[route].verify(legacy)
 
 
 def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fanout(tmp_path):
@@ -246,7 +359,8 @@ def test_cli_group_proposal_reopens_pending_state_and_issues_without_secret_fano
     for path in (first, second, issue1, issue2):
         parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(path.read_bytes()), processive=False)
         wrapper = parsed[-1]
-        assert wrapper.serder.route == '/multisig/registry'
+        assert wrapper.serder.route == ('/multisig/rip' if path in (first, second)
+                                        else '/multisig/bup')
         assert not wrapper.bsqs and not wrapper.bsss
     for path in (issue1, issue2):
         tel = Parser(version=Vrsn_2_0).parse(
