@@ -10,13 +10,19 @@ binds the independently created registry inception; the issuer always confirms.
 An ephemeral public key and signed reply timestamp identify the attempt. There
 is no extra nonce. Never reuse negotiation private keys or put roots in bodies.
 Only the exact returned init.raw and bind.raw belong in registry_salts' KDF.
-Later entitlement assignments are outside this initial two-party profile.
+Issuer assignments may extend entitlement to another logical party without
+another DH exchange. Provisions carry only Cipher_Salt encrypted roots and
+public archived proofs; receipts describe retention after an external custody
+transaction commits. These provisional routes are local, not standardized KERI.
+Current accepted source/recipient membership, historical proof authentication,
+root decryption/commitment checks and durable retention remain external.
 """
 
 from .. import Vrsn_2_0
-from ..core import Diger, Matter, MtrDex, Number, Prefixer, SerderACDC, SerderKERI, reply
+from ..core import Cipher, Diger, Matter, MtrDex, Number, Prefixer, SerderACDC, SerderKERI, Texter, reply
 from ..kering import Ilks, KeriError, Kinds, ValidationError
 from . import registry_salts
+from .replying import parseReply
 
 
 SUITE = 'RKS1-X25519-HKDF-SHA256'
@@ -25,6 +31,12 @@ PURPOSE = 'registry-state'
 INIT_ROUTE = '/keri-rnd/registry-salt/1/init'
 BIND_ROUTE = '/keri-rnd/registry-salt/1/bind'
 CONFIRM_ROUTE = '/keri-rnd/registry-salt/1/confirm'
+ASSIGN_ROUTE = '/keri-rnd/registry-salt/1/assign'
+PROVISION_ROUTE = '/keri-rnd/registry-salt/1/provision'
+RECEIPT_ROUTE = '/keri-rnd/registry-salt/1/receipt'
+_CONFIRM_FIELDS = {'init', 'bind', 'registry', 'commitment', 'entitled', 'suite', 'profile', 'purpose'}
+_PROVISION_FIELDS = {'origin', 'registry', 'party', 'target', 'admission', 'source',
+                     'recipientEst', 'cipher', 'proofs', 'suite', 'profile', 'purpose'}
 
 
 def _qualified(value, klas, code=None):
@@ -39,10 +51,8 @@ def _qualified(value, klas, code=None):
         raise ValidationError('registry-salt reply contains invalid qualified material') from None
 
 
-def _representative(data):
-    """Check representative AID, establishment coordinate and DH key encoding."""
-    _qualified(data['rep'], Prefixer)
-    est = data['est']
+def _establishment(est):
+    """Require exactly one canonical public establishment coordinate {s,d}."""
     if not isinstance(est, dict) or set(est) != {'s', 'd'}:
         raise ValidationError('registry-salt representative requires exact s,d coordinates')
     try:
@@ -51,6 +61,12 @@ def _representative(data):
     except (KeriError, ValueError, TypeError, OverflowError):
         raise ValidationError('registry-salt representative sequence must be canonical hex') from None
     _qualified(est['d'], Diger)
+
+
+def _representative(data):
+    """Check representative AID, establishment coordinate and DH key encoding."""
+    _qualified(data['rep'], Prefixer)
+    _establishment(data['est'])
     _qualified(data['key'], Matter, MtrDex.X25519)
 
 
@@ -131,10 +147,7 @@ def validateConfirm(init, bind, confirm, rip):
     Raises: ValidationError for invalid linkage, issuer, entitlement or commitment.
     """
     validateBind(init, bind, rip)
-    data = _body(confirm, CONFIRM_ROUTE,
-        {'init', 'bind', 'registry', 'commitment', 'entitled', 'suite', 'profile', 'purpose'})
-    for name in ('init', 'bind', 'registry'):
-        _qualified(data[name], Diger)
+    data = _confirmed(confirm)
     parties = init.sad['a']
     if confirm.pre != parties['issuer']:
         raise ValidationError('registry-salt confirmation must come from issuer')
@@ -142,7 +155,6 @@ def validateConfirm(init, bind, confirm, rip):
         raise ValidationError('registry-salt confirmation references another negotiation')
     if data['entitled'] != [parties['issuer'], parties['discloser']]:
         raise ValidationError('registry-salt initial entitlement must be exactly issuer and discloser')
-    _qualified(data['commitment'], Diger, MtrDex.SHA2_256)
     return confirm
 
 
@@ -196,3 +208,224 @@ def confirmReply(init, bind, rip, root, *, stamp=None):
         suite=SUITE, profile=PROFILE, purpose=PURPOSE)
     return validateConfirm(init, bind, reply(pre=parties['issuer'], route=CONFIRM_ROUTE,
         data=data, stamp=stamp, version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json), rip)
+
+
+def _confirmed(confirm):
+    """Check confirmation shape/local bindings; full transcript checks are external."""
+    data = _body(confirm, CONFIRM_ROUTE, _CONFIRM_FIELDS)
+    for name in ('init', 'bind', 'registry'):
+        _qualified(data[name], Diger)
+    _qualified(data['commitment'], Diger, MtrDex.SHA2_256)
+    entitled = data['entitled']
+    if not isinstance(entitled, list) or len(entitled) != 2:
+        raise ValidationError('registry-salt confirmation requires two initial parties')
+    for aid in entitled:
+        _qualified(aid, Prefixer)
+    if entitled[0] != confirm.pre or entitled[0] == entitled[1]:
+        raise ValidationError('registry-salt confirmation requires its issuer as first initial party')
+    return data
+
+
+def _linked(confirm, data):
+    """Require origin/registry to identify this exact confirmation and registry."""
+    confirmed = _confirmed(confirm)
+    if (data['origin'], data['registry']) != (confirm.said, confirmed['registry']):
+        raise ValidationError('registry-salt reply references another origin or registry')
+    return confirmed
+
+
+def _newReply(sender, route, data, stamp):
+    """Return an unsigned v2 JSON reply with this profile's fixed public labels."""
+    data = dict(data, suite=SUITE, profile=PROFILE, purpose=PURPOSE)
+    return reply(pre=sender, route=route, data=data, stamp=stamp,
+                 version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+
+
+def validateAssign(confirm, assign):
+    """Return an issuer assignment extending this origin to one new logical party.
+
+    Parameters: confirm is the previously validated original confirmation;
+        assign is its unsigned or authenticated assignment SerderKERI.
+    Returns: assign unchanged. Its issuer threshold/history authentication and
+        the party's accepted signing roster remain external responsibilities.
+    Raises: ValidationError for wrong author, origin, registry or initial party.
+    """
+    data = _body(assign, ASSIGN_ROUTE,
+                 {'origin', 'registry', 'party', 'suite', 'profile', 'purpose'})
+    confirmed = _linked(confirm, data)
+    _qualified(data['party'], Prefixer)
+    if assign.pre != confirm.pre or data['party'] in confirmed['entitled']:
+        raise ValidationError('registry-salt assignment requires issuer and a new logical party')
+    return assign
+
+
+def assignReply(confirm, *, party, stamp=None):
+    """Construct an unsigned issuer assignment for the same root/origin.
+
+    Parameters: confirm is a validated original confirmation; party is the new
+        logical AID; stamp is optional. Returns: locally validated SerderKERI.
+    Raises: ValidationError for malformed confirmation, party or linkage.
+    Full transcript, issuer authentication and accepted rosters are external.
+    """
+    confirmed = _confirmed(confirm)
+    return validateAssign(confirm, _newReply(confirm.pre, ASSIGN_ROUTE,
+        dict(origin=confirm.said, registry=confirmed['registry'], party=party), stamp))
+
+
+def _proofStreams(proofs):
+    """Decode exact canonical Texter strings without parsing or authenticating them."""
+    if (not isinstance(proofs, dict) or set(proofs) != {'init', 'bind', 'confirm', 'assignments'}
+            or not isinstance(proofs['assignments'], list) or len(proofs['assignments']) > 2):
+        raise ValidationError('registry-salt provision requires exact archived proof fields')
+    result = {}
+    for name in ('init', 'bind', 'confirm', 'assignments'):
+        values = proofs[name] if name == 'assignments' else [proofs[name]]
+        streams = []
+        for value in values:
+            _qualified(value, Texter)
+            stream = Texter(qb64=value).raw
+            if not stream:
+                raise ValidationError('registry-salt archived proofs must not be empty')
+            streams.append(stream)
+        result[name] = tuple(streams) if name == 'assignments' else streams[0]
+    return result
+
+
+def encodeProofs(initStream, bindStream, confirmStream, assignmentStreams=()):
+    """Return qualified Texter proof fields preserving exact signed CESR bytes.
+
+    Parameters: three nonempty bytes/bytearray streams and up to two assignment
+        streams in a list/tuple. Returns: the fixed public proofs dictionary.
+    Raises: ValidationError for empty/unsupported inputs. This only encodes;
+        full framing and historical signature authentication remain external.
+    """
+    if not isinstance(assignmentStreams, (list, tuple)) or len(assignmentStreams) > 2:
+        raise ValidationError('registry-salt provision accepts at most two assignment proofs')
+    streams = [initStream, bindStream, confirmStream, *assignmentStreams]
+    if any(not isinstance(stream, (bytes, bytearray)) or not stream for stream in streams):
+        raise ValidationError('registry-salt archived proofs require nonempty exact bytes')
+    encoded = [Texter(raw=bytes(stream)).qb64 for stream in streams]
+    return dict(zip(('init', 'bind', 'confirm'), encoded[:3]), assignments=encoded[3:])
+
+
+def decodeProofs(provision):
+    """Return exact proof bytes from an intact provision without authenticating.
+
+    Parameters: provision is a SerderKERI. Returns: init/bind/confirm bytes plus
+        an assignments tuple in wire order. Raises: ValidationError for bad
+        body shape, malformed/trailing Texters, missing or empty proof streams.
+    """
+    return _proofStreams(_body(provision, PROVISION_ROUTE, _PROVISION_FIELDS)['proofs'])
+
+
+def _provision(provision):
+    """Check provision shape/public coordinates and qualified encrypted Salt_128."""
+    data = _body(provision, PROVISION_ROUTE, _PROVISION_FIELDS)
+    for name in ('origin', 'registry'):
+        _qualified(data[name], Diger)
+    for name in ('source', 'party', 'target'):
+        _qualified(data[name], Prefixer)
+    _establishment(data['admission'])
+    _establishment(data['recipientEst'])
+    _qualified(data['cipher'], Cipher, MtrDex.X25519_Cipher_Salt)
+    _proofStreams(data['proofs'])
+    return data
+
+
+def provisionReply(confirm, *, sender, source, party, target, admission,
+                   recipientEst, cipher, proofs, stamp=None):
+    """Construct an unsigned member provision containing only an encrypted root.
+
+    Parameters: confirm is a validated confirmation; sender is the member AID;
+        source/party are logical parties; target is the individual recipient;
+        admission/recipientEst are {s,d}; cipher is qualified Cipher_Salt;
+        proofs is encodeProofs output; stamp is optional.
+    Returns: shape/local-binding validated SerderKERI. Full transcript/proof
+        semantics require validateProvision; signatures, current rosters,
+        ciphertext key selection and root commitment checks remain external.
+    Raises: ValidationError for invalid shape, coordinates, cipher or linkage.
+    """
+    confirmed = _confirmed(confirm)
+    provision = _newReply(sender, PROVISION_ROUTE,
+        dict(origin=confirm.said, registry=confirmed['registry'], source=source,
+             party=party, target=target, admission=admission, recipientEst=recipientEst,
+             cipher=cipher, proofs=proofs), stamp)
+    _linked(confirm, _provision(provision))
+    return provision
+
+
+def validateProvision(init, bind, confirm, provision, rip, *, assignments=(), parser):
+    """Return an exact semantically linked member provision.
+
+    Parameters: init/bind/confirm are original bodies; rip is the exact registry
+        inception; provision is the member reply; assignments are original
+        bodies in bundled order; parser is borrowed for strict parse-only checks.
+    Returns: provision unchanged. Every embedded body must match supplied raw
+        bytes exactly; both logical parties need initial or issuer-assigned
+        entitlement. No signature, current-roster or root-cipher authority is
+        established here. Authenticate these exact streams externally with
+        verifyArchivedReply, and perform live member/current-key checks.
+    Raises: ValidationError for any inconsistent context, proof or entitlement.
+    """
+    validateConfirm(init, bind, confirm, rip)
+    data = _provision(provision)
+    confirmed = _linked(confirm, data)
+    if not isinstance(assignments, (list, tuple)) or len(assignments) > 2:
+        raise ValidationError('registry-salt provision accepts at most two assignments')
+    needed = {data['source'], data['party']} - set(confirmed['entitled'])
+    granted = []
+    for assignment in assignments:
+        validateAssign(confirm, assignment)
+        granted.append(assignment.sad['a']['party'])
+    if len(granted) != len(set(granted)) or set(granted) != needed:
+        raise ValidationError('registry-salt provision requires exactly its noninitial party assignments')
+    streams = decodeProofs(provision)
+    if len(streams['assignments']) != len(assignments):
+        raise ValidationError('registry-salt provision assignment proof count differs')
+    expected = [(streams['init'], init, INIT_ROUTE), (streams['bind'], bind, BIND_ROUTE),
+                (streams['confirm'], confirm, CONFIRM_ROUTE)]
+    expected.extend((stream, body, ASSIGN_ROUTE)
+                    for stream, body in zip(streams['assignments'], assignments))
+    for stream, body, route in expected:
+        if parseReply(parser, stream, {route}).serder.raw != body.raw:
+            raise ValidationError('registry-salt provision proof differs from its exact original body')
+    return provision
+
+
+def validateReceipt(provision, receipt, confirm):
+    """Return a target member's literal retained acknowledgement for one provision.
+
+    Parameters: provision is previously validated; receipt and confirm are
+        SerderKERI bodies. Returns: receipt unchanged, without asserting that a
+        transaction committed. Caller authenticates the member signature and
+        emits receipts only after durable custody commit.
+    Raises: ValidationError for another member, context, commitment or status.
+    """
+    provisionData = _provision(provision)
+    confirmed = _linked(confirm, provisionData)
+    data = _body(receipt, RECEIPT_ROUTE, {'provision', 'origin', 'registry', 'party',
+                 'admission', 'commitment', 'retained', 'suite', 'profile', 'purpose'})
+    expected = dict(provision=provision.said, origin=confirm.said,
+        registry=provisionData['registry'], party=provisionData['party'],
+        admission=provisionData['admission'], commitment=confirmed['commitment'])
+    if (receipt.pre != provisionData['target'] or data['retained'] is not True or
+            any(data[name] != value for name, value in expected.items())):
+        raise ValidationError('registry-salt receipt does not acknowledge exact target retention')
+    return receipt
+
+
+def receiptReply(provision, confirm, *, stamp=None):
+    """Construct an unsigned positive receipt after the caller commits custody.
+
+    Parameters: provision is previously validated; confirm is its original
+        confirmation; stamp is optional. Returns: locally validated receipt
+        naming provision.target as sender and retained=True. Does not perform
+        or prove a custody transaction. Raises: ValidationError on bad context.
+    """
+    data = _provision(provision)
+    confirmed = _linked(confirm, data)
+    receipt = _newReply(data['target'], RECEIPT_ROUTE,
+        dict(provision=provision.said, origin=confirm.said, registry=data['registry'],
+             party=data['party'], admission=data['admission'],
+             commitment=confirmed['commitment'], retained=True), stamp)
+    return validateReceipt(provision, receipt, confirm)
