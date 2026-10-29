@@ -17,7 +17,7 @@ from prettytable import PrettyTable
 from ...common import Parsery, setupHby, printIdentifier, parseVersion
 
 from ....kering import (TraitCodex, ConfigurationError, KeriError, Roles,
-                        Kinds, Ilks, MissingAnchorError, MissingRegistryError, ValidationError,
+                        Kinds, Ilks, MissingAnchorError, MissingRegistryError, MissingEntryError, ValidationError,
                         Version, Vrsn_1_0, Vrsn_2_0)
 from ....app import (GroupHab, HaberyDoer, MailboxDirector, WitnessInquisitor,
                      Notifier, Multiplexor, Counselor, Organizer, Poster,
@@ -51,6 +51,8 @@ parser.add_argument('--timeout', type=float, default=30.0,
                     help='seconds to await native registry acceptance and member delivery')
 parser.add_argument('--version', default=None, required=False, type=parseVersion,
                     help='KERI protocol version for mailbox queries while joining, such as 1.0 or 2.0')
+parser.add_argument('--registry-salt', action='store_true',
+                    help='enable optional native registry-salt approval and durable member replication')
 
 def join(args):
     """ Wait for and provide interactive confirmation of group multisig inception, rotation or interaction events
@@ -67,7 +69,7 @@ def join(args):
     version = args.version
 
     joinDoer = JoinDoer(name=name, base=base, bran=bran, group=group, auto=auto,
-                        version=version, timeout=args.timeout)
+                        version=version, timeout=args.timeout, registrySalt=args.registry_salt)
 
     doers = [joinDoer]
     return doers
@@ -78,7 +80,8 @@ class JoinDoer(doing.DoDoer):
 
     """
 
-    def __init__(self, name, base, bran, group, auto=False, version=None, timeout=30.0):
+    def __init__(self, name, base, bran, group, auto=False, version=None, timeout=30.0,
+                 registrySalt=False):
         """ Create doer for polling for group multisig events and either approve automatically or prompt user
 
         Parameters:
@@ -90,9 +93,18 @@ class JoinDoer(doing.DoDoer):
                          while using the default group of "default-group"
             version (Versionage | None): Protocol version for existing join processors.
             timeout (float): Positive native registry acceptance and delivery deadline.
+            registrySalt (bool): Explicitly compose optional salt reply policy and
+                durable delivery using existing processors and trusted saved rosters.
         """
         if not math.isfinite(timeout) or timeout <= 0:
             raise ConfigurationError('--timeout must be positive')
+        if registrySalt and (version or Version) != Vrsn_2_0:
+            raise ConfigurationError('--registry-salt requires native v2 processing')
+        if registrySalt and not group:
+            raise ConfigurationError('--registry-salt requires an explicit --group')
+        self.registrySalt = registrySalt
+        self.saltWallet = self.saltService = self.saltWorker = None
+        self.saltEstablishment = None
         self.timeout = timeout
         self.group = group
         self.version = version
@@ -160,6 +172,8 @@ class JoinDoer(doing.DoDoer):
             self.toRemove.append(self.pruner)
         self.auto = auto
         super(JoinDoer, self).__init__(doers=doers)
+        if self.registrySalt:
+            self.enableRegistrySalt()
 
     def joinDo(self, tymth, tock=0.0, **kwa):
         """
@@ -226,14 +240,53 @@ class JoinDoer(doing.DoDoer):
         try:
             super().exit(deeds=deeds)
         finally:
+            if deeds is None and getattr(self, 'saltWallet', None) is not None:
+                self.saltWallet.close()
             if deeds is None and self.rgyV2 is not None and self.rgyV2.store.opened:
                 self.rgyV2.close()
+
+    def enableRegistrySalt(self):
+        """Compose optional salt work once the selected group is actually accepted.
+
+        Existing join still owns KEL admission and one parser/mailbox lifecycle.
+        Local accepted member maps may refresh; remote maps must already have
+        been explicitly configured through the salt command. Return None. No
+        incoming request implies group approval or generates a private root.
+        """
+        hab = self.hby.habByName(self.group)
+        if not isinstance(hab, GroupHab) or not hab.accepted:
+            return  # initial group join is still responsible for admission
+        if self.saltService is None:
+            from ....app.credentialing import Wallet
+            from ....app.registry_custody import RegistryCustody
+            from ....app.registry_salt_state import RegistrySaltState
+            from ....app.registry_salt_service import RegistrySaltService, ROUTES
+            from ....app.registry_salt_delivery import RegistrySaltDelivery
+            from ....app.essring import EssrReplyHandler
+
+            self.saltWallet = Wallet(self.hby, self.rgyV2)
+            custody = RegistryCustody(self.hby, self.rgyV2, db=self.saltWallet.db)
+            self.saltWallet.custody = custody
+            self.saltService = RegistrySaltService(self.hby, self.rgyV2, self.saltWallet,
+                custody, RegistrySaltState(custody), self.psr, self.rvy, exc=self.exc, mux=self.mux)
+            self.saltService.register()
+            self.exc.addHandler(EssrReplyHandler(self.hby, hab.mhab, self.psr, ROUTES))
+            self.saltWorker = RegistrySaltDelivery(self.saltService, source=hab.pre)
+            self.extend([self.saltWorker])
+            self.toRemove.append(self.saltWorker)
+        if self.saltEstablishment != hab.kever.lastEst.d:
+            self.saltService.reconcileKnown(hab.pre)
+            self.saltEstablishment = hab.kever.lastEst.d
 
     def registryEscrowDo(self, tymth, tock=0.03125, **kwa):
         """Retry native TEL dependencies only while the join command is running."""
         yield tock
         while True:
             self.reverV2.processEscrows()
+            if getattr(self, 'registrySalt', False):
+                self.enableRegistrySalt()
+                if self.saltService is not None:
+                    self.saltService.process()
             yield tock
 
     def registry(self, attrs):
@@ -799,6 +852,13 @@ class JoinDoer(doing.DoDoer):
         hab = self.hby.habs.get(wrapper.sad['a'].get('gid'))
         if not isinstance(hab, GroupHab):
             raise ValidationError('reply proposal requires a local group')
+        if getattr(self, 'saltService', None) is not None:
+            from ....app.registry_salt_service import ROUTES
+            from ....peer.exchanging import loadParsedNestedSubstreams
+
+            children = loadParsedNestedSubstreams(self.hby, wrapper.said)
+            if len(children) == 1 and children[0].serder.route in ROUTES:
+                return (yield from self.rpySalt(wrapper.said))
         roster = acceptedRoster(self.hby, hab.pre, hab.smids)
 
         def validateEndpoint(serder):
@@ -866,6 +926,50 @@ class JoinDoer(doing.DoDoer):
         finally:
             self.remove(deliveries)
         print(f'End role authorization added for role {role}')
+        return True
+
+    def rpySalt(self, said):
+        """Ask for explicit approval of one policy-checked native salt statement.
+
+        said names a retained member proposal. Return True after its exact
+        logical reply authenticates, False after refusal, or None while quorum
+        remains pending. Public metadata is shown; no private key/root is read
+        for display. The domain service owns all authority and consistency checks.
+        """
+        service = self.saltService
+        try:
+            body = service.inspectProposal(said)
+        except MissingEntryError:
+            print('Registry salt proposal pending: authenticated transcript or registry evidence is unavailable.')
+            return None
+        print(f'\nRegistry salt statement: {body.route}\n    Group: {body.pre}\n    SAID: {body.said}')
+        print(json.dumps(body.sad['a'], indent=2))
+        if not self.auto and input('\nApprove this exact registry salt statement [Y|n]? ') not in ('', 'y', 'Y'):
+            return False
+        outbound = service.approveReply(body, proposal=said)
+        hab = self.hby.habByPre(body.pre)
+        children = []
+        deadline = time.monotonic() + self.timeout
+        try:
+            for member in service.roster(body.pre).members:
+                if member.aid == hab.mhab.pre:
+                    continue
+                poster = StreamPoster(hby=self.hby, hab=hab.mhab, recp=member.aid,
+                                      topic='multisig', version=Vrsn_2_0)
+                poster.send(outbound.proposal, attachment=outbound.attachments, gvrsn=Vrsn_2_0)
+                pending = poster.deliver()
+                children.extend(pending)
+                self.extend(pending)
+            while service.state.proof(body.said) is None or any(not child.done for child in children):
+                service.process()
+                self.exc.processEscrow()
+                if time.monotonic() >= deadline:
+                    print('Registry salt reply or member delivery remains pending; retained approval is unchanged.')
+                    return None
+                yield self.tock
+        finally:
+            self.remove(children)
+        print(f'Authenticated registry salt reply: {body.said}; member custody is tracked separately.')
         return True
 
     def vcp(self, attrs):
