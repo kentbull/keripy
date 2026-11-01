@@ -290,7 +290,9 @@ def test_reactant_close_resets_message_in_progress(direct_habs):
 def test_directant_retains_buffered_input_after_cutoff(direct_habs):
     alice, bob = direct_habs
 
-    remoter = make_remoter(alice.makeOwnEvent(sn=0), cutoff=True)
+    remoterSocket, peerSocket = socket.socketpair()
+    remoter = make_remoter(alice.makeOwnEvent(sn=0), cutoff=True,
+                           cs=remoterSocket)
     ca = remoter.ca
 
     server = serving.Server()
@@ -324,6 +326,7 @@ def test_directant_retains_buffered_input_after_cutoff(direct_habs):
     finally:
         doist.exit()
         server.close()
+        peerSocket.close()
 
 
 def test_directant_closes_cutoff_without_buffered_input(direct_habs):
@@ -369,8 +372,9 @@ def test_directant_timeout_preserves_buffered_input_for_drain(direct_habs):
 
     next(dog)
     next(dog)
-    # timeout becomes cutoff but does not bypass buffered-input drain
-    assert remoter.cutoff
+    # timeout requests close without masquerading as peer EOF
+    assert not remoter.cutoff
+    assert ca in directant.closeRequested
     assert ca in server.ixes
     assert ca in directant.rants
     assert not directant.rants[ca].rxDrained
