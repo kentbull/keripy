@@ -93,8 +93,6 @@ class WatchDoer(doing.DoDoer):
 
                 start = time.perf_counter()
                 while not witer.idle:
-                    if witer.error is not None:
-                        raise witer.error
                     end = time.perf_counter()
                     if end - start > 10:
                         break

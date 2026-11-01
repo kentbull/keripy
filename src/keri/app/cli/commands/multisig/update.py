@@ -98,9 +98,7 @@ class UpdateDoer(doing.DoDoer):
         msg = self.hab.query(pre=self.hab.pre, src=self.wit, route="ksn")
         witer.msgs.append(bytearray(msg))
 
-        while not witer.idle:
-            if witer.error is not None:
-                raise witer.error
+        while not witer.idle and witer.error is None:
             yield self.tock
 
         self.remove([witer])

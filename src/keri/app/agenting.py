@@ -388,7 +388,7 @@ class WitnessReceiptor(doing.DoDoer):
         posts the event, waits for receipts to be stored in `hab.db`, then
         shares the full receipt set across witnesses. If `force` is false and
         all receipts already exist, it skips resubmission.
-        Pushes the original request to self.cues to signal completion
+        Terminal messenger errors are logged and suppress the completion cue.
         """
         self.wind(tymth)
         _ = (yield tock)
@@ -424,6 +424,7 @@ class WitnessReceiptor(doing.DoDoer):
                 # Check to see if we already have all the receipts we need for this event
                 wigs = hab.db.getWigs(dgkey)
                 completed = len(wigs) == len(wits)
+                failed = False
                 if len(wigs) != len(wits):  # We have all the receipts, skip
                     for idx, witer in enumerate(witers):
                         wit = wits[idx]
@@ -439,11 +440,23 @@ class WitnessReceiptor(doing.DoDoer):
                         witer.msgs.append(bytearray(msg))  # make a copy
                         _ = (yield tock)
 
-                    while True: # wait for all receipts to arrive
+                    while True:  # wait for all receipts to arrive
                         wigs = hab.db.getWigs(dgkey)
                         if len(wigs) == len(wits):
                             break
+
+                        failure = next((witer for witer in witers
+                                        if witer.error is not None), None)
+                        if failure is not None:
+                            logger.error(f"Witness delivery to {failure.wit} failed: "
+                                         f"{failure.error}")
+                            failed = True
+                            break
                         _ = yield tock
+
+                if failed:
+                    self.remove(witers)
+                    continue
 
                 # If we started with all our receipts, exit unless told to force resubmit of all receipts
                 if completed and not self.force:
@@ -484,20 +497,24 @@ class WitnessReceiptor(doing.DoDoer):
                     _ = (yield tock)
 
                 while True:
-                    done = True
-                    for witer in witers:
-                        if witer.error is not None:
-                            raise witer.error
-                        if not witer.idle:
-                            yield self.idleTock
-                            done = False
-                            break
-                    if done:
+                    failure = next((witer for witer in witers
+                                    if witer.error is not None), None)
+                    if failure is not None:
+                        logger.error(f"Witness delivery to {failure.wit} failed: "
+                                     f"{failure.error}")
+                        failed = True
                         break
+                    if all(witer.idle for witer in witers):
+                        break
+                    yield self.idleTock
 
                 self.remove(witers)
 
+                if failed:
+                    continue
+
                 self.cues.push(evt)
+
                 yield tock
 
             yield tock
@@ -847,23 +864,24 @@ class TCPMessenger(doing.DoDoer):
 
 
 class TCPStreamMessenger(doing.DoDoer):
-    """Serially stream CESR messages to a witness and parse inbound receipts.
+    """Send one CESR message over TCP and terminate at local completion.
 
-    Only one message is removed from ``msgs`` at a time. That message remains
-    ``messageInProgress`` until its bytes drain from the local TCP send buffer
-    or a terminal transport failure is recorded. The next message is not
-    dequeued before that terminal outcome. Local drain does not prove remote
-    receipt or processing.
+    Successful local send-buffer drain is retained in ``sent``; cutoff with
+    unsent bytes is retained in ``error``. Either outcome completes this doer
+    and closes its transport and parser children. Local drain does not prove
+    remote receipt or processing.
     """
 
-    def __init__(self, hab, wit, url, msgs=None, sent=None, doers=None, **kwa):
-        """Initialize TCP stream messenger with queues and parser wiring.
+    def __init__(self, hab, wit, url, msg=None, msgs=None, sent=None,
+                 doers=None, **kwa):
+        """Initialize with the single message and parser wiring.
 
         Parameters:
             hab (Hab): habitat for KEL parsing and db access.
             wit (str): qb64 witness identifier.
             url (str): tcp endpoint URL for the witness.
-            msgs (Deck | None): outbound message queue.
+            msg (bytes | None): sole CESR message to admit immediately.
+            msgs (Deck | None): queue from which to admit one message.
             sent (Deck | None): consumable successful-drain notification queue.
 
         Attributes:
@@ -875,9 +893,12 @@ class TCPStreamMessenger(doing.DoDoer):
         self.url = url
         self.messageInProgress = False
         self.msgs = msgs if msgs is not None else decking.Deck()
+        if msg is not None:
+            self.msgs.append(bytearray(msg))
         self.sent = sent if sent is not None else decking.Deck()
         self.client = None
         self.error = None
+        self._terminal = False
         self.parser = None
         doers = doers if doers is not None else []
         doers.extend([doing.doify(self.receiptDo)])
@@ -888,13 +909,12 @@ class TCPStreamMessenger(doing.DoDoer):
         super(TCPStreamMessenger, self).__init__(doers=doers)
 
     def receiptDo(self, tymth=None, tock=0.0, **kwa):
-        """Send queued messages one at a time to local transport completion.
+        """Send the message and stop after local drain or terminal cutoff.
 
-        A message becomes in progress when dequeued and remains so while HIO's
-        local ``txbs`` buffer contains any of its bytes. Successful drain adds
-        the original request to ``sent`` before admitting the next message.
-        Cutoff with unsent bytes records a terminal error instead of reporting
-        idle. Neither outcome acknowledges remote processing.
+        The message remains in progress while HIO's local ``txbs`` contains
+        any of its bytes. Successful drain retains it in ``sent``; cutoff with
+        unsent bytes records ``error``. Neither outcome acknowledges remote
+        processing.
 
         ``ClientDoer`` reads from the socket and drains outbound ``client.txbs``.
 
@@ -916,11 +936,11 @@ class TCPStreamMessenger(doing.DoDoer):
         clientDoer = clienting.ClientDoer(client=self.client)
         self.extend([clientDoer, doing.doify(self.msgDo)])
 
-        while True:
-            while not self.msgs:
-                yield tock
+        while not self.msgs:
+            yield tock
 
-            msg = self.msgs.popleft()
+        msg = self.msgs.popleft()
+        try:
             self.messageInProgress = True
 
             self.client.tx(msg)  # send to connected remote
@@ -931,13 +951,15 @@ class TCPStreamMessenger(doing.DoDoer):
                         f"TCP connection to {self.wit} closed with "
                         f"{len(self.client.txbs)} unsent bytes"
                     )
-                    self.messageInProgress = False
+                    self._terminal = True
                     return False
                 yield tock
 
             self.sent.append(msg)
+            self._terminal = True
+            return True
+        finally:
             self.messageInProgress = False
-            yield tock
 
     def msgDo(self, tymth=None, tock=0.0, **opts):
         """Continuously consume inbound CESR and dispatch it to the Kevery.
@@ -953,6 +975,11 @@ class TCPStreamMessenger(doing.DoDoer):
             except StopIteration as ex:
                 return ex.value
             yield tock
+
+    def recur(self, tyme, deeds=None):
+        """Advance children and finish once the one-shot outcome is retained."""
+        done = super(TCPStreamMessenger, self).recur(tyme, deeds)
+        return done or self._terminal
 
     @property
     def idle(self):
@@ -1217,7 +1244,7 @@ def streamMessengerFrom(hab, pre, urls, msg, headers=None):
         witer = HTTPStreamMessenger(hab=hab, wit=pre, url=url, msg=msg, headers=headers)
     elif kering.Schemes.tcp in urls:
         url = urls[kering.Schemes.tcp]
-        witer = TCPStreamMessenger(hab=hab, wit=pre, url=url)
+        witer = TCPStreamMessenger(hab=hab, wit=pre, url=url, msg=msg)
     else:
         raise kering.ConfigurationError(f"unable to find a valid endpoint for witness {pre}")
 

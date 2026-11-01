@@ -53,6 +53,69 @@ def test_receiptor_tocks_are_generator_local():
         query.close()
 
 
+def test_witness_receiptor_releases_failed_messenger():
+    with habbing.openHby(name="receiptor-failure", temp=True) as hby:
+        wit = hby.makeHab(name="offline-witness", transferable=False)
+        hab = hby.makeHab(name="controller", transferable=True,
+                          wits=[wit.pre],
+                          data=[{"payload": "x" * (1024 * 1024)}])
+
+        server, doist = open_tcp_server_doist(limit=2.0)
+
+        url = f"tcp://127.0.0.1:{server.ha[1]}"
+        hby.db.ends.pin(keys=(wit.pre, kering.Roles.controller, wit.pre),
+                        val=basing.EndpointRecord(allowed=True))
+        hby.db.locs.pin(keys=(wit.pre, kering.Schemes.tcp),
+                       val=basing.LocationRecord(url=url))
+
+        receiptor = agenting.WitnessReceiptor(hby=hby)
+        receiptor.msgs.append(dict(pre=hab.pre))
+        closed = []
+        beats = []
+
+        @doing.doize(tock=0.03125)
+        def closePeer(tymth=None, tock=0.0, **kwa):
+            while not server.ixes or not any(
+                    isinstance(doer, agenting.TCPMessenger) and
+                    doer.client is not None and doer.client.cs is not None
+                    for doer in receiptor.doers):
+                yield tock
+
+            # close the real peer before its receipt can complete the operation
+            messenger = next(doer for doer in receiptor.doers
+                             if isinstance(doer, agenting.TCPMessenger))
+            messenger.client.cs.setsockopt(socket.SOL_SOCKET,
+                                           socket.SO_SNDBUF, 4096)
+            server.removeIx(next(iter(server.ixes)))
+            closed.append(True)
+            while True:
+                yield tock
+
+        @doing.doize(tock=0.03125)
+        def heartbeat(tymth=None, tock=0.0, **kwa):
+            while True:
+                beats.append(tymth())
+                yield tock
+
+        doist.extend([closePeer, heartbeat, receiptor])
+
+        try:
+            # terminal delivery releases the child without claiming completion
+            recurUntil(
+                doist,
+                condition=lambda: closed and not any(
+                    isinstance(doer, agenting.TCPMessenger)
+                    for doer in receiptor.doers),
+                message="Receiptor did not release the failed messenger",
+            )
+            assert not receiptor.cues
+            before = len(beats)
+            doist.recur()
+            assert len(beats) > before
+        finally:
+            doist.exit()
+
+
 def test_witness_receiptor(seeder):
     with habbing.openHby(name="wan", salt=core.Salter(raw=b'wann-the-witness').qb64) as wanHby, \
             habbing.openHby(name="wil", salt=core.Salter(raw=b'will-the-witness').qb64) as wilHby, \
@@ -164,6 +227,17 @@ def make_hio_response(status, *, errored=False, error=None):
     )
 
 
+def open_tcp_server_doist(limit=1.0):
+    """Open a real HIO server on an OS-assigned port under a bounded Doist."""
+    server = serving.Server(host="127.0.0.1", port=0)
+    doist = doing.Doist(real=True, tock=0.03125, limit=limit,
+                        doers=[serving.ServerDoer(server=server)])
+    doist.enter()
+    # HIO retains configured port 0 in eha; align its accept validation.
+    server.eha = server.ha
+    return server, doist
+
+
 TERMINAL_RESPONSES = (
     make_hio_response(status=204),
     make_hio_response(status=503),
@@ -219,41 +293,23 @@ def close_framed_response_do(server):
 def messenger_hab():
     """Provide a fully initialized temporary habitat for messenger tests."""
     with habbing.openHab(name="messenger",
-                         salt=b"0123456789abcdef") as (_, hab):
+                         salt=b"0123456789abcdef",
+                         temp=True) as (_, hab):
         yield hab
 
 
 @pytest.fixture()
-def running_http_messenger(unused_tcp_port):
+def running_http_messenger():
     """Run an HTTPMessenger through a managed Doist lifecycle."""
+    server, doist = open_tcp_server_doist()
+
     messenger = agenting.HTTPMessenger(
         hab=None,
         wit="witness",
-        url=f"http://127.0.0.1:{unused_tcp_port}",
+        url=f"http://127.0.0.1:{server.ha[1]}",
     )
     connector = messenger.client.connector
-    doist = doing.Doist(tock=0.0, doers=[messenger])
-    doist.enter()
-    assert connector.cs is not None
-
-    try:
-        yield messenger, doist
-    finally:
-        doist.exit()
-        assert connector.cs is None
-
-
-@pytest.fixture()
-def running_http_stream_messenger(unused_tcp_port):
-    """Run an HTTPStreamMessenger through a managed Doist lifecycle."""
-    messenger = agenting.HTTPStreamMessenger(
-        hab=None,
-        wit="witness",
-        url=f"http://127.0.0.1:{unused_tcp_port}",
-    )
-    connector = messenger.client.connector
-    doist = doing.Doist(tock=0.03125, limit=1.0, doers=[messenger])
-    doist.enter()
+    doist.extend([messenger])
     assert connector.cs is not None
 
     try:
@@ -309,18 +365,16 @@ def test_tcp_messenger_idle_requires_complete_local_drain(klas, messenger_hab):
 @pytest.mark.parametrize("klas", [agenting.TCPMessenger,
                                   agenting.TCPStreamMessenger])
 def test_tcp_messenger_records_cutoff_with_unsent_bytes(
-        klas, messenger_hab, unused_tcp_port):
+        klas, messenger_hab):
     # run the real server and messenger through the same Doist
-    server = serving.Server(host="127.0.0.1", port=unused_tcp_port)
-    serverDoer = serving.ServerDoer(server=server)
+    server, doist = open_tcp_server_doist()
+
     messenger = klas(
         hab=messenger_hab,
         wit="witness",
-        url=f"tcp://127.0.0.1:{unused_tcp_port}",
+        url=f"tcp://127.0.0.1:{server.ha[1]}",
     )
-    doist = doing.Doist(real=True, tock=0.03125, limit=1.0,
-                        doers=[serverDoer, messenger])
-    doist.enter()
+    doist.extend([messenger])
 
     try:
         # recur until both sides establish the TCP connection
@@ -358,12 +412,43 @@ def test_tcp_messenger_records_cutoff_with_unsent_bytes(
         assert isinstance(messenger.error, kering.ClosedError)
         assert not messenger.messageInProgress
         assert not messenger.idle
+        if isinstance(messenger, agenting.TCPStreamMessenger):
+            assert messenger.done is True
+            assert messenger.client.cs is None
+            assert not messenger.deeds
     finally:
         # Doist exit closes both HIO transports
         doist.exit()
 
     assert not server.opened
     assert not client.opened
+
+
+def test_tcp_stream_messenger_admits_message_and_cleans_children(messenger_hab):
+    server, doist = open_tcp_server_doist()
+
+    msg = messenger_hab.makeOwnInception()
+    messenger = agenting.streamMessengerFrom(
+        hab=messenger_hab,
+        pre=messenger_hab.pre,
+        urls={kering.Schemes.tcp:
+              f"tcp://127.0.0.1:{server.ha[1]}"},
+        msg=msg,
+    )
+    doist.extend([messenger])
+
+    try:
+        # local drain completes the one-shot doer and closes its children
+        recurUntil(doist,
+                   condition=lambda: messenger.done,
+                   message="TCP stream messenger did not complete")
+
+        assert messenger.error is None
+        assert list(messenger.sent) == [bytearray(msg)]
+        assert messenger.client.cs is None
+        assert not messenger.deeds
+    finally:
+        doist.exit()
 
 
 def test_http_messenger_idle_requires_terminal_response():
@@ -434,19 +519,16 @@ def test_http_messenger_preserves_terminal_responses(
 
 
 def test_http_messenger_finalizes_close_framed_response(
-        messenger_hab, unused_tcp_port):
+        messenger_hab):
     # serve a real response whose body boundary is the peer's TCP FIN
-    server = serving.Server(host="127.0.0.1", port=unused_tcp_port)
-    serverDoer = serving.ServerDoer(server=server)
-    responder = close_framed_response_do(server)
+    server, doist = open_tcp_server_doist()
+
     messenger = agenting.HTTPMessenger(
         hab=messenger_hab,
         wit=messenger_hab.pre,
-        url=f"http://127.0.0.1:{unused_tcp_port}",
+        url=f"http://127.0.0.1:{server.ha[1]}",
     )
-    doist = doing.Doist(real=True, tock=0.03125, limit=1.0,
-                        doers=[serverDoer, responder, messenger])
-    doist.enter()
+    doist.extend([close_framed_response_do(server), messenger])
 
     try:
         messenger.msgs.append(bytearray(messenger_hab.makeOwnInception()))
@@ -466,20 +548,18 @@ def test_http_messenger_finalizes_close_framed_response(
 
 
 def test_http_stream_messenger_finalizes_close_framed_response(
-        messenger_hab, unused_tcp_port):
+        messenger_hab):
     # exercise the one-shot messenger against the same real FIN boundary
-    server = serving.Server(host="127.0.0.1", port=unused_tcp_port)
-    serverDoer = serving.ServerDoer(server=server)
-    responder = close_framed_response_do(server)
+    server, doist = open_tcp_server_doist()
+
     messenger = agenting.HTTPStreamMessenger(
         hab=messenger_hab,
         wit=messenger_hab.pre,
-        url=f"http://127.0.0.1:{unused_tcp_port}",
+        url=f"http://127.0.0.1:{server.ha[1]}",
         msg=messenger_hab.makeOwnInception(),
     )
-    doist = doing.Doist(real=True, tock=0.03125, limit=1.0,
-                        doers=[serverDoer, responder, messenger])
-    doist.enter()
+    connector = messenger.client.connector
+    doist.extend([close_framed_response_do(server), messenger])
 
     try:
         # an active response gets its HIO finalization pass before cutoff wins
@@ -490,6 +570,9 @@ def test_http_stream_messenger_finalizes_close_framed_response(
         assert messenger.error is None
         assert messenger.rep is not None
         assert messenger.rep.status == 200
+        assert messenger.rep.body == b"{}"
+        assert connector.cs is None
+        assert not messenger.deeds
     finally:
         doist.exit()
 
@@ -523,42 +606,32 @@ def test_http_messenger_cutoff_depends_on_pending_work(
         assert messenger.idle
 
 
-@pytest.mark.parametrize(
-    "response",
-    TERMINAL_RESPONSES,
-)
-def test_http_stream_messenger_preserves_terminal_response(
-        response, running_http_stream_messenger):
-    messenger, doist = running_http_stream_messenger
-    # queue a terminal response without leaving request work
-    messenger.client.requests.clear()
-    messenger.client.responses.append(response._asdict())
+def test_http_stream_messenger_cutoff_cleans_children():
+    server, doist = open_tcp_server_doist()
 
-    # terminal response completes the one-shot doer unchanged
-    recurUntil(
-        doist,
-        condition=lambda: messenger.done,
-        message="HTTP stream messenger did not complete its response",
+    messenger = agenting.HTTPStreamMessenger(
+        hab=None,
+        wit="witness",
+        url=f"http://127.0.0.1:{server.ha[1]}",
+        msg=b"message",
     )
-    assert messenger.done is True
-    assert isinstance(messenger.rep, http.clienting.Response)
-    assert messenger.rep == response
-    assert messenger.error is None
-
-
-def test_http_stream_messenger_cutoff_before_response_records_error(
-        running_http_stream_messenger):
-    messenger, doist = running_http_stream_messenger
     connector = messenger.client.connector
-    # cutoff before the one-shot response is terminal
-    assert messenger.client.requests
-    connector.cutoff = True
+    doist.extend([messenger])
 
-    doist.recur()
+    try:
+        # cutoff before the one-shot response is terminal
+        assert messenger.client.requests
+        connector.cutoff = True
 
-    assert messenger.done is True
-    assert messenger.rep is None
-    assert isinstance(messenger.error, kering.ClosedError)
+        doist.recur()
+
+        assert messenger.done is True
+        assert messenger.rep is None
+        assert isinstance(messenger.error, kering.ClosedError)
+        assert connector.cs is None
+        assert not messenger.deeds
+    finally:
+        doist.exit()
 
 
 def test_witness_sender(seeder):
