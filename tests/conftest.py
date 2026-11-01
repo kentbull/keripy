@@ -155,12 +155,27 @@ def isolate_keri_store_roots(tmp_path_factory):
     root = str(tmp_path_factory.getbasetemp())  # unique per xdist worker
     saved = [(cls, cls.HeadDirPath, cls.AltHeadDirPath)
              for cls in (LMDBer, Configer)]
+    # CLI integration tests launch a fresh Python interpreter. Give that child
+    # the same worker root as the in-process stores through test-only startup
+    # code; changing class attributes here alone does not cross the process.
+    (tmp_path_factory.getbasetemp() / "sitecustomize.py").write_text(
+        "from keri.db.dbing import LMDBer\n"
+        "from keri.app.configing import Configer\n"
+        f"for cls in (LMDBer, Configer):\n"
+        f"    cls.HeadDirPath = cls.AltHeadDirPath = {root!r}\n"
+    )
+    previous_pythonpath = os.environ.get("PYTHONPATH")
+    os.environ["PYTHONPATH"] = root + (os.pathsep + previous_pythonpath if previous_pythonpath else "")
     for cls in (LMDBer, Configer):
         cls.HeadDirPath = root
         cls.AltHeadDirPath = root
     try:
         yield
     finally:
+        if previous_pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = previous_pythonpath
         for cls, head, alt in saved:
             cls.HeadDirPath = head
             cls.AltHeadDirPath = alt
