@@ -4241,6 +4241,38 @@ def test_ipex_v2_grant_must_honor_negotiated_disclosure_plan():
         assert hby.db.exns.get(keys=(grant.said,)) is not None
 
 
+@pytest.mark.parametrize("kind", [Kinds.json, Kinds.cbor, Kinds.mgpk, Kinds.cesr])
+def test_ipex_v2_inline_schema_pin_section_commitments_and_disclosure(kind):
+    """Offer commitments and Grant disclosure use the author's edge semantics."""
+    with openHby(name="ipex-inline-section", base="test", version=Vrsn_2_0) as hby:
+        hab = hby.makeHab(name="test")
+        schema = Schemer(sed={"$id": "", "version": "1.0.0", "type": "object",
+                              "properties": {"d": {"type": "string"}},
+                              "$defs": {"value": {"default": {"d": "opaque"}}}})
+        full = acdcmap(israid=hab.pre, kind=kind, attribute=dict(d="", value="shown"),
+                       edge=dict(d="", s=schema.sed,
+                                 shown=dict(d="", n=hab.pre),
+                                 hidden=dict(d="", n=hab.pre)))
+        compactor = SerderACDC.sectionCompactor("e", full.edge, kind=kind)
+        paths = ["e/shown/"]
+        compactor.compact(paths=paths, root="e")
+        sad = deepcopy(full.sad)
+        sad["e"] = compactor.partials[tuple(paths)].mad
+        partial = SerderACDC(sad=sad, makify=True)
+        assert partial.said == full.said
+        assert partial.edge["s"] == schema.sed
+        assert isinstance(partial.edge["hidden"], str)
+        handler = IpexHandler(resource="/ipex/grant", hby=hby, notifier=Recorder())
+        for node in (full, partial):
+            assert handler._canonicalSectionCommitment("e", node.edge,
+                                                        kind=kind) == full.edge["d"]
+            nodes = handler._validNodeNest(node.said, [dict(serder=node)])
+            assert nodes is not None
+            accepted = handler._verifyDisclosurePlan(
+                [[node.schema["$id"], "/", paths]], node.said, nodes, [node.said])
+            assert accepted is (node is partial)
+
+
 def test_ipex_v2_disclosure_plan_distinguishes_presence_from_whole_node():
     """Empty fields require a node; an empty path requires its full sections."""
     with openHby(name="ipex-v2-whole-node-plan",
@@ -9719,6 +9751,20 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
             accepted(dict(d="", s=sectionSchemer.said, holder=leaf(good)),
                      [goodNest],
                      "a satisfiable pin on the Edge Section itself")
+            complexSchema = deepcopy(sectionSchemer.sed)
+            complexSchema["$defs"] = {"opaque": {"default": {"d": "schema data"}}}
+            complexSchemer = Schemer(sed=complexSchema)
+            accepted(dict(d="", s=complexSchemer.sed, holder=leaf(good)),
+                     [goodNest], "a complex inline pin on the Edge Section")
+            accepted(dict(d="", holders=dict(d="", o="AND", s=complexSchemer.sed,
+                                              holder=leaf(good))),
+                     [goodNest], "a complex inline pin on an Edge-group")
+            accepted(dict(d="", holder=dict(leaf(good), s=complexSchemer.sed)),
+                     [goodNest], "a complex inline pin on a leaf")
+            misclaimed = deepcopy(complexSchemer.sed)
+            misclaimed["title"] = "not the schema named by its $id"
+            refused(dict(d="", s=misclaimed, holder=leaf(good)),
+                    [goodNest], "a misclaimed inline schema $id")
             inlineSchemer = Schemer(sed={"$id": "", "version": "1.0.0",
                                         "type": "object", "required": ["a"]})
             accepted(dict(d="", s=inlineSchemer.sed, holder=leaf(good)),
@@ -9736,6 +9782,8 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
             refused(dict(d="", s=unsatisfiableSchemer.said, holder=leaf(good)),
                     [goodNest],
                     "an unsatisfiable pin on the Edge Section itself")
+            refused(dict(d="", s=unsatisfiableSchemer.sed, holder=leaf(good)),
+                    [goodNest], "an unsatisfiable complex inline schema")
             invalidInline = Schemer(sed={"$id": "", "version": "1.0.0",
                                         "type": "object", "required": ["nope"]})
             refused(dict(d="", s=invalidInline.sed, holder=leaf(good)),

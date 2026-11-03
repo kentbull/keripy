@@ -37,6 +37,18 @@ from .structing import Sealer, SClanDom
 logger = ogler.getLogger()
 
 
+def _validateEdgeLabels(value):
+    """Retain native map-label restrictions outside inline edge schema pins."""
+    if isinstance(value, Mapping):
+        for label, child in value.items():
+            Labeler(label=label)
+            if label != "s" or not isinstance(child, Mapping):
+                _validateEdgeLabels(child)
+    elif isinstance(value, list):
+        for child in value:
+            _validateEdgeLabels(child)
+
+
 @dataclass
 class FieldDom:
     """Field configuration dataclass for Serder messages. Provides field labels
@@ -1550,7 +1562,10 @@ class Serder:
                         if raw[0] == ord(b'-'):  # counter so should be field map
                             ctr = Counter(qb64b=raw)  # peek at counter
                             if ctr.name in ('GenericMapGroup', 'BigGenericMapGroup'):
-                                sad[l] = Mapper(qb64=raw, strip=True).mad
+                                sad[l] = Mapper(qb64=raw, strip=True,
+                                                strict=l != "e").mad
+                                if l == "e":
+                                    _validateEdgeLabels(sad[l])
                             else:
                                 raise DeserializeError(f"Expected Map group"
                                                    f"got {ctr.name}")
@@ -1884,7 +1899,9 @@ class Serder:
 
                     case "a"|"e"|"r" :  # said or block, block may be empty
                         if isinstance(v, Mapping):
-                            val = Mapper(mad=v).qb64b
+                            if l == "e":
+                                _validateEdgeLabels(v)
+                            val = Mapper(mad=v, strict=l != "e").qb64b
                         else:  # said but may not be empty
                             if not v:  # section as said must not be empty
                                 raise SerializeError(f"Invalid section={l} "
@@ -2713,6 +2730,25 @@ class SerderACDC(Serder):
     Proto = Protocols.acdc  # default protocol type
 
 
+    @staticmethod
+    def sectionCompactor(label, section, *, kind):
+        """Build the common author/verify/disclosure section compactor.
+
+        Inline edge schemas are opaque documents, included verbatim in the
+        containing block's commitment. Only top-level schema sections use $id
+        as their SAID field; ordinary sections continue to use d.
+        """
+        if label == "s":
+            return Compactor(mad=section, makify=True, strict=False,
+                             saids={"$id": "E"}, kind=kind)
+        if label == "e":
+            if kind == Kinds.cesr:
+                _validateEdgeLabels(section)
+            return Compactor(mad=section, makify=True, strict=False,
+                             opaque=("s",), kind=kind)
+        return Compactor(mad=section, makify=True, kind=kind)
+
+
     @property
     def uuid(self):
         """uuid property getter
@@ -3036,11 +3072,10 @@ class SerderACDC(Serder):
                 if l == "s" and isinstance(v, Mapping):
                     # Only the schema's own $id is saidive. Property maps and
                     # arbitrary dictionaries within the schema stay untouched.
-                    sector = Compactor(mad=v, makify=True, strict=False,
-                                       saids={"$id": "E"}, kind=self.kind)
+                    sector = self.sectionCompactor(l, v, kind=self.kind)
                     expanded, commitment = sector.mad, sector.said
                 elif l in ("a", "e", "r") and isinstance(v, Mapping):
-                    sector = Compactor(mad=v, makify=True, kind=self.kind)
+                    sector = self.sectionCompactor(l, v, kind=self.kind)
                     # Restore only the supplied disclosure: compact children
                     # stay strings, and missing d fields are never inserted.
                     sector.compact(paths=["/"])
