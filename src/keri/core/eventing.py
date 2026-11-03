@@ -4097,7 +4097,7 @@ class Kevery:
     TimeoutKSN = 3600  # seconds to timeout key state notice message escrows
     TimeoutQNF = 300   # seconds to timeout query not found escrows
 
-    def __init__(self, *, cues=None, db=None, rvy=None, exc=None, tvy=None,
+    def __init__(self, *, cues=None, db=None, rvy=None, exc=None, tvy=None, qvy=None,
                  cf=None, kramer=None, enableKram=False,
                  lax=True, local=False, cloned=False, direct=True,
                  check=False):
@@ -4111,6 +4111,7 @@ class Kevery:
             rvy (Revery): instance for reply message processing
             exc (Exchanger): instance for exchange message processing
             tvy (Tevery): instance for TEL query route processing
+            qvy: optional processor for other query routes; owns route authentication
             cf (Configer): instance of configuration provider for KRAM settings
             kramer (Kramer): instance for KRAM processing
             enableKram (bool): True means create a KRAM processor when kramer
@@ -4137,6 +4138,7 @@ class Kevery:
         self.rvy = rvy
         self.exc = exc          # Exchanger instance for exn messages
         self.tvy = tvy          # Tevery instance for TEL query routes
+        self.qvy = qvy          # Explicit application query processor
         if kramer is None and enableKram:
             from .kraming import Kramer  # import here to avoid circular import
             kramer = Kramer(db=self.db, cf=cf, cues=self.cues)
@@ -4731,6 +4733,8 @@ class Kevery:
                             f"No tevery to process so dropped msg"
                             f"={serder.pretty()}")
                     tvy.processQuery(serder, **kwa)
+                elif self.qvy is not None:
+                    self.qvy.processQuery(serder=serder, **kwa)
                 else:
                     raise ValidationError(
                         f"Invalid resource type {route}"

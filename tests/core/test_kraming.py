@@ -2397,7 +2397,12 @@ def test_multisig_kwa_rehydration_after_threshold(mockHelpingNowUTC):
 
             assert {s.index for s in kwa2['sigers']} == {0, 2}
             assert len(kwa2['trqs']) == 1
-            assert len(kwa2['tsgs']) == 1
+            # Query processors receive the verified sender aggregate as well
+            # as the original, independently preserved foreign attachment.
+            groups = {pre.qb64: sigs for pre, _, _, sigs in kwa2['tsgs']}
+            assert set(groups) == {senderHab.pre, receiverHab.pre}
+            assert {sig.index for sig in groups[senderHab.pre]} == {0, 2}
+            assert groups[receiverHab.pre][0].qb64 == allSigers[0].qb64
             assert [pre.qb64 for pre in kwa2['ulgs']] == [unknownHab.pre]
             assert [(cigar.verfer.qb64, cigar.qb64)
                     for cigar in kwa2['cigars']] == [
