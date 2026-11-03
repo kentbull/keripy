@@ -4,13 +4,121 @@ from copy import deepcopy
 
 import pytest
 
-from keri.acdc import acdcmap, acdcagg, sectattr
-from keri.core import Aggor, Compactor, Diger, SerderACDC
+from keri.acdc import acdcmap, acdcagg, sectattr, sectedge
+from keri.core import Aggor, Compactor, Counter, Diger, Mapper, SerderACDC
 from keri.kering import KeriError, Kinds, ValidationError, versify
 
 
 Issuer = "EA2X8Lfrl9lZbCGz8cfKIvM_cqLyTYVLSFLhnttezlzQ"
 KindsToTest = [Kinds.json, Kinds.cbor, Kinds.mgpk, Kinds.cesr]
+
+
+@pytest.mark.parametrize("kind", KindsToTest)
+@pytest.mark.parametrize("placement", ["section", "group", "leaf"])
+def test_inline_edge_schema_is_opaque_to_section_compaction(kind, placement):
+    schema = {"$id": Diger(ser=b"schema").qb64, "type": "object",
+              "properties": {"d": {"type": "string"},
+                             "record": {"default": {"d": "opaque"}}},
+              "$defs": {"value": {"type": "string"}}}
+    leaf = dict(d="", n=Diger(ser=b"node").qb64)
+    edge = dict(d="", group=dict(d="", o="AND", member=leaf),
+                other=dict(d="", n=Diger(ser=b"other").qb64))
+    pinned = {"section": edge, "group": edge["group"], "leaf": leaf}[placement]
+    pinned["s"] = deepcopy(schema)
+    original = acdcmap(israid=Issuer, kind=kind, attribute=dict(d="", name="Alice"),
+                       edge=edge)
+    disclosed = original.sad["e"]
+    pinned = {"section": disclosed, "group": disclosed["group"],
+              "leaf": disclosed["group"]["member"]}[placement]
+    assert pinned["s"] == schema
+    assert SerderACDC(raw=original.raw).raw == original.raw
+    compact = SerderACDC(sad=original.sad, makify=True, compactify=True)
+    assert compact.said == original.said
+    assert compact.sad["e"] == disclosed["d"]
+    compactor = SerderACDC.sectionCompactor("e", disclosed, kind=kind)
+    compactor.compact(paths=["e/group/"], root="e")
+    partial = compactor.partials[("e/group/",)]
+    assert partial.opaque == frozenset(("s",))
+    assert partial.mad["group"] == disclosed["group"]
+    assert partial.mad["other"] == disclosed["other"]["d"]
+    sad = deepcopy(original.sad)
+    sad["e"] = partial.mad
+    received = SerderACDC(sad=sad, makify=True)
+    assert received.said == original.said
+    assert SerderACDC(raw=received.raw).raw == received.raw
+    section = sectedge(edge=disclosed, kind=kind)
+    assert section.sad["e"] == disclosed
+    assert SerderACDC(raw=section.raw).raw == section.raw
+    compactor.expand()
+    for variant in compactor.partials.values():
+        assert variant.opaque == compactor.opaque
+        assert variant.strict == compactor.strict
+        assert variant.saids == compactor.saids
+        assert variant.saidive == compactor.saidive
+        rebuilt = SerderACDC.sectionCompactor("e", variant.mad, kind=kind)
+        rebuilt.compact()
+        assert rebuilt.said == disclosed["d"]
+
+    # Neither outer nor nested section claims become repairable on intake.
+    for path in [("d",), ("group", "d"), ("group", "member", "d")]:
+        sad = deepcopy(original.sad)
+        target = sad["e"]
+        for label in path[:-1]:
+            target = target[label]
+        target[path[-1]] = Diger(ser=b"altered commitment").qb64
+        with pytest.raises(ValidationError):
+            SerderACDC(raw=_wire(original, sad))
+
+
+@pytest.mark.parametrize("kind", KindsToTest)
+def test_inline_pin_does_not_change_simple_commitments_or_other_said_maps(kind):
+    edge = dict(d="", s=dict(type="object"), member=dict(d="", n=Issuer))
+    ordinary = Compactor(mad=edge, makify=True, kind=kind)
+    ordinary.compact()
+    pinned = SerderACDC.sectionCompactor("e", edge, kind=kind)
+    pinned.compact()
+    assert pinned.mad == ordinary.mad
+    assert pinned.said == ordinary.said
+    # Exact commitments captured from the unmodified 594d422a source archive.
+    assert pinned.said == {
+        Kinds.json: "EGgHc7NhjC_-0gc-Cm1YsLI_U_YbIQEv4PGKRWWhHp-m",
+        Kinds.cbor: "EDIZiPdlpeUkZb0O17-s9OQRTy9-IgZqG9_eOyQ51-Pr",
+        Kinds.mgpk: "EIqaVMQbGHe23D39QupBU_g1o1Xb3NZc05-7RZA5x8l3",
+        Kinds.cesr: "EFR0FevodfV6UPEdWZmJvsMhiEG0Yv9-hH4G9aorTSVZ",
+    }[kind]
+    # No generic opt-out and no relaxation of malformed d outside a schema pin.
+    malformed = dict(d="", member=dict(d={"type": "string"}))
+    for compactor in (Compactor(mad=malformed, makify=True, kind=kind),
+                      SerderACDC.sectionCompactor("e", malformed, kind=kind)):
+        with pytest.raises(KeriError):
+            compactor.compact()
+    with pytest.raises(KeriError):
+        Compactor(mad=dict(d="", s=dict(properties=dict(d=dict(type="string")))),
+                  makify=True, kind=kind).compact()
+
+
+@pytest.mark.parametrize("extra", [{"$bad": "value"},
+                                  {"group": {"$bad": "value"}},
+                                  {"values": [{"$bad": "value"}]}])
+def test_native_edge_unrestricted_labels_are_limited_to_inline_schema(extra):
+    original = _sections(Kinds.cesr)
+    edge = dict(original.sad["e"], **extra)
+    with pytest.raises(KeriError):
+        acdcmap(israid=Issuer, kind=Kinds.cesr,
+                attribute=dict(d="", name="Alice"), edge=edge)
+    with pytest.raises(KeriError):
+        original.dumps(dict(original.sad, e=edge), kind=Kinds.cesr)
+    # Construct hostile wire with the unrestricted primitive mapper directly;
+    # decoding must refuse labels before any commitment verification as well.
+    body = bytearray(original.raw)
+    counter = Counter(qb64b=body, strip=True, version=original.gvrsn)
+    old = Mapper(mad=original.sad["e"]).raw
+    new = Mapper(mad=edge, strict=False).raw
+    assert bytes(body).count(old) == 1
+    raw = Counter.enclose(qb64=bytes(body).replace(old, new),
+                          code=counter.code, version=original.gvrsn)
+    with pytest.raises(KeriError):
+        SerderACDC(raw=raw, verify=False)
 
 
 def _sections(kind):

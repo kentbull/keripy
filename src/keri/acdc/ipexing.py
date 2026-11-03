@@ -20,10 +20,10 @@ from ..kering import (Colds, DuplicitousRegistryError, FailedSchemaValidationErr
                       MissingSenderKeyStateError, MisdigestError, MisregistryError,
                       MissequenceError, RootSealError, UnverifiedBlindError,
                       ValidationError, Vrsn_2_0, sniff)
-from ..core import (Aggor, BlindState, Blinder, BoundState, Compactor, Counter,
+from ..core import (Aggor, BlindState, Blinder, BoundState, Counter,
                     Codens, Diger, GenDex, Number, Pather, Prefixer, Parser,
-                    Saider, Schemer, SealEvent, SealSource, Serdery, Texter, exchange,
-                    exchept, messagize)
+                    Saider, Schemer, SealEvent, SealSource, SerderACDC, Serdery,
+                    Texter, exchange, exchept, messagize)
 from ..peer.exchanging import (cloneMessage, loadParsedNestedSubstreams,
                                verifyAttachments)
 from ..recording import ExchangeRegistryStateRecord
@@ -1074,8 +1074,8 @@ class IpexHandler:
                 if not isinstance(section, Mapping):
                     continue
                 try:
-                    compactor = Compactor(mad=deepcopy(section), makify=True,
-                                          kind=nserder.kind)
+                    compactor = SerderACDC.sectionCompactor(
+                        label, section, kind=nserder.kind)
                     compactor.compact()
                     for path, leaf in compactor.leaves.items():
                         carried = compactor.getTail(path, mad=section)
@@ -1279,9 +1279,8 @@ class IpexHandler:
                 if not isinstance(section, Mapping):
                     continue
                 try:
-                    compactor = Compactor(mad=deepcopy(section),
-                                          makify=True,
-                                          kind=nserder.kind)
+                    compactor = SerderACDC.sectionCompactor(
+                        root, section, kind=nserder.kind)
                     compactor.compact(paths=paths, root=root)
                     partial = compactor.partials.get(tuple(paths))
                 except Exception:
@@ -1330,13 +1329,8 @@ class IpexHandler:
         # Recompute the commitment from an expanded SAD instead of trusting
         # the SAID carried inside it. Schemas use `$id`; other sections use `d`.
         try:
-            if label == "s":
-                compactor = Compactor(mad=deepcopy(section), makify=True,
-                                      strict=False, saids={"$id": "E"},
-                                      kind=kind)
-            else:
-                compactor = Compactor(mad=deepcopy(section), makify=True,
-                                      kind=kind)
+            compactor = SerderACDC.sectionCompactor(label, section, kind=kind)
+            if label != "s":
                 compactor.compact()
         except Exception:
             return None

@@ -817,7 +817,7 @@ class Compactor(Mapper):
 
     """
 
-    def __init__(self, saidive=True, makify=False, compactify=False, **kwa):
+    def __init__(self, saidive=True, makify=False, compactify=False, opaque=(), **kwa):
         """Initialize instance
 
         Inherited Parameters:  (see Mapper)
@@ -850,6 +850,8 @@ class Compactor(Mapper):
                             False means do not compute SAIDs
 
         Parameters:
+            opaque (Iterable[str]): child labels whose mapping values are opaque
+                to SAID discovery. Their complete contents remain committed.
             compactify (bool): True means .compact() and .expand() when .saidive
                                and makify
                               False means do not .compact or .expand
@@ -858,6 +860,7 @@ class Compactor(Mapper):
             already been extracted from a stream and are self contained
 
         """
+        self.opaque = frozenset(opaque)
         self._leaves = {}
         self._eleaves = {}
         self._partials = None
@@ -987,7 +990,7 @@ class Compactor(Mapper):
                 if l in self.saids:
                     raise InvalidValueError(f"Got Mapping not str for said field"
                                             f" label={l} value={v}")
-                if self._hassaid(mad=v):
+                if l not in self.opaque and self._hassaid(mad=v):
                     isleaf = False
                     paths = self._trace(mad=v, paths=paths, path=path + "." + l,
                                         epath=epath + (l,), epaths=epaths,
@@ -1033,7 +1036,7 @@ class Compactor(Mapper):
             if l in self.saids:
                 hassaid = True
                 break
-            elif isinstance(v, Mapping):  # field value is a Mapping
+            elif l not in self.opaque and isinstance(v, Mapping):
                 hassaid = self._hassaid(mad=v)
                 if hassaid:
                     break
@@ -1232,6 +1235,7 @@ class Compactor(Mapper):
 
             partial = Compactor(mad=pmad, strict=self.strict,
                                 saids=self.saids, saidive=self.saidive,
+                                opaque=self.opaque,
                                 verify=False, kind=self.kind)
             partial.trace()
             self.partials[tuple(dpaths)] = partial
@@ -1258,7 +1262,9 @@ class Compactor(Mapper):
             pmad = deepcopy(leafer.mad)  # expand pmad with copy of leafer
             used.append(path)
             # don't compute or verify top-level saids on partials makify=Fase verify=False
-            partial = Compactor(mad=pmad, verify=False, kind=self.kind)
+            partial = Compactor(mad=pmad, strict=self.strict,
+                                saids=self.saids, saidive=self.saidive,
+                                opaque=self.opaque, verify=False, kind=self.kind)
             # don't compute saids on leaves of partials
             index = partial.trace()  # default saidify == False
             self.partials[tuple(index)] = partial
@@ -1277,7 +1283,9 @@ class Compactor(Mapper):
             if created:  # create new partial
                 # compactor makes copy pmad so can reuse pmad to start next partial
                 # don't compute or verify top-level saids on partials makify=Fase verify=False
-                partial = Compactor(mad=pmad, verify=False, kind=self.kind)
+                partial = Compactor(mad=pmad, strict=self.strict,
+                                    saids=self.saids, saidive=self.saidive,
+                                    opaque=self.opaque, verify=False, kind=self.kind)
                 # don't compute saids on leaves of partials
                 index = partial.trace()  # default saidify == False
                 self.partials[tuple(index)] = partial
