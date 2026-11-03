@@ -8,6 +8,7 @@ from keri.core import (Salter, Kevery, SealEvent,
 from keri.app import openHby
 from keri.vc import credential
 from keri.vdr import Reger, Regery, Tever, Tevery
+from keri.vdr.eventing import query
 
 
 
@@ -480,6 +481,16 @@ def test_credential_tsn_message(mockHelpingNowUTC, mockCoringRandomNonce, mockHe
                                 'ri': 'EClqKVJREM3MWKBqR2j712s3Z6rPxhqO-h-p8Ls6_9hQ',
                                 's': '0',
                                 'vn': [1, 0]}
+
+        # A real legacy query must cue both the registry and issued credential state.
+        regery.tvy.cues.clear()
+        request = query(regk=issuer.regk, vcid=creder.said, route="tsn",
+                        version=Vrsn_1_0, kind=Kinds.json)
+        regery.tvy.processQuery(request, source=bobHab.kever.prefixer)
+        replies = list(regery.tvy.cues)
+        assert [(cue["route"], cue["data"]) for cue in replies] == [
+            ("/tsn/registry", asdict(rsr)), ("/tsn/credential", asdict(ctsn))]
+        assert all(cue["dest"] == bobHab.kever.prefixer for cue in replies)
 
         rpy = bobHab.reply(route="/tsn/credential/" + bobHab.pre, data=asdict(ctsn), gvrsn=Vrsn_1_0, version=Vrsn_1_0, kind=Kinds.json)
 
