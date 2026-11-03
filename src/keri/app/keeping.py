@@ -31,7 +31,7 @@ from dataclasses import dataclass, asdict, field
 import pysodium
 from hio.base import doing
 
-from ..kering import ClosedError, AuthError, DecryptError
+from ..kering import ClosedError, AuthError, DecryptError, KeriError, ValidationError
 from ..core import (Prefixer, Number, Diger, Tholder,
                     Cipher, Signer, Salter,
                     Encrypter, Decrypter, Tiers, MtrDex)
@@ -224,6 +224,10 @@ class Keeper(LMDBer):
             Value is serialized list of fully qualified public keys that are the
             current signing keys after the rotation given by rotation index
 
+        .rroots (CesrSuber): encrypted Salt128 registry roots as Cipher primitives.
+            Keys are (local AID, registry SAID). Roots are immutable through Manager
+            and remain encrypted when the Keeper's authentication key changes.
+
     Properties:
 
 
@@ -231,7 +235,7 @@ class Keeper(LMDBer):
     TailDirPath = "keri/ks"
     AltTailDirPath = ".keri/ks"
     TempPrefix = "keri_ks_"
-    MaxNamedDBs = 10
+    MaxNamedDBs = 11
 
     def __init__(self, headDirPath=None, perm=None, reopen=False, **kwa):
         """
@@ -305,6 +309,7 @@ class Keeper(LMDBer):
         self.pubs = Komer(db=self,
                                  subkey='pubs.',
                                  klas=PubSet,)  # public key set at pre.ridx
+        self.rroots = CesrSuber(db=self, subkey='rroots.', klas=Cipher)
         return self.opened
 
 
@@ -795,7 +800,14 @@ class Manager:
                         aeid may be different not empty which reencrypts
             seed (str): qb64 of new seed from which new aeid is derived (private signing
                         key seed)
+
+        Registry roots are re-encrypted under the replacement key. Encryption
+        removal with retained roots, or an invalid replacement key, is refused
+        before any stored secret or active encryption state changes.
         """
+        if not aeid and next(self.ks.rroots.getTopItemIter(), None) is not None:
+            raise AuthError("Cannot remove Keeper encryption while registry roots are retained")
+
         if self.aeid:  # check that last current seed matches last current .aeid
             # verifies seed belongs to aeid
             if not self.seed or not self.encrypter.verifySeed(self.seed):
@@ -803,15 +815,14 @@ class Manager:
                                        "not associated with last aeid={}."
                                        "".format(self.aeid))
 
-        if aeid:  # aeid provided
-            if aeid != self.aeid:  # changing to a new aeid so update .encrypter
-                self.encrypter = Encrypter(verkey=aeid)  # derive encrypter from aeid
-                # verifies new seed belongs to new aeid
-                if not seed or not self.encrypter.verifySeed(seed):
-                    raise AuthError("Seed missing or provided seed not associated"
-                                           "  with provided aeid={}.".format(aeid))
+        if aeid:  # Validate the replacement before changing active encryption state.
+            encrypter = self.encrypter if aeid == self.aeid else Encrypter(verkey=aeid)
+            if not seed or not encrypter.verifySeed(seed):
+                raise AuthError("Seed missing or provided seed not associated"
+                                       "  with provided aeid={}.".format(aeid))
         else:  # changing to empty aeid so new encrypter is None
-            self.encrypter = None
+            encrypter = None
+        self.encrypter = encrypter
 
         # fetch all secrets from db, decrypt all secrets with self.decrypter
         # unless they decrypt automatically on fetch and then re-encrypt with
@@ -837,11 +848,62 @@ class Manager:
             for keys, signer in self.ks.pris.getTopItemIter(decrypter=self.decrypter):
                 self.ks.pris.pin(keys, signer, encrypter=self.encrypter)
 
+            for keys, cipher in self.ks.rroots.getTopItemIter():
+                root = self.decrypter.decrypt(cipher=cipher)
+                self.ks.rroots.pin(keys, self.encrypter.encrypt(prim=root))
+
         self.ks.gbls.pin("aeid", aeid)  # set aeid in db
         self._seed = seed  # set .seed in memory
 
         # update .decrypter
         self.decrypter = Decrypter(seed=seed) if seed else None
+
+    @staticmethod
+    def _registryRootKeys(aid, regid):
+        """Require complete canonical AID and registry digest strings."""
+        try:
+            if Prefixer(qb64=aid).qb64 == aid and Diger(qb64=regid).qb64 == regid:
+                return aid, regid
+        except (KeriError, ValueError, TypeError):
+            pass
+        raise ValidationError("Registry root keys must be canonical AID and registry SAID strings")
+
+    def getRegistryRoot(self, aid, regid):
+        """Return a retained Salt128 root, or None when this scope has no root.
+
+        aid/regid identify the caller's local AID and registry. Existing roots
+        require an encrypted, unlocked Keeper; missing reads need no encryption.
+        Local AID/registry authorization belongs to the calling operation.
+        """
+        keys = self._registryRootKeys(aid, regid)
+        cipher = self.ks.rroots.get(keys)
+        if cipher is None:
+            return None
+        if not (self.aeid and self.encrypter and self.decrypter):
+            raise AuthError("Registry roots require an encrypted unlocked Keeper")
+        root = self.decrypter.decrypt(cipher=cipher)
+        if not isinstance(root, Salter) or root.code != MtrDex.Salt_128:
+            raise ValidationError("Retained registry root is not a Salt128 primitive")
+        return root
+
+    def putRegistryRoot(self, aid, regid, root):
+        """Retain one Salt128 root encrypted for (local AID, registry SAID).
+
+        Returns True for a new root and False for an identical retained root.
+        Conflicting roots raise ValidationError without replacing ciphertext;
+        unencrypted or locked Keeper state raises AuthError.
+        """
+        keys = self._registryRootKeys(aid, regid)
+        if not (self.aeid and self.encrypter and self.decrypter):
+            raise AuthError("Registry roots require an encrypted unlocked Keeper")
+        if not isinstance(root, Salter) or root.code != MtrDex.Salt_128:
+            raise ValidationError("Registry root must be a Salt128 primitive")
+        cipher = self.encrypter.encrypt(prim=root)
+        if self.ks.rroots.put(keys, cipher):
+            return True
+        if self.getRegistryRoot(aid, regid).qb64 != root.qb64:
+            raise ValidationError("A different root is already retained for this AID and registry")
+        return False
 
 
     @property
