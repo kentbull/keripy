@@ -3,17 +3,18 @@ import argparse
 from hio.base import doing
 from hio.help import ogler
 
-from ....common import Parsery, setupHby
+from ....common import Parsery, setupHby, parseVersion
 
-from .....app import (GroupHab, Notifier, MailboxDirector,
+from .....app import (GroupHab, SignifyGroupHab, Receiptor, Anchorer, Notifier, MailboxDirector,
                       HaberyDoer, Multiplexor, Counselor,
                       Poster, multisigRegistryInceptExn)
 from .....app.grouping import loadHandlers
 
-from .....kering import Vrsn_1_0
-from .....core import SerderKERI, SealEvent
+from .....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0, Kinds
+from .....core import SerderKERI, SealEvent, Number, NumDex
 from .....peer import Exchanger
 from .....vdr import Regery, Registrar
+from .....acdc import Regery as NativeRegery, Registrar as NativeRegistrar
 
 
 logger = ogler.getLogger()
@@ -37,6 +38,9 @@ parser.add_argument('--usage', '-u', help='For multisig issuers, a message to ot
                                           ' registry is to be used',
                     default=None)
 
+parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0,
+                    help='Registry protocol version: 1.0 (default) or native 2.0')
+
 
 def registryIncept(args):
     name = args.name
@@ -49,6 +53,13 @@ def registryIncept(args):
     noBackers = args.no_backers
     backers = args.backers
     usage = args.usage
+
+    if getattr(args, 'version', Vrsn_1_0) == Vrsn_2_0:
+        if backers or noBackers is not True or estOnly is not False:
+            raise ConfigurationError("legacy backers and registry establishment-only options are not supported "
+                                     "by native registries; the controller's accepted KEL policy selects anchors")
+        return [NativeRegistryInceptor(name=name, base=base, bran=bran, alias=alias,
+                                        registryName=registryName, nonce=nonce)]
 
     if noBackers and backers:
         print("--no-backers and --backers can not both be provided")
@@ -180,3 +191,67 @@ class RegistryInceptor(doing.DoDoer):
                                                                                 registry.regk, hab.pre))
 
         self.remove(self.toRemove)
+
+
+class NativeRegistryInceptor(doing.DoDoer):
+    """Own native RIP authoring and ordinary individual KEL completion in this command.
+
+    The Registrar creates the registry; existing receipting/delegation owners
+    complete the exact controller event, and native Regery owns TEL acceptance.
+    """
+
+    def __init__(self, name, base, bran, alias, registryName, nonce=None):
+        self.registryName, self.nonce = registryName, nonce
+        self.hby = setupHby(name=name, base=base, bran=bran, version=Vrsn_2_0)
+        try:
+            self.hab = self.hby.habByName(alias)
+            if self.hab is None or not self.hab.accepted:
+                raise ConfigurationError(f"{alias} is not an accepted local AID alias")
+            if isinstance(self.hab, (GroupHab, SignifyGroupHab)):
+                raise ConfigurationError("native group registry CLI inception is not supported yet; "
+                                         "use the exact RIP group proposal/join adapter")
+            self.rgy = NativeRegery(hby=self.hby, name=name, base=base)
+        except Exception:
+            self.hby.close()
+            raise
+        self.registrar = NativeRegistrar(self.rgy)
+        self.receiptor = Receiptor(hby=self.hby)
+        self.swain = Anchorer(hby=self.hby, version=Vrsn_2_0, kind=Kinds.json)
+        doers = [HaberyDoer(habery=self.hby), self.receiptor]
+        if self.hab.kever.delegated:
+            doers.extend([self.swain, MailboxDirector(hby=self.hby, topics=['/receipt', '/replay'],
+                                                     version=Vrsn_2_0, gvrsn=Vrsn_2_0)])
+        self.background = list(doers)
+        super().__init__(doers=[*doers, doing.doify(self.inceptDo)])
+
+    def exit(self, deeds=None):
+        try:
+            super().exit(deeds=deeds)
+        finally:
+            if deeds is None:
+                if self.rgy.store.opened:
+                    self.rgy.close()
+                self.hby.close()
+
+    def inceptDo(self, tymth, tock=0.0, **kwa):
+        self.wind(tymth)
+        yield tock
+        registry = self.registrar.makeRegistry(self.registryName, self.hab.pre, uuid=self.nonce)
+        rip = self.rgy.store.event(registry.regk)
+        seal = dict(i=registry.regk, s=rip.sad['n'], d=rip.said)
+        author = self.hab.rotate if self.hab.kever.estOnly else self.hab.interact
+        anchor = SerderKERI(raw=author(data=[seal], version=Vrsn_2_0, gvrsn=Vrsn_2_0,
+                                       kind=Kinds.json))
+        if anchor.ilk == 'drt':
+            self.swain.delegation(pre=self.hab.pre, sn=anchor.sn)
+            while not self.swain.complete(self.hab.kever.prefixer,
+                                           Number(num=anchor.sn, code=NumDex.Huge)):
+                yield tock
+        elif self.hab.kever.wits:
+            yield from self.receiptor.receipt(self.hab.pre, sn=anchor.sn)
+        while self.rgy.store.seqEvent(registry.regk, 0) is None:
+            self.rgy.processEscrows()
+            yield tock
+        print(f"Registry:  {self.registryName}({registry.regk}) "
+              f"\n\tcreated for Identifier Prefix:  {self.hab.pre}")
+        self.remove(self.background)
