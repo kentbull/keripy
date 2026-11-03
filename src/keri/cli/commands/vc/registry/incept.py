@@ -4,6 +4,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ....common import Parsery, setupHby, parseVersion
+from ....common.witnessing import witnessAuths
 
 from .....app import (GroupHab, SignifyGroupHab, Receiptor, Anchorer, Notifier, MailboxDirector,
                       HaberyDoer, Multiplexor, Counselor,
@@ -40,6 +41,11 @@ parser.add_argument('--usage', '-u', help='For multisig issuers, a message to ot
 
 parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0,
                     help='Registry protocol version: 1.0 (default) or native 2.0')
+parser.add_argument('--authenticate', '-z', action='store_true',
+                    help='Supply or prompt for native individual witness authorization codes')
+parser.add_argument('--code', default=[], action='append',
+                    help='Witness AID:code; may appear multiple times with --authenticate')
+parser.add_argument('--code-time', default=None, help='ISO8601 time the supplied witness codes were captured')
 
 
 def registryIncept(args):
@@ -53,13 +59,18 @@ def registryIncept(args):
     noBackers = args.no_backers
     backers = args.backers
     usage = args.usage
+    auth = dict(authenticate=getattr(args, 'authenticate', False),
+                codes=getattr(args, 'code', None), codeTime=getattr(args, 'code_time', None))
 
     if getattr(args, 'version', Vrsn_1_0) == Vrsn_2_0:
         if backers or noBackers is not True or estOnly is not False:
             raise ConfigurationError("legacy backers and registry establishment-only options are not supported "
                                      "by native registries; the controller's accepted KEL policy selects anchors")
         return [NativeRegistryInceptor(name=name, base=base, bran=bran, alias=alias,
-                                        registryName=registryName, nonce=nonce, usage=usage)]
+                                        registryName=registryName, nonce=nonce, usage=usage, **auth)]
+
+    if auth['authenticate'] or auth['codes'] or auth['codeTime'] is not None:
+        raise ConfigurationError('registry witness authentication options require native --version 2.0')
 
     if noBackers and backers:
         print("--no-backers and --backers can not both be provided")
@@ -200,7 +211,8 @@ class NativeRegistryInceptor(doing.DoDoer):
     complete the exact controller event, and native Regery owns TEL acceptance.
     """
 
-    def __init__(self, name, base, bran, alias, registryName, nonce=None, usage=None):
+    def __init__(self, name, base, bran, alias, registryName, nonce=None, usage=None,
+                 authenticate=False, codes=None, codeTime=None):
         self.registryName, self.nonce, self.usage = registryName, nonce, usage
         self.notifier = None
         self.hby = setupHby(name=name, base=base, bran=bran, version=Vrsn_2_0)
@@ -213,6 +225,10 @@ class NativeRegistryInceptor(doing.DoDoer):
             if isinstance(self.hab, GroupHab) and (self.hab.mhab is None or self.hab.mhab.pre not in
                                                    self.hby.db.signingMembers(pre=self.hab.pre)):
                 raise ConfigurationError("native registry CLI requires a local group signing member")
+            if isinstance(self.hab, GroupHab) and (authenticate or codes or codeTime is not None):
+                raise ConfigurationError('group registry witness authentication requires its group receipt owner')
+            self.auths = witnessAuths(self.hab.kever.wits, authenticate=authenticate,
+                                      codes=codes, codeTime=codeTime)
             self.rgy = NativeRegery(hby=self.hby, name=name, base=base)
         except Exception:
             self.hby.close()
@@ -280,12 +296,12 @@ class NativeRegistryInceptor(doing.DoDoer):
                     self.postman.send(src=self.hab.mhab.pre, dest=member, topic='multisig',
                                       serder=proposal, attachment=attachments)
         elif anchor.ilk == 'drt':
-            self.swain.delegation(pre=self.hab.pre, sn=anchor.sn)
+            self.swain.delegation(pre=self.hab.pre, sn=anchor.sn, auths=self.auths)
             while not self.swain.complete(self.hab.kever.prefixer,
                                            Number(num=anchor.sn, code=NumDex.Huge)):
                 yield tock
         elif self.hab.kever.wits:
-            yield from self.receiptor.receipt(self.hab.pre, sn=anchor.sn)
+            yield from self.receiptor.receipt(self.hab.pre, sn=anchor.sn, auths=self.auths)
         while True:
             if group:
                 self.mux.kvy.processEscrows()
