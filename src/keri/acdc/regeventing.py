@@ -233,14 +233,21 @@ def _kever(db, pre):
 
 
 def _kelEvent(db, pre, claim):
-    """Resolve a claimed anchoring key event of pre's KEL by sequence number
-    (int) or SAID (str).  Returns the event serder or None when absent."""
+    """Resolve an accepted anchoring event of pre's KEL by ordinal or SAID.
+
+    Stored bodies in event escrows cannot establish an anchor. Returns the
+    event serder or None when the claim is not accepted in the issuer's KEL.
+    """
     if isinstance(claim, int):
         dig = db.kels.getLast(keys=pre, on=claim)
         if dig is None:
             return None
         return db.evts.get(keys=(pre, dig))
-    return db.evts.get(keys=(pre, claim))
+    event = db.evts.get(keys=(pre, claim))
+    if (event is None or event.pre != pre
+            or db.kels.getLast(keys=pre, on=event.sn) != event.said):
+        return None
+    return event
 
 
 def sealDigests(serder):
