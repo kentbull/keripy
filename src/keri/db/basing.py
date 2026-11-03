@@ -2055,22 +2055,48 @@ class Baser(LMDBer):
         return habord.rmids
 
     def fullyWitnessed(self, serder):
-        """ Verify the witness threshold on the event
+        """Verify distinct witness receipts under the accepted event's quorum.
 
         Parameters:
             serder (Serder): event serder to validate witness threshold
 
         Returns:
-
+            bool: True when enough signatures verify against the witness list
+                and threshold in effect for this accepted event.
         """
-        # Verify fully receipted, because this witness may have persisted before all receipts
-        # have been gathered if this ius a witness for serder.pre
-        # get unique verified wigers and windices lists from wigers list
-        wigers = self.wigs.get(keys=(serder.preb, serder.saidb))
-        kever = self.kevers[serder.pre]
-        toad = kever.toader.num
+        from ..core.coring import Verfer
 
-        return not len(wigers) < toad
+        # Pending bodies alone do not establish an accepted quorum, even zero.
+        if self.kels.getLast(keys=serder.pre, on=serder.sn) != serder.said:
+            return False
+
+        # Interactions inherit the latest accepted establishment event at or
+        # before their sequence number, rather than the current mutable state.
+        for dig in self.kels.getBackIter(keys=serder.pre, on=serder.sn):
+            est = self.evts.get(keys=(serder.pre, dig))
+            if est is None:
+                return False
+            if est.estive:
+                break
+        else:
+            return False
+
+        wits = self.wits.get(keys=(serder.pre, est.said))
+        toad = est.bner.num
+        if toad == 0:
+            return not wits
+        if not 0 < toad <= len(wits):
+            return False
+
+        indices = set()
+        for wiger in self.wigs.get(keys=(serder.preb, serder.saidb)):
+            index = wiger.index
+            if index in indices or not 0 <= index < len(wits):
+                continue
+            if Verfer(qb64=wits[index].qb64).verify(wiger.raw, serder.raw):
+                indices.add(index)
+
+        return len(indices) >= toad
 
     def resolveVerifiers(self, pre=None, sn=0, dig=None):
         """
