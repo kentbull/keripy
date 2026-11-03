@@ -15,11 +15,11 @@ from prettytable import PrettyTable
 from ...common import Parsery, setupHby, printIdentifier, parseVersion
 
 from ....kering import (TraitCodex, ConfigurationError,
-                        Kinds, MissingAnchorError, Version, Vrsn_1_0)
+                        Kinds, MissingAnchorError, ValidationError, Version, Vrsn_1_0, Vrsn_2_0)
 from ....app import (HaberyDoer, MailboxDirector, WitnessInquisitor,
                      Notifier, Multiplexor, Counselor, Organizer, Poster,
                      multisigInceptExn, multisigInteractExn, multisigRotateExn,
-                     multisigRpyExn, multisigRegistryInceptExn, multisigIssueExn,
+                     multisigRpyExn, multisigRipExn, multisigRegistryInceptExn, multisigIssueExn,
                      multisigRevokeExn)
 from ....app.grouping import loadHandlers
 
@@ -28,6 +28,8 @@ from ....core import (Prefixer, Number, Diger, Tholder,
                       SerderACDC, TraitDex, messagize)
 
 from ....peer import Exchanger, cloneMessage
+from ....peer.exchanging import loadParsedNestedSubstreams, serializeMessage, serializeParsedSubstream
+from ....acdc.registraring import Regery as NativeRegery
 from ....vdr import Verifier, Regery, Credentialer, Registrar
 
 
@@ -81,6 +83,7 @@ class JoinDoer(doing.DoDoer):
         self.version = version
         self.hby = setupHby(name=name, base=base, bran=bran, version=self.version)
         self.rgy = Regery(hby=self.hby, name=name, base=base)
+        self.rgyV2 = NativeRegery(hby=self.hby, name=name, base=base) if version == Vrsn_2_0 else None
         self.hbyDoer = HaberyDoer(habery=self.hby)  # setup doer
         self.witq = WitnessInquisitor(hby=self.hby)
         self.org = Organizer(hby=self.hby)
@@ -94,10 +97,10 @@ class JoinDoer(doing.DoDoer):
             parser_kwa["version"] = self.version
 
         self.psr = Parser(kvy=self.hby.kvy, tvy=self.rgy.tvy,
-                          rvy=self.rvy, vry=self.verifier, exc=self.exc,
+                          rvy=self.rvy, vry=self.verifier, exc=self.exc, rgy=self.rgyV2,
                           **parser_kwa)
 
-        mux = Multiplexor(hby=self.hby, notifier=self.notifier)
+        mux = Multiplexor(hby=self.hby, notifier=self.notifier, rgy=self.rgyV2)
         self.mux = mux
         loadHandlers(exc=self.exc, mux=mux)
         self.counselor = Counselor(hby=self.hby, version=self.version, kind=Kinds.json)
@@ -110,9 +113,12 @@ class JoinDoer(doing.DoDoer):
         self.mbx = MailboxDirector(hby=self.hby, exc=self.exc, topics=['/receipt', '/multisig', '/replay',
                                                                        '/delegate'],
                                    **kwa)
+        self.mbx.parser.rgy = self.rgyV2
         self.postman = Poster(hby=self.hby, version=self.version, kind=Kinds.json)
 
         doers = [self.hbyDoer, self.witq,  self.mbx, self.counselor, self.registrar, self.credentialer, self.postman]
+        if self.rgyV2 is not None:
+            doers.append(doing.doify(self.registryDo))
         self.toRemove = list(doers)
         doers.extend([doing.doify(self.joinDo)])
         self.auto = auto
@@ -151,6 +157,8 @@ class JoinDoer(doing.DoDoer):
                     done = yield from self.rotate(attrs)
                 case '/multisig/rpy':
                     done = yield from self.rpy(attrs)
+                case '/multisig/rip':
+                    done = yield from self.rip(attrs)
                 case '/multisig/vcp':
                     done = yield from self.vcp(attrs)
                 case '/multisig/iss':
@@ -171,6 +179,109 @@ class JoinDoer(doing.DoDoer):
             yield self.tock
 
         self.remove(self.toRemove)
+
+    def exit(self, deeds=None):
+        """Release the native owner on full exit, including before child entry."""
+        try:
+            super().exit(deeds=deeds)
+        finally:
+            if deeds is None and self.rgyV2 is not None and self.rgyV2.store.opened:
+                self.rgyV2.close()
+
+    def registryDo(self, tymth, tock=0.03125, **kwa):
+        """Retry native TEL dependencies within the existing join command lifetime."""
+        try:
+            yield tock
+            while True:
+                self.rgyV2.processEscrows()
+                yield tock
+        finally:
+            if self.rgyV2.store.opened:
+                self.rgyV2.close()
+
+    def rip(self, attrs):
+        """Prompt for the exact retained RIP anchor and submit one group signature.
+
+        A notification authenticates a proposal, not local consent. Declining
+        adds no group signature. Acceptance uses the existing KEL/TEL escrows
+        and Counselor; member delivery is separate from the signing threshold.
+        """
+        if self.rgyV2 is None:
+            raise ConfigurationError("native RIP approval requires --version 2.0")
+        wrapper, _ = cloneMessage(self.hby, attrs['d'])
+        if wrapper is None or wrapper.route != '/multisig/rip' or attrs['r'] != wrapper.route:
+            raise ValidationError("RIP notification has no matching retained proposal")
+        children = loadParsedNestedSubstreams(self.hby, wrapper.said)
+        self.mux.validate(wrapper, nests=children)
+        rip, anchor = [child.serder for child in children]
+        group = self.hby.habs[wrapper.sad['a']['gid']]
+        if (not group.accepted or group.mhab is None
+                or group.mhab.pre not in self.hby.db.signingMembers(pre=group.pre)):
+            raise ValidationError("RIP approval requires an accepted local group member")
+        prior = group.kever.serder.said
+        proposal = None
+        if self.hby.db.kels.getLast(keys=group.pre, on=anchor.sn) == anchor.said:
+            # A restart after approval must resend the retained contribution,
+            # rather than sign an accepted historical event with today's keys.
+            for said in self.hby.db.meids.get(keys=(anchor.said,)):
+                retained, _ = cloneMessage(self.hby, said.qb64)
+                if (retained.pre == group.mhab.pre and retained.route == '/multisig/rip'
+                        and retained.sad['a'].get('tel') == rip.said):
+                    self.mux.validate(retained, nests=loadParsedNestedSubstreams(self.hby, retained.said))
+                    proposal = retained
+                    attachments = serializeMessage(self.hby, retained.said)[retained.size:]
+                    break
+            if proposal is None:
+                raise ValidationError("accepted RIP anchor has no retained local approval")
+        elif anchor.sn != group.kever.sn + 1 or anchor.sad['p'] != prior:
+            raise ValidationError("RIP anchor does not extend the current group event")
+
+        print(f"\nGroup registry inception proposed for {group.name} ({group.pre}):")
+        print(f"    Registry: {rip.said}\n    Exact group anchor: {anchor.said}")
+        if usage := wrapper.sad['a'].get('usage'):
+            print(f"    Usage: {usage}")
+        if proposal is None:
+            if not self.auto and input("\nApprove exact RIP anchor [Y|n]? ") not in ('', 'Y', 'y'):
+                return False
+            if group.kever.serder.said != prior:
+                raise ValidationError("group changed while RIP approval was pending")
+
+            if anchor.ilk in ('rot', 'drt'):
+                own = group.rotate(serder=anchor, smids=group.smids, rmids=group.rmids,
+                                   framed=True, gvrsn=Vrsn_2_0)
+            else:
+                own = messagize(anchor, sigers=group.sign(anchor.raw), gvrsn=Vrsn_2_0)
+                self.psr.parse(ims=bytearray(own), local=True)
+            proposal, attachments = multisigRipExn(
+                group, serializeParsedSubstream(children[0]), own,
+                usage=wrapper.sad['a'].get('usage'))
+            # Normal authenticated intake records local approval, then Multiplexor
+            # replays remote contributions for the same exact anchor.
+            self.psr.parseOneBare(ims=bytearray(proposal.raw + attachments), local=True)
+        number, diger = Number(num=anchor.sn), Diger(qb64=anchor.said)
+        self.counselor.start(group, Prefixer(qb64=group.pre), number, diger)
+        proposer = wrapper.pre
+        others = [mid for mid in self.hby.db.signingMembers(pre=group.pre)
+                  if mid != group.mhab.pre]
+        if proposer in others:
+            others.remove(proposer)
+            others.insert(0, proposer)
+        for member in others:
+            self.postman.send(src=group.mhab.pre, dest=member, topic='multisig',
+                              serder=proposal, attachment=attachments)
+        while True:
+            self.mux.kvy.processEscrows()
+            self.counselor.processEscrows()
+            self.rgyV2.processEscrows()
+            accepted = self.rgyV2.store.seqEvent(rip.said, 0)
+            submitted = any(cue['said'] == proposal.said and cue['dest'] == proposer
+                            for cue in self.postman.cues)
+            if (accepted is not None and accepted.said == rip.said and submitted
+                    and self.counselor.complete(Prefixer(qb64=group.pre), number, diger)):
+                break
+            yield self.tock
+        print(f"Registry {rip.said} accepted; approval submitted to proposing member.")
+        return True
 
     def incept(self, attrs):
         """ Join a group multisig inception event

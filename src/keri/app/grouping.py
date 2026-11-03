@@ -12,7 +12,7 @@ from hio.help import ogler
 from ..kering import ValidationError, Version, Versionage, Vrsn_1_0, Vrsn_2_0, Kinds, Ilks
 from ..core import (Number, Diger, Saider,
                     Prefixer, Kevery, Router,
-                    Revery, Parser, SerderKERI,
+                    Revery, Parser, SerderKERI, SerderACDC,
                     Serder, NumDex, SealSource, messagize, exchange)
 from ..peer import Exchanger, specialExchange, cloneMessage
 from ..peer.exchanging import serializeParsedSubstream
@@ -301,6 +301,7 @@ def loadHandlers(exc, mux):
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/icp", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rot", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/ixn", mux=mux))
+    exc.addHandler(MultisigNotificationHandler(resource="/multisig/rip", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/vcp", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/iss", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rev", mux=mux))
@@ -550,6 +551,62 @@ def multisigInteractExn(ghab, aids, ixn, version=None, gvrsn=None, kind=None):
     exn = SerderKERI(raw=ims)
 
     return exn, bytearray(ims[exn.size:])
+
+
+def validateRipProposal(rip, anchor, gid, *, sscs=(), ssts=()):
+    """Check exact native RIP/controller/anchor bodies before replay or consent.
+
+    The group KEL uses the existing full registry event seal. Other seals in the
+    same explicitly approved anchor do not change the registry's acceptance rules.
+    """
+    from ..acdc.regeventing import _validateRip
+
+    if (not isinstance(rip, SerderACDC) or rip.pvrsn != Vrsn_2_0 or not rip.verify()
+            or anchor.pvrsn != Vrsn_2_0 or not anchor.verify()
+            or anchor.pre != gid or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
+            or dict(i=rip.said, s=rip.sad['n'], d=rip.said) not in anchor.seals):
+        raise ValidationError("RIP proposal does not match its controlling group anchor")
+    _validateRip(rip, issuer=gid)
+    locators = [(gid, number, diger) for number, diger in sscs]
+    locators.extend((prefixer.qb64, number, diger) for prefixer, number, diger in ssts)
+    if any(controller != gid or number.sn != anchor.sn or diger.qb64 != anchor.said
+           for controller, number, diger in locators):
+        raise ValidationError("RIP source locator does not match the proposed group anchor")
+
+
+def multisigRipExn(ghab, rip, anc, *, usage=None):
+    """Propose one exact native RIP stream and its signed group KEL anchor.
+
+    Parameters:
+        ghab (GroupHab): Existing group whose local member endorses the proposal.
+        rip (bytes): One RIP with its attachments, including any source locator.
+        anc (bytes): One exact group interaction/rotation with partial signatures.
+        usage (str | None): Optional human-readable purpose displayed by join.
+
+    Returns:
+        tuple: Member-endorsed V2 wrapper and detached nested attachments.
+
+    This wrapper signals a proposal; it neither signs the group anchor nor
+    establishes local approval. Ordinary group threshold processing owns acceptance.
+    """
+    children = []
+    for stream in (rip, anc):
+        ims = bytearray(stream)
+        child = Parser(version=Vrsn_2_0).parseOneBare(ims=ims, processive=False)
+        if ims or child.nests:
+            raise ValidationError("RIP proposal requires exactly two unnested child events")
+        children.append(child)
+    validateRipProposal(children[0].serder, children[1].serder, ghab.pre,
+                        sscs=children[0].sscs, ssts=children[0].ssts)
+    payload = dict(gid=ghab.pre, tel=children[0].serder.said,
+                   anc=children[1].serder.said)
+    if usage is not None:
+        payload['usage'] = usage
+    wrapper = exchange(sender=ghab.mhab.pre, route='/multisig/rip',
+                       attributes=payload, version=Vrsn_2_0, kind=Kinds.json)
+    stream = ghab.mhab.endorse(wrapper, last=False, framed=False, gvrsn=Vrsn_2_0,
+                              nests=[serializeParsedSubstream(child) for child in children])
+    return wrapper, bytearray(stream[wrapper.size:])
 
 
 def multisigRegistryInceptExn(ghab, usage, vcp, anc, version=None, kind=None):
@@ -815,12 +872,13 @@ class Multiplexor:
 
     """
 
-    def __init__(self, hby, notifier):
+    def __init__(self, hby, notifier, rgy=None):
         """ Create Multiplexor for local database and Habs
 
         Parameters:
             hby (habbing.Habery): database environment for local Habs
             notifier (notifying.Notifier): stores notices for human consumption
+            rgy (acdc.Regery | None): native TEL owner for explicitly approved RIP replay
 
         """
         self.hby = hby
@@ -831,6 +889,7 @@ class Multiplexor:
         self.kvy.registerReplyRoutes(router=self.rtr)
 
         self.notifier = notifier
+        self.rgy = rgy
 
     def _replayApproved(self, said):
         """Replays a stored wrapped child event after local approval exists"""
@@ -844,7 +903,7 @@ class Multiplexor:
 
             # Replay them through normal local event processing
             parser = Parser(framed=True, kvy=self.kvy, rvy=self.rvy,
-                            exc=self.exc, version=Vrsn_2_0)
+                            exc=self.exc, rgy=self.rgy, version=Vrsn_2_0)
             parser.parse(ims=ims, local=True)
             return
 
@@ -884,7 +943,20 @@ class Multiplexor:
         ovrsn = serder.pvrsn
         exnSaid = serder.said
 
-        if ovrsn.major == Vrsn_1_0.major:
+        if route == '/multisig/rip':
+            if ovrsn != Vrsn_2_0 or len(nests) != 2 or not isinstance(payload, dict):
+                raise ValidationError("RIP proposal requires a V2 wrapper and two children")
+            children = [nest if isinstance(nest, dict) else vars(nest) for nest in nests]
+            if any(child.get('nests') for child in children):
+                raise ValidationError("RIP proposal children must not contain nested events")
+            rip, anchor = [child['serder'] for child in children]
+            validateRipProposal(rip, anchor, payload.get('gid'),
+                                sscs=children[0].get('sscs', ()),
+                                ssts=children[0].get('ssts', ()))
+            if rip.said != payload.get('tel') or anchor.said != payload.get('anc'):
+                raise ValidationError("RIP proposal child commitments do not match")
+            esaid = anchor.said
+        elif ovrsn.major == Vrsn_1_0.major:
             if embed is None or "d" not in embed:
                 return
 
@@ -956,6 +1028,8 @@ class Multiplexor:
                 gid = payload["gid"]
                 if gid not in self.hby.habs:
                     raise ValueError(f"invalid request to participate in group, not member of gid={gid}")
+                if route == '/multisig/rip' and sender not in self.hby.db.signingMembers(pre=gid):
+                    raise ValidationError("RIP proposal sender is not a group signing member")
 
             case _:
                 raise ValueError(f"invalid route {route} for multiplexed exn={ked}")
