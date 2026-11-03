@@ -564,6 +564,51 @@ def test_parser_routes_v2_query_through_kram(mockHelpingNowUTC):
             assert cue["kin"] == "reply"
 
 
+def test_parser_authenticates_persisted_sender_after_reopen(tmp_path, mockHelpingNowUTC):
+    """A durable sender KEL authenticates incoming queries after receiver restart."""
+    salt = Salter(raw=b'0123456789abcdef').qb64
+    receiver = dict(name="receiver", temp=False, headDirPath=str(tmp_path))
+
+    with openHby(name="sender", base="test", salt=salt, version=V2) as senderHby:
+        senderHab = senderHby.makeHab(name="sender", isith='1', icount=1,
+                                     transferable=True, version=V2, kind=Kinds.cesr)
+        with openDB(**receiver) as db:
+            kvy = Kevery(db=db, lax=False, local=False)
+            inception = senderHab.msgOwnEvent(sn=0, framed=True, gvrsn=V2)
+            Parser(version=V2).parse(ims=bytearray(inception), kvy=kvy)
+            state = db.states.get(keys=senderHab.pre)
+            assert state is not None
+            path = db.path
+
+        with (openDB(**receiver) as db,
+              openCF(name="kram_reopened_sender", base="test", temp=True) as cf):
+            assert db.path == path
+            assert not db.kevers
+            assert db.states.get(keys=senderHab.pre) == state
+            assert db.evts.get(keys=(senderHab.pre, state.d)) is not None
+
+            cf.put(KRAM_INTEGRATION_CONFIG)
+            kramer = Kramer(db=db, cf=cf)
+            assert kramer.enabled
+            kvy = Kevery(db=db, lax=False, local=False, kramer=kramer)
+            stamp = helping.nowIso8601()
+            qry = query(pre=senderHab.pre, route="ksn",
+                        query=dict(i=senderHab.pre, src=senderHab.pre),
+                        stamp=stamp, version=V2, kind=Kinds.cesr)
+            msg = senderHab.endorse(qry, last=True, framed=False, gvrsn=V2)
+
+            Parser(version=V2).parse(ims=bytearray(msg), kvy=kvy)
+
+            cache = db.kramMSGC.get(keys=(senderHab.pre, qry.said))
+            assert cache is not None
+            assert cache.mdt == stamp
+            assert db.kevers[senderHab.pre].state() == state
+            assert len(kvy.cues) == 1
+            cue = kvy.cues.popleft()
+            assert cue["kin"] == "reply"
+            assert cue["dest"] == senderHab.pre
+
+
 def test_scrub_invalid_pool_sigs():
     """_verifyAttachedSigs removes unverifiable signatures from kwa in place."""
     salt1 = Salter(raw=b'\xc1\x00' * 8).qb64
@@ -5504,6 +5549,9 @@ def test_strict_monotonicity_existing_cache(mockHelpingNowUTC):
                                            indexed=True)
             qryKwa = dict(lsgs=[(prefixer, qrySigers)])
             qryKey = (senderHab.pre, qry.said)
+
+            # Missing sender state requires eviction from persistent storage too.
+            assert receiverHby.db.states.rem(keys=senderHab.pre)
 
             for cachedMdt in (olderCacheStamp, stamp):
                 receiverHby.db.kramMSGC.pin(
