@@ -4771,12 +4771,13 @@ class Tholder:
 
     def _satisfy_numeric(self, indices):
         """
-        Returns True if satisfies numeric threshold False otherwise
+        Returns True if distinct verified key indices satisfy the numeric threshold,
+        False otherwise. Different signature encodings from one key count once.
 
         Parameters:
             indices: list of indices (offsets into key list) of verified signatures"""
         try:
-            if self.thold > 0 and len(indices) >= self.thold:  # at least one
+            if self.thold > 0 and len(set(indices)) >= self.thold:  # at least one
                 return True
 
         except Exception as ex:
