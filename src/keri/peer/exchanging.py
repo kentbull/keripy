@@ -1365,6 +1365,28 @@ def verifyAttachments(hby, serder, *, tsgs=None, cigars=None,
     return validTsgs, validCigars, validSourceSeals, invalid, missing
 
 
+def verifyQueryAttachments(hby, serder, *, lsgs=None, tsgs=None, sigers=None, cigars=None):
+    """Verify an auxiliary query author's complete ordinary signature threshold.
+
+    Prefer establishment-bound groups, including a complete KRAM aggregate.
+    Otherwise resolve last-signature groups against accepted current keys.
+    This checks only the named author's factors, without accumulating partial
+    deliveries, accepting a message, or granting route-specific authority.
+    """
+    groups = [group for group in tsgs or [] if group[0].qb64 == serder.pre]
+    kever = hby.db.kevers.get(serder.pre)
+    if not groups and kever is not None:
+        signatures = list(sigers or [])
+        for pre, sigs in lsgs or []:
+            if pre.qb64 == serder.pre:
+                signatures.extend(sigs)
+        groups = [(kever.prefixer, Number(sn=kever.lastEst.s),
+                   Diger(qb64=kever.lastEst.d), signatures)]
+    valid, cigars, _, _, missing = verifyAttachments(hby, serder, tsgs=groups,
+        cigars=[c for c in cigars or [] if c.verfer.qb64 == serder.pre])
+    return not missing and bool(valid or cigars)
+
+
 def verify(hby, serder):
     """Verify all stored authentication and evidence for an exchange message.
 

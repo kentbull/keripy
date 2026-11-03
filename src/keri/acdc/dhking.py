@@ -233,28 +233,14 @@ class Dhke:
 
     def processQuery(self, serder, *, lsgs=None, tsgs=None, sigers=None, cigars=None, **kwa):
         """Authenticate the issuer independently of optional KRAM acceptance."""
-        from ..core import Diger, Number, reply
+        from ..core import reply
         from ..kering import Ilks, Kinds, MissingSignatureError, ValidationError, Vrsn_2_0
-        from ..peer.exchanging import verifyAttachments
+        from ..peer.exchanging import verifyQueryAttachments
         if serder.ilk != Ilks.qry or serder.ked.get("rr") != self.Route:
             raise ValidationError("invalid DH query or return route")
         op, peer = self._preflight(serder, "q", "issuee")
-        groups = [group for group in tsgs or [] if group[0].qb64 == serder.pre]
-        kever = self.exc.hby.db.kevers.get(serder.pre)
-        if kever is not None:
-            # KRAM may have supplied a complete aggregate while the last LSG
-            # still contains only the final delivery's partial signatures.
-            if not groups:
-                signatures = list(sigers or [])
-                for pre, sigs in lsgs or []:
-                    if pre.qb64 == serder.pre:
-                        signatures.extend(sigs)
-                groups = [(kever.prefixer, Number(sn=kever.lastEst.s),
-                           Diger(qb64=kever.lastEst.d), signatures)]
-        valid, cigars, _, _, missing = verifyAttachments(
-            self.exc.hby, serder, tsgs=groups,
-            cigars=[c for c in cigars or [] if c.verfer.qb64 == serder.pre])
-        if missing or not (valid or cigars):
+        if not verifyQueryAttachments(self.exc.hby, serder, lsgs=lsgs,
+                                       tsgs=tsgs, sigers=sigers, cigars=cigars):
             raise MissingSignatureError("DH query lacks the issuer signature threshold")
         if op["reply"] is None:
             if not op["public"]:
