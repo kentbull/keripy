@@ -10,7 +10,9 @@ Registrar service support for managing Registries of ACDC state
 from hio.help import ogler
 
 from ..kering import ClosedError, ConfigurationError, ValidationError
-from . import messaging, regeventing
+from ..core import Blinder, Diger, SerderACDC
+from . import messaging, regeventing, scheming
+from .regeventing import _normalizeEventRecord
 from .registering import RegistryStore, openRegistry
 
 logger = ogler.getLogger()
@@ -170,9 +172,10 @@ class Registry:
         self.name = name
         # Registry remains the public facade, but the TEL event state machine
         # now lives in the private regeventing engine.
-        self._eventer = regeventing._RegEventer(hab=hab,
-                                                store=store,
-                                                regk=regk)
+        self._eventer = regeventing._RegEventer(db=hab.db,
+                                               issuer=hab.pre,
+                                               store=store,
+                                               regk=regk)
 
     @property
     def regk(self):
@@ -328,19 +331,135 @@ class Registry:
             MissingSchemaError: if the ACDC's external schema is unavailable.
             FailedSchemaValidationError: if the ACDC violates its schema.
         """
-        # Blind issuance remains a Registry method for callers, but the staged
-        # frontier walk and TEL event creation now live in regeventing.py.
-        return self._eventer.blind(acdc=acdc, state=state, **kwa)
+        # The issuer-side blind path only accepts a full, self-verifying ACDC.
+        if not isinstance(acdc, SerderACDC):
+            raise ConfigurationError("acdc must be a SerderACDC")
+        if not acdc.verify():
+            raise ConfigurationError(f"acdc {acdc.said} is invalid")
+
+        # The ACDC must already declare this registry as its governing TEL.
+        regid = getattr(acdc, "regid", None)
+        if regid is None:
+            regid = acdc.sad.get("rd")
+        if regid != self.regk:
+            raise ConfigurationError(f"acdc {acdc.said} does not belong to registry {self.regk}")
+
+        # The current habitat must also be the ACDC's issuer.
+        issuer = getattr(acdc, "israid", None)
+        if issuer is None:
+            issuer = acdc.sad.get("i")
+        if issuer != self.hab.pre:
+            raise ConfigurationError(f"acdc {acdc.said} has issuer {issuer} not {self.hab.pre}")
+
+        # Reject malformed credentials before deriving or staging an issuance event.
+        scheming.validateSchema(acdc=acdc, db=self.hab.db)
+
+        return self._blind(target=acdc.said, state=state, **kwa)
 
     def present(self, grant, state="presented", **kwa):
         """Create a blinded registry update binding a grant message SAID."""
-        # Delegate event construction to this registry's TEL engine.
-        return self._eventer.present(grant=grant, state=state, **kwa)
+        # Accept either a Grant serder or its qb64 SAID.
+        target = grant.said if hasattr(grant, "said") else grant
+        # Require a syntactically valid self-addressing target.
+        try:
+            Diger(qb64=target)
+        except Exception as ex:
+            raise ConfigurationError("presentation target must be a valid grant SAID") from ex
+        # Reuse the shared blinded-update workflow.
+        return self._blind(target=target, state=state, **kwa)
 
     def vacate(self, **kwa):
         """Create a vacuous update that leaves the prior registry state in force."""
-        # Delegate vacuous event construction to the TEL engine.
-        return self._eventer.vacate(**kwa)
+        # Empty target and state mark an intentionally vacuous update.
+        return self._blind(target="", state="", **kwa)
+
+
+    def _blind(self, target, state, **kwa):
+        """Create the next staged blinded update for a validated target SAID."""
+        # Build from the staged frontier so callers may pipeline local updates.
+        tip = self._effectiveFrontier()
+        # Updates require an accepted or staged predecessor.
+        if tip is None:
+            raise ConfigurationError("registry must be anchored before updates")
+        # Always derive the blinder from validated inputs internally.
+        if "blinder" in kwa:
+            raise ConfigurationError("caller-supplied blinder overrides are not supported")
+
+        # Separate blinder options from TEL event options.
+        blindkwa = {}
+        # Move each supported blinder-only option out of the event arguments.
+        for key in ("raw", "salt", "tier", "bound", "bsn", "bd"):
+            if key in kwa:
+                # These options belong to blinder construction, not the TEL
+                # event body, so peel them off before calling blindate().
+                blindkwa[key] = kwa.pop(key)
+
+        # Normalize the frontier before deriving the next sequence number.
+        tipEvent = _normalizeEventRecord(tip)
+        # Advance exactly one TEL sequence number.
+        sn = tipEvent.sn + 1
+        # Derive the blinder from the next TEL sequence number so the bup and
+        # blinded state commit to the same step in the chain.
+        blinder = Blinder.blind(sn=sn, acdc=target, state=state, **blindkwa)
+        # Create the bup that commits to the derived BLID.
+        serder = messaging.blindate(regid=self.regk,
+                                    prior=tipEvent.said,
+                                    blid=blinder.said,
+                                    sn=sn,
+                                    **kwa)
+        # Stage or accept the new event through normal TEL processing.
+        self.processEvent(serder)
+        # Return both the disclosure proof and its committed event.
+        return blinder, serder
+
+    def _effectiveFrontier(self):
+        """Return the effective TEL frontier, including one staged successor chain.
+
+        Returns:
+            SerderACDC | None: accepted head event extended by a single
+                unambiguous staged successor chain, or None when no accepted
+                head exists yet.
+
+        Raises:
+            ConfigurationError: if multiple staged successors compete for the
+                same next TEL sequence number.
+        """
+        # Start from the accepted TEL head and then walk forward through any
+        # single unambiguous staged successor chain.
+        tip = self.store.headEvent(self.regk) if self.regk is not None else None
+        while tip is not None:
+            tipEvent = _normalizeEventRecord(tip)
+            sn = tipEvent.sn + 1
+            saids = []
+            seen = set()
+            for escrowdb in (self.store.baser.maes, self.store.baser.ooes):
+                for (said,) in escrowdb.get(keys=self.regk, on=sn):
+                    # The same event may be observed across escrows during
+                    # replay-heavy flows, so de-duplicate by SAID.
+                    if said not in seen:
+                        seen.add(said)
+                        saids.append(said)
+
+            matches = []
+            for said in saids:
+                staged = self.store.event(said)
+                if staged is None:
+                    continue
+                stagedEvent = _normalizeEventRecord(staged)
+                # Only events that point at the current frontier are eligible
+                # to extend it for pipelined issuance.
+                if stagedEvent.prior == tipEvent.said:
+                    matches.append(stagedEvent)
+
+            if not matches:
+                break
+            # Multiple staged successors at one slot mean the local staged TEL
+            # has forked, so issuance fails closed instead of guessing.
+            if len(matches) > 1:
+                raise ConfigurationError(f"registry {self.regk} has conflicting staged successors at sn {sn}")
+            tip = matches[0].serder
+
+        return tip
 
 
 class Registrar:
