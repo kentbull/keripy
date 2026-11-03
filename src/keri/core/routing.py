@@ -33,7 +33,7 @@ class Router:
             routes (list): preregistered routes for this router"""
         self.routes = routes if routes is not None else list()
 
-    def addRoute(self, routeTemplate, resource, suffix=None):
+    def addRoute(self, routeTemplate, resource, suffix=None, *, blinders=False):
         """Add a route between a route template and a resource
 
 
@@ -42,21 +42,28 @@ class Router:
             resource (object): the resource instance to associate with the route template
             suffix (str, optional): Optional responder name suffix for this route. If a suffix is provided,
                 Router will map reply routes to processReply{suffix}().  In this way, multiple closely-related routes
-                can be mapped to the same resource."""
+                can be mapped to the same resource.
+            blinders (bool): explicitly forward parsed BSQ/BSS attachments to
+                this handler. The handler owns their scope and verification."""
 
         fields, regex = compile_uri_template(routeTemplate)
         self.routes.append(
-            Route(regex=regex, fields=fields, resource=resource, suffix=suffix)
+            Route(regex=regex, fields=fields, resource=resource, suffix=suffix,
+                  blinders=blinders)
         )
 
-    def dispatch(self, serder, diger, cigars, tsgs):
+    def dispatch(self, serder, diger, cigars, tsgs, *, bsqs=None, bsss=None):
         """
 
         Parameters:
             serder:
             diger:
             cigars:
-            tsgs:"""
+            tsgs:
+            bsqs (list | None): parsed blind-state quadruples, forwarded only
+                to a route registered with blinders=True.
+            bsss (list | None): parsed bound-state sextuples under the same opt-in.
+                Forwarding establishes no authority over an opening."""
         ked = serder.ked
         # Dispatch based on route
         r = ked["r"]
@@ -74,6 +81,8 @@ class Router:
                 raise ValidationError(f"parameter {name} not found in route {r}")
 
         fn = getattr(route.resource, fname, self.processRouteNotFound)
+        if route.blinders:
+            kwargs.update(bsqs=bsqs or [], bsss=bsss or [])
         fn(serder=serder, diger=diger, route=r, cigars=cigars, tsgs=tsgs, **kwargs)
 
     def _find(self, route):
@@ -176,7 +185,8 @@ class Revery:
             raise ValidationError(f"Invalid said for reply msg={serder.ked}.")
 
         diger = Diger(qb64=serder.said)
-        self.rtr.dispatch(serder=serder, diger=diger, cigars=cigars, tsgs=tsgs)
+        self.rtr.dispatch(serder=serder, diger=diger, cigars=cigars, tsgs=tsgs,
+                          bsqs=kwa.get('bsqs'), bsss=kwa.get('bsss'))
 
     def acceptReply(
         self, serder, saider, route, aid, osaider=None, cigars=None, tsgs=None
@@ -579,18 +589,20 @@ class Route:
         .resource (object): the handler for this route
             .suffix(Optional(str)): a suffix to be applied to the handler method"""
 
-    def __init__(self, regex, fields, resource, suffix=None):
+    def __init__(self, regex, fields, resource, suffix=None, *, blinders=False):
         """Initialize instance of route
 
         Parameters:
             regex (re): compiled url template regex
             fields (set): field names for matches in regex
             resource (object): the handler for this route
-                suffix(Optional(str)): a suffix to be applied to the handler method"""
+            suffix (str | None): a suffix to be applied to the handler method.
+            blinders (bool): this route explicitly consumes BSQ/BSS attachments."""
         self.regex = regex
         self.fields = fields
         self.resource = resource
         self.suffix = suffix
+        self.blinders = blinders
 
 
 def compile_uri_template(template):

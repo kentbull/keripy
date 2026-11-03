@@ -873,6 +873,10 @@ class Kramer:
             self.db.kramBSSS.add(key, item)
         for item in kwa.get('tmqs', []):
             self.db.kramTMQS.add(key, item)
+        if kwa.get('nests'):
+            from ..peer.exchanging import serializeParsedSubstream
+            for nest in kwa['nests']:
+                self.db.kramNEST.add(key, bytes(serializeParsedSubstream(nest)))
 
 
     def _remNonAuthAttachments(self, key):
@@ -893,6 +897,7 @@ class Kramer:
         self.db.kramBSQS.rem(key)
         self.db.kramBSSS.rem(key)
         self.db.kramTMQS.rem(key)
+        self.db.kramNEST.rem(key)
 
     @staticmethod
     def _dedupeAttachmentItems(items):
@@ -1009,6 +1014,20 @@ class Kramer:
         tmqsEsc = list(self.db.kramTMQS.get(partialKey) or [])
         kwa['tmqs'] = self._dedupeAttachmentItems(
             tmqsEsc + kwa.get('tmqs', []))
+
+        nested = [raw.encode() for raw in self.db.kramNEST.get(partialKey)]
+        if nested or kwa.get('nests'):
+            from .parsing import Parser
+            from ..peer.exchanging import serializeParsedSubstream
+            nested.extend(bytes(serializeParsedSubstream(nest))
+                          for nest in kwa.get('nests', []))
+            kwa['nests'] = []
+            for raw in self._dedupeAttachmentItems(nested):
+                ims = bytearray(raw)
+                nest = Parser(version=Vrsn_2_0).parseOneBare(ims=ims, processive=False)
+                if ims:
+                    raise ValueError("stored KRAM child contains trailing message material")
+                kwa['nests'].append(nest)
 
         for name in ('trqs', 'ulgs', 'cigars', 'ssts', 'frcs', 'tdcs', 'ptds',
                      'bsqs', 'bsss', 'tmqs'):
