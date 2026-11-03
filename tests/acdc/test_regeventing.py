@@ -29,12 +29,14 @@ import pytest
 
 from keri import kering
 from keri import Vrsn_2_0, Ilks
-from keri.core import Blinder, BlindState, Diger, Number, SerderACDC
+from keri.core import (Blinder, BlindState, Diger, Number, SerderACDC,
+                       Kevery, Parser, interact, messagize)
 from keri.core.signing import Salter
 from keri.acdc import Registry, Regery, regcept, blindate, acdcmap
 from keri.acdc import regeventing
 from keri.acdc.regeventing import RegStateRecord, vet, vetBlind
 from keri.app import habbing
+from keri.db import openDB
 
 
 # Fixed stamps (all the same length so raw mutations preserve size).
@@ -318,6 +320,48 @@ def test_V8_unanchored_update_retryable():
         anchor(hab, bup)
         rec = vet(rip=ripper, updates=[bup], db=hby.db, blinder=blinder)
         assert rec.state == 'issued'
+
+
+@pytest.mark.parametrize("source_kind", ["digest", "ordinal"])
+@pytest.mark.parametrize("occupied", [False, True])
+def test_partial_signed_kel_body_cannot_supply_registry_anchor(source_kind, occupied):
+    """A stored sealing body establishes no anchor until its KEL event is accepted."""
+    with (habbing.openHby(name="partial-anchor", temp=True, salt=SALT,
+                          version=Vrsn_2_0) as hby,
+          openDB(name="anchor-verifier", temp=True) as db):
+        hab = hby.makeHab(name="issuer", isith='2', icount=3,
+                          version=Vrsn_2_0)
+        kvy = Kevery(db=db, lax=False, local=False)
+        parser = Parser(version=Vrsn_2_0)
+        parser.parse(ims=hab.msgOwnEvent(sn=0, framed=True, gvrsn=Vrsn_2_0), kvy=kvy)
+        assert hab.pre in db.kevers
+        ripper = makeRegistry(hab, anchored=False)
+        sealing = interact(pre=hab.pre, dig=hab.kever.serder.said, sn=1,
+                           data=[seal(ripper)], version=Vrsn_2_0)
+        sigers = hab.mgr.sign(ser=sealing.raw, verfers=hab.kever.verfers,
+                              indexed=True)
+        accepted = None
+        if occupied:
+            accepted = interact(pre=hab.pre, dig=hab.kever.serder.said, sn=1,
+                                data=[], version=Vrsn_2_0)
+            accepted_sigs = hab.mgr.sign(ser=accepted.raw, verfers=hab.kever.verfers,
+                                         indexed=True)
+            parser.parse(ims=messagize(accepted, sigers=accepted_sigs,
+                                      gvrsn=Vrsn_2_0), kvy=kvy)
+
+        parser.parse(ims=messagize(sealing, sigers=sigers[:1], gvrsn=Vrsn_2_0), kvy=kvy)
+        assert db.evts.get(keys=(hab.pre, sealing.said)) is not None
+        assert db.kels.getLast(keys=hab.pre, on=1) == (accepted.said if occupied else None)
+        source = sealing.said if source_kind == "digest" else sealing.sn
+        with pytest.raises(kering.MissingAnchorError):
+            regeventing.vetAnchor(ripper, db=db, issuer=hab.pre, source=source)
+
+        if occupied:
+            return
+        parser.parse(ims=messagize(sealing, sigers=sigers[:2], gvrsn=Vrsn_2_0), kvy=kvy)
+        assert db.kels.getLast(keys=hab.pre, on=1) == sealing.said
+        assert regeventing.vetAnchor(ripper, db=db, issuer=hab.pre, source=source) == (
+            sealing.sn, sealing.said)
 
 
 def test_shared_anchor_couple_verifier_matches_local_and_verifier_policies():
