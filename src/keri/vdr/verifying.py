@@ -628,7 +628,10 @@ class Verifier:
                                   f"one of {self.MAryOps}")
 
     def processACDC(self, **kwa):
-        """Alias of .processCredential with Parser compatible call signature
+        """Route independent sections to held evidence, or verify a legacy credential.
+
+        Section intake does not authenticate an issuer, validate a credential
+        against a schema, or change previously accepted exchange disclosures.
 
         Parameters:
             serder (SerderACDC): ACDC to process
@@ -637,7 +640,10 @@ class Verifier:
             saider (Saider): SAID of source anchoring KEL or TEL event
 
         """
+        from ..acdc.sectioning import SectionFields, retainSections
         creder = kwa['serder']
+        if creder.ilk in SectionFields:
+            return retainSections(self.reger, creder, kwa.get("nests"))
         kwa['creder'] = creder
         del kwa['serder']
         self.processCredential(**kwa)

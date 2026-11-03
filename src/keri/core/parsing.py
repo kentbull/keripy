@@ -1693,7 +1693,7 @@ class Parser:
                 if self.rgy is None:
                     raise ValidationError("No native registry owner to process TEL event")
                 self.rgy.processEvent(**exts)
-            elif ilk is None:  # default for ACDC
+            elif ilk is None or ilk in (Ilks.sch, Ilks.att, Ilks.agg, Ilks.edg, Ilks.rul):
                 try:
                     # use last one if more than one
                     prefixer, number, diger = exts['ssts'][-1] if exts['ssts'] else (None, None, None)
