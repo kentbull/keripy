@@ -63,6 +63,14 @@ class Exchanger:
 
         self.routes[handler.resource] = handler
 
+    def handlerFor(self, serder):
+        """Select this message's handler before any route evidence policy.
+
+        An application serving both IPEX versions may override this lookup;
+        this Exchanger still owns all authentication, storage and escrow replay.
+        """
+        return self.routes.get(serder.ked["r"])
+
     def _cueMissingKeyState(self, missing):
         """Request each missing KEL coordinate once."""
         # Deduplicate repeated references in this processing attempt.
@@ -136,7 +144,7 @@ class Exchanger:
         ssts = kwa.get("ssts", [])
 
         # Resolve route policy before classifying supplemental evidence.
-        behavior = self.routes[route] if route in self.routes else None
+        behavior = self.handlerFor(serder)
         # Read the route's optional evidence-selection hook.
         evidenceVerifier = getattr(behavior, "verifyEvidence", None)
         acceptsEvidence = getattr(behavior, "acceptsEvidence", False)
@@ -794,6 +802,35 @@ class Exchanger:
         if escrowed:
             self.hby.db.epse.rem(dig)
             self._removeEscrowDeadline(serder, self.hby.db.epsd)
+
+    def reverifyGrant(self, said):
+        """Recheck an accepted V2 Grant against current evidence without writes.
+
+        Return (Grant, exact retained nests, native verdict, observed states).
+        Saved completion and old exrs are not verification. The ordinary IPEX
+        path rechecks stored authentication, disclosure and current issuer TEL;
+        presentation source cutoffs remain the original KRAM acceptance time.
+        This is neither historical-prefix verification nor live auxiliary
+        authorization: it does not extend a deadline, reopen IPEX, or permit DH.
+        Missing context dependencies retain their normal native exceptions.
+        """
+        serder = self.hby.db.exns.get(keys=(said,))
+        if (serder is None or serder.said != said or serder.pvrsn != Vrsn_2_0
+                or not self._isV2Grant(serder)):
+            raise ValidationError("current recheck requires an accepted V2 Grant")
+        handler = self.handlerFor(serder)
+        if not callable(getattr(handler, "_verifyResult", None)):
+            raise ValidationError("current recheck requires the native IPEX handler")
+        tsgs, cigars = verify(self.hby, serder)
+        seals = [(Prefixer(qb64=keys[1]), number, diger)
+                 for keys, (number, diger) in self.hby.db.ests.getTopItemIter(
+                     keys=(said, ""))]
+        nests = loadParsedNestedSubstreams(self.hby, said)
+        verdict, records = handler._verifyResult(
+            serder, nests=nests, retained=True,
+            sscs=[(number, diger) for pre, number, diger in seals if pre.qb64 == serder.pre],
+            evidence=(tsgs, cigars, seals))
+        return serder, nests, verdict, records
 
     def presentationContext(self, said, *, xid, sender, recipient):
         """Read a live, authenticated Grant's exact retained presentation scope.

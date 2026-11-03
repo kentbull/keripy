@@ -8821,6 +8821,21 @@ def test_ipex_v2_verifies_presentation_registries_for_different_issuees():
                                            exc=exc)
             assert complete == bytearray()
             assert hby.db.exns.get(keys=(issuanceExn.said,)) is not None
+            # Rechecking the first Grant keeps its original KRAM/source cutoff,
+            # even after a newer presentation binds the child to another Grant.
+            before = hby.db.env.info()['last_txnid']
+            _, nests, verdict, _ = exc.reverifyGrant(grantExn.said)
+            assert verdict.verdict == Verdicts.valid
+            assert hby.db.env.info()['last_txnid'] == before
+            # A later real anchor cannot replace the original node-local source.
+            from keri.peer.exchanging import serializeParsedSubstream
+            replacement = SerderKERI(raw=childAnchor)
+            nests[1].ssts = [(childIssuee.kever.prefixer, Number(sn=replacement.sn),
+                              Diger(qb64=replacement.said))]
+            hby.db.enst.pin((grantExn.said,), [bytes(serializeParsedSubstream(n)) for n in nests])
+            before = hby.db.env.info()['last_txnid']
+            assert exc.reverifyGrant(grantExn.said)[2].verdict == Verdicts.invalid
+            assert hby.db.env.info()['last_txnid'] == before
         finally:
             rgy.close()
 
@@ -10088,5 +10103,9 @@ def test_pending_discovery_preserves_optional_missing_registry(fresh_issuance, f
     assert handler._evaluateNode(origin.said, nodes=nodes, memo={}).verdict == Verdicts.valid
     _receive_ipex(exc, message, atc)
     assert (hby.db.exns.get((message.said,)) is not None) == (not fresh)
+    if not fresh:
+        before = hby.db.env.info()['last_txnid']
+        assert exc.reverifyGrant(message.said)[2].verdict == Verdicts.valid
+        assert hby.db.env.info()['last_txnid'] == before
     assert exc.pendingGrant(message.said, xid=message.said,
                             sender=issuer.pre, recipient=issuee.pre) is None

@@ -523,31 +523,66 @@ class IpexHandler:
         self.acceptsMissingEvidence = resource == "/ipex/grant"
 
     def verify(self, serder, attachments=None, nests=None, sscs=None, evidence=None):
-        """Require shared context checks before final Grant registry verification."""
-        context = self._verifyContext(serder, attachments, nests, sscs, evidence)
-        if context is False:
+        """Apply ordinary verification and retain states only for valid ingestion."""
+        verdict, records = self._verifyResult(serder, attachments, nests, sscs, evidence)
+        if verdict is None:
             return False
+        if verdict.verdict == chaining.Verdicts.unknown and verdict.retryable:
+            # Preserve missing-schema precedence over the general proof escrow.
+            for cause in verdict.causes:
+                if isinstance(cause, MissingSchemaError):
+                    raise cause
+            raise MissingChainError(verdict.reason)
+        if verdict.verdict != chaining.Verdicts.valid:
+            return False
+        for nodeSaid, record in records.items():
+            self.hby.db.exrs.pin(
+                keys=(serder.said, nodeSaid),
+                val=ExchangeRegistryStateRecord(regid=record.regid,
+                                                said=record.said,
+                                                sn=record.sn,
+                                                state=record.state,
+                                                stamp=record.stamp))
+        return True
+
+    def _verifyResult(self, serder, attachments=None, nests=None, sscs=None,
+                      evidence=None, *, retained=False):
+        """Compute the ordinary verdict and current observations without writes.
+
+        The Exchanger alone derives ``retained`` from exact accepted membership;
+        it permits this Grant's own response link, never an older issuer prefix.
+        Context dependencies still raise their normal native exceptions.
+        """
+        context = self._verifyContext(serder, attachments, nests, sscs, evidence,
+                                      retained=retained)
+        if context is False:
+            return chaining.invalid("IPEX context refused"), {}
         if not context:
-            return True
+            return chaining.valid("IPEX context verified without a disclosed DAG"), {}
         registries = self._pendingIssuance(serder, *context)
         if registries is None:
-            return False
+            return chaining.invalid("pending issuance context refused"), {}
         if registries:
-            raise MissingChainError("Grant awaits issuance of its fresh registries")
-        if self._verifyGrantState(serder, *context):
-            return True
+            return chaining.unknown("Grant awaits issuance of its fresh registries",
+                                    retryable=True), {}
+        nodes, order = context
+        records = {}
+        verdict = self._evaluateNode(order[0], nodes=nodes, memo={}, records=records)
+        if verdict is not None and (verdict.verdict == chaining.Verdicts.valid
+                or verdict.verdict == chaining.Verdicts.unknown and verdict.retryable):
+            return verdict, records
         # Preserve ordinary final reductions, including satisfied optional edges.
         # Only a genuinely absent opening can change a refused issuer factor to
         # retryable unknown; no state or acceptance record is manufactured.
         presentation = self._presentationState(serder, *context)
         if presentation is not None and presentation[0]:
-            nodes, order = context
-            verdict = self._evaluateNode(order[0], nodes=nodes, memo={},
+            pending = self._evaluateNode(order[0], nodes=nodes, memo={},
                                          pending=presentation[0])
-            if (verdict is not None and verdict.verdict == chaining.Verdicts.unknown
-                    and verdict.retryable):
-                raise MissingChainError("Grant awaits current issuer-registry openings")
-        return False
+            if (pending is not None and pending.verdict == chaining.Verdicts.unknown
+                    and pending.retryable):
+                return chaining.unknown("Grant awaits current issuer-registry openings",
+                                        retryable=True), records
+        return verdict, records
 
     def presentationContext(self, serder, *, nests, sscs=None, evidence=None, retained=False):
         """Return per-registry auxiliary scope, never an admission verdict.
@@ -719,55 +754,6 @@ class IpexHandler:
             return None
         # Even if OR reduced to valid, absent issuance must not enter accepted stores.
         return tuple(dict.fromkeys(pending.values()))
-
-    def _verifyGrantState(self, serder, grantNodes, grantOrder):
-        """Evaluate and retain authenticated registry state after context validation."""
-        origins = serder.ked["a"]["o"]
-        # Stage 6: evaluate the disclosed DAG to one verdict, rooted at the
-        # origin. A node's verdict is its own issuer-auth proof conjoined
-        # with its reduced Edge Section, and a leaf's verdict is its Operator
-        # relation and schema pins conjoined with the far node's verdict --
-        # so the far node's status reaches the m-ary reduction as a member
-        # rather than as a separate operator-blind sweep beside it. The
-        # origin is where the answer is read, and its own issuer-auth sits
-        # outside every reduction because no edge points at it.
-        records = {}
-        verdict = self._evaluateNode(origins[0], nodes=grantNodes, memo={},
-                                     records=records)
-        if verdict is None:  # malformed shape somewhere in the disclosed DAG
-            return False
-
-        if verdict.verdict != chaining.Verdicts.valid:
-            # An unknown the recipient can still resolve -- a registry whose
-            # TEL has not replicated, a pinned schema not yet cached -- keeps
-            # the exchange retryable through the Exchanger's escrow. An
-            # unknown nothing settles, and anything decided against, refuses
-            # here: escrowing either would promise a retry that cannot
-            # succeed.
-            # A pinned schema goes to the Exchanger's schema escrow, which
-            # asks for it by SAID; any other retryable unknown waits on TEL
-            # or KEL proof. One schema at a time, as that escrow expects.
-            if (verdict.verdict == chaining.Verdicts.unknown
-                    and verdict.retryable):
-                for cause in verdict.causes:
-                    if isinstance(cause, MissingSchemaError):
-                        raise cause
-                raise MissingChainError(verdict.reason)
-            return False
-
-        # The grant is accepted, so keep what each disclosed node's registry
-        # said about it for whoever judges acceptability. Written only
-        # here, after every refusal above, so a refused or escrowed grant
-        # leaves no rows behind.
-        for nodeSaid, record in records.items():
-            self.hby.db.exrs.pin(
-                keys=(serder.said, nodeSaid),
-                val=ExchangeRegistryStateRecord(regid=record.regid,
-                                                said=record.said,
-                                                sn=record.sn,
-                                                state=record.state,
-                                                stamp=record.stamp))
-        return True
 
     def _verifyContext(self, serder, attachments=None, nests=None, sscs=None,
                        evidence=None, *, retained=False):
