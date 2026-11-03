@@ -18,7 +18,8 @@ from keri.kering import (KramConfigurationError, MissingAuthAttachmentError,
 from keri.core import (Kramer, SerderKERI, Kevery, Pruner, Salter,
                        Parser, Seqner, Saider, Prefixer, Diger,
                        Dater, Noncer, Number, Verser, Labeler, Texter,
-                       AuthTypes, exchange, exchept, reply, query, verifySigs)
+                       AuthTypes, exchange, exchept, reply, query, verifySigs,
+                       Revery, Router, messagize)
 
 from keri.app import openHby, openCF
 from keri.db import openDB
@@ -607,6 +608,68 @@ def test_parser_authenticates_persisted_sender_after_reopen(tmp_path, mockHelpin
             cue = kvy.cues.popleft()
             assert cue["kin"] == "reply"
             assert cue["dest"] == senderHab.pre
+
+
+def test_reply_router_receives_verified_signature_aggregate(mockHelpingNowUTC):
+    """Revery needs the complete KRAM threshold, not just the final delivery."""
+    salt = Salter(raw=b'0123456789abcdef').qb64
+    with (openHby(name="sender", base="test", salt=salt, version=V2) as senderHby,
+          openDB(name="receiver", temp=True) as db,
+          openCF(name="kram_reply_aggregate", base="test", temp=True) as cf):
+        senderHab = senderHby.makeHab(name="sender", isith='2', icount=3,
+                                     transferable=True, version=V2, kind=Kinds.cesr)
+        kvy = Kevery(db=db, lax=False, local=False)
+        inception = senderHab.msgOwnEvent(sn=0, framed=True, gvrsn=V2)
+        Parser(version=V2).parse(ims=bytearray(inception), kvy=kvy)
+        assert senderHab.pre in db.kevers
+
+        cf.put(KRAM_INTEGRATION_CONFIG)
+        kramer = Kramer(db=db, cf=cf)
+        assert kramer.enabled
+        router = Router()
+        rvy = Revery(db=db, rtr=router, lax=False, local=False)
+        accepted = []
+
+        class Handler:
+            def processReply(self, serder, diger, route, cigars, tsgs):
+                accepted.append(rvy.acceptReply(
+                    serder=serder, saider=diger, route=route,
+                    aid=senderHab.pre, cigars=cigars, tsgs=tsgs))
+
+        router.addRoute("/test/reply", Handler())
+        kvy = Kevery(db=db, lax=False, local=False, kramer=kramer, rvy=rvy)
+        rpy = reply(pre=senderHab.pre, route="/test/reply", data=dict(value=1),
+                    stamp=helping.nowIso8601(), version=V2, kind=Kinds.cesr)
+        sigers = senderHab.mgr.sign(ser=rpy.raw, verfers=senderHab.kever.verfers,
+                                   indexed=True)
+        invalid = senderHab.mgr.sign(ser=b"different message",
+                                    verfers=senderHab.kever.verfers, indexed=True)[1]
+        establishment = (Prefixer(qb64=senderHab.pre),
+                         Number(sn=senderHab.kever.lastEst.s),
+                         Diger(qb64=senderHab.kever.lastEst.d))
+        key = (senderHab.pre, rpy.said)
+
+        def deliver(siger):
+            msg = messagize(rpy, tsgs=[(*establishment, [siger])], gvrsn=V2)
+            Parser(version=V2).parse(ims=msg, kvy=kvy, rvy=rvy)
+
+        deliver(sigers[0])
+        assert accepted == []
+        assert [sig.qb64 for sig in db.kramPMKS.get(key)] == [sigers[0].qb64]
+
+        deliver(invalid)
+        assert accepted == []
+        assert [sig.qb64 for sig in db.kramPMKS.get(key)] == [sigers[0].qb64]
+
+        deliver(sigers[1])
+        assert accepted == [True]
+        stored = db.tsgs.get(keys=(rpy.said, senderHab.pre,
+                                  f"{senderHab.kever.lastEst.s:032x}",
+                                  senderHab.kever.lastEst.d))
+        assert {sig.qb64 for sig in stored} == {sig.qb64 for sig in sigers[:2]}
+        assert db.kramPMKM.get(key) is None
+        assert db.kramPMKS.get(key) == []
+        assert db.kramPMSK.get(key) is None
 
 
 def test_scrub_invalid_pool_sigs():
