@@ -5441,3 +5441,44 @@ def test_parse_one_bare_shift_policy():
         # while the swallowing path still shifts and drops it
         parser.parse(ims=bytearray(b"any"))
 
+
+
+@pytest.mark.parametrize("version,kind", [(Vrsn_1_0, Kinds.json),
+    (Vrsn_2_0, Kinds.json), (Vrsn_2_0, Kinds.cesr)])
+@pytest.mark.parametrize("binary", [False, True])
+def test_empty_attachment_group_terminates_one_message(version, kind, binary):
+    """An empty counted frame ends this body without consuming the next body."""
+    signers, _, _ = bareFixture()
+    body = incept(keys=[signers[0].verfer.qb64],
+        ndigs=[Diger(ser=signers[1].verfer.qb64b).qb64], version=version, kind=kind)
+    counter = Counter(Codens.AttachmentGroup, count=0, version=version)
+    wire = body.raw + (counter.qb2 if binary else counter.qb64b)
+    ims = bytearray(wire + wire)
+    parser = Parser(version=version)
+    for remaining in (wire, b""):
+        parsed = parser.parseOneBare(ims=ims, framed=False, processive=False)
+        assert parsed.serder.raw == body.raw
+        assert all(not value for key, value in asdict(parsed).items()
+                   if key not in ("serder", "local"))
+        assert ims == remaining
+
+
+@pytest.mark.parametrize("processive", [False, True])
+@pytest.mark.parametrize("fault", ["sized", "cold"])
+def test_parse_one_extraction_failure_returns_no_message(processive, fault):
+    """Failed extraction neither dispatches a phantom message nor reports success."""
+    signers, body, good = bareFixture()
+    inner = Counter(Codens.ControllerIdxSigs, count=2, version=Vrsn_1_0).qb64b
+    inner += signers[0].sign(body.raw, index=0).qb64b
+    if fault == "sized":
+        bad = body.raw + Counter(Codens.AttachmentGroup,
+            count=len(inner) // 4, version=Vrsn_1_0).qb64b + inner
+    else:
+        bad = inner  # An orphan attachment has no message body.
+    ims = bytearray(bad + good)
+    parser = Parser(version=Vrsn_1_0)
+    assert parser.parseOne(ims=ims, processive=processive) is None
+    if fault == "sized":
+        assert ims == good
+        assert parser.parseOneBare(ims=ims, processive=False).serder.raw == body.raw
+    assert not ims

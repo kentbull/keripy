@@ -414,7 +414,7 @@ class Parser:
                  processive=True):
         """Processes one messages from incoming message stream, ims,
         when provided. Otherwise process message from .ims
-        Returns once one message is processed.
+        Returns once one message is processed, or None when extraction fails.
         Convenience executor for .processOneGen when ims is not live, i.e. fixed
 
         Parameters:
@@ -751,6 +751,7 @@ class Parser:
                     logger.exception("Kevery sized group error: %s", ex)
                 else:
                     logger.error("Kevery sized group error: %s", ex)
+                return None  # no parsed message exists to dispatch
 
             except (ColdStartError, ExtractionError, Exception) as ex:  # some extraction error
                 if logger.isEnabledFor(logging.DEBUG):
@@ -758,6 +759,8 @@ class Parser:
                 else:
                     logger.error("Kevery msg extraction error: %s", ex)
                 del ims[:]  # delete rest of stream to force cold restart
+
+                return None  # preserve the extraction failure, not a phantom success
 
             if processive:
                 try:
@@ -1359,6 +1362,9 @@ class Parser:
                     if piped:
                         pass  # pass extracted ims to pipeline processor
                         return
+
+                    if not eags:  # a valid empty attachment group terminates this message
+                        return exts
 
                     # peek for version change
                     ctr = yield from self._extractor(ims=ims,
