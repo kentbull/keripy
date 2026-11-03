@@ -723,6 +723,13 @@ class Exchanger:
 
     def logEvent(self, serder, pathed=None, tsgs=None, cigars=None, essrs=None,
                  sourceSeals=None, nests=None, endorsers=None):
+        """Retain the first accepted disclosure and accumulate verified authentication.
+
+        Pending evidence is provisional until first acceptance. Later accepted
+        deliveries cannot replace paths/nests; a distinct exchange has its own
+        view. Route re-verification and its exrs registry-state refresh remain
+        handler-owned, without freezing current KEL or TEL knowledge.
+        """
         dig = serder.said
         pdig = serder.ked.get('p', '')
         pathed = pathed or []
@@ -739,8 +746,6 @@ class Exchanger:
             self.hby.db.esigs.trim(keys=(dig, ""))
             self.hby.db.ecigs.rem(keys=(dig,))
             self.hby.db.ests.trim(keys=(dig, ""))
-            self.hby.db.epath.rem(keys=(dig,))
-            self.hby.db.enst.rem(keys=(dig,))
 
         for prefixer, seqner, ssaider, sigers in tsgs:
             quadkeys = (serder.said, prefixer.qb64,
@@ -751,10 +756,14 @@ class Exchanger:
             self.hby.db.ecigs.add(keys=(dig,), val=(cigar.verfer, cigar))
 
         exnDiger = Diger(qb64=serder.said)
-        self.hby.db.epath.pin(keys=(dig,), vals=[bytes(p) for p in pathed])
-        if nests:
+        if self.hby.db.exns.get(keys=(dig,)) is None:
+            # An accepted empty set replaces provisional rows too; pin([]) does not.
+            self.hby.db.epath.rem(keys=(dig,))
+            self.hby.db.enst.rem(keys=(dig,))
+            self.hby.db.epath.pin(keys=(dig,), vals=[bytes(p) for p in pathed])
             self.hby.db.enst.pin(keys=(dig,),
-                                 vals=[bytes(serializeParsedSubstream(nest)) for nest in nests])
+                                 vals=[bytes(serializeParsedSubstream(nest))
+                                       for nest in nests or []])
         for texter in essrs:
             self.hby.db.essrs.add(keys=(dig,), val=texter)
         for prefixer, number, diger in sourceSeals:
