@@ -573,6 +573,55 @@ def vetBindings(acdc, *, regid, issuer, td):
     return 'oneway'
 
 
+def vetBound(blinder, *, acdc, db):
+    """Verify a BLID-authenticated opening's historical Issuee event reference.
+
+    Call ``vetBlind`` first. A non-vacuous BoundState requires the disclosed
+    target ACDC and its Issuee's accepted, fully witnessed key event at bn/bd.
+    The event may be an interaction and need not be the receiver's current tip.
+    This verifies the reference, not the issuer's assertion that it was current
+    at publication (ACDC Bound Blinded Attribute Block, bn/bd fields).
+
+    Return the referenced event, or None for an unbound/strict placeholder
+    opening. Missing KEL or witness evidence is retryable; conflicting accepted
+    coordinates, missing Issuee, or a substituted target fail permanently.
+    """
+    wire = blinder.qb64 if isinstance(blinder, Blinder) else blinder
+    if hasattr(wire, "decode"):
+        wire = wire.decode()
+    for clan in (BlindState, BoundState):
+        try:
+            candidate = Blinder(clan=clan, qb64=wire, verify=False)
+        except (KeriError, ValueError, TypeError):
+            continue
+        if candidate.qb64 == wire:
+            break
+    else:
+        raise UnverifiedBlindError("Incomplete bound-state disclosure.")
+
+    if candidate.clan is not BoundState:
+        return None
+    if not candidate.acdc and not candidate.state:
+        if candidate.bsn != 0 or candidate.bd:
+            raise MisbindingError("Bound placeholder requires bn=0 and empty bd.")
+        return None
+    if not candidate.bd or acdc is None:
+        raise MisbindingError("Bound state requires a target ACDC and Issuee event.")
+    credential = _coerce(acdc)
+    if candidate.acdc != credential.said or not credential.iseaid:
+        raise MisbindingError("Bound state must name the disclosed ACDC and Issuee.")
+    issuee = credential.iseaid
+    dig = db.kels.getLast(keys=issuee, on=candidate.bsn)
+    if dig is None:
+        raise MissingAnchorError(f"Missing Issuee event {issuee}:{candidate.bsn}.")
+    if dig != candidate.bd:
+        raise MisanchorError("Bound Issuee digest conflicts with the accepted KEL.")
+    event = db.evts.get(keys=(issuee, dig))
+    if event is None or not db.fullyWitnessed(event):
+        raise MissingAnchorError("Bound Issuee event is not fully witnessed.")
+    return event
+
+
 def vet(rip, updates=None, *, db, acdc=None, blinder=None, sources=None):
     """Verify a registry (TEL) event chain against the issuer's KEL and
     determine the registry's verified state.  This is the party-side
@@ -666,6 +715,7 @@ def vet(rip, updates=None, *, db, acdc=None, blinder=None, sources=None):
     acdcsaid = state = None
     if head.ilk == Ilks.bup and blinder is not None:
         disclosed, toldState = vetBlind(blinder=blinder, blid=head.sad['b'])
+        vetBound(blinder, acdc=acdc, db=db)
         acdcsaid = disclosed or None
         state = toldState or None
 
@@ -779,6 +829,7 @@ def vetBinds(rip, updates=None, *, db, blinders, target, controller=None,
 
         # Verify and disclose this update's target and state.
         td, state = vetBlind(blinder=matches[0], blid=update.sad['b'])
+        vetBound(matches[0], acdc=acdc, db=db)
 
         # Skip vacuous updates while retaining their chain validation.
         if not td and not state:
