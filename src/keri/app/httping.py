@@ -86,7 +86,8 @@ def parseCesrHttpRequest(req):
         req (falcon.Request) http request object in CESR format:
 
     """
-    if req.content_type != CESR_CONTENT_TYPE:
+    # Both media types use a JSON body with detached CESR-ATTACHMENT headers.
+    if req.content_type not in (CESR_CONTENT_TYPE, "application/cesr+json"):
         raise falcon.HTTPError(falcon.HTTP_NOT_ACCEPTABLE,
                                title="Content type error",
                                description="Unacceptable content type.")
