@@ -18,13 +18,14 @@ from keri.kering import (Protocols, Vrsn_1_0, Vrsn_2_0, Kinds, Ilks,
 
 from keri.help import b64ToInt
 
-from keri.core import (Salter, Diger, Number, Prefixer, FieldDom,
+from keri.core import (Salter, Diger, Number, Prefixer, FieldDom, Counter,
                        FieldDom, Serdery, Serder, SerderKERI,
                        SerderACDC, incept, interact, rotate, delcept,
                        deltate, receipt, query, reply, prod, bare,
                        exchept, exchange, GenDex, PreDex, MtrDex)
 
 from keri.app import openHby
+from keri.acdc import acdcmap
 
 
 
@@ -3080,6 +3081,26 @@ def test_serdery():
 
 
     """End Test"""
+
+
+@pytest.mark.parametrize("ilk", [Ilks.acm, None])
+def test_serdery_native_field_map(ilk):
+    """Reap native ACDC maps past their version label without consuming the tail."""
+    original = acdcmap(
+        israid="EA2X8Lfrl9lZbCGz8cfKIvM_cqLyTYVLSFLhnttezlzQ",
+        ilk=ilk, attribute={"name": "Alice"}, kind=Kinds.cesr)
+    tail = b"unconsumed stream tail"
+    ims = bytearray(original.raw + tail)
+    counter = Counter(qb64b=ims, version=Vrsn_2_0)
+
+    reaped = Serdery().reap(ims, genus=GenDex.KERI, svrsn=Vrsn_2_0,
+                            ctr=counter, size=len(original.raw), fixed=False)
+
+    assert isinstance(reaped, SerderACDC)
+    assert reaped.verify()
+    assert reaped.raw == original.raw
+    assert reaped.sad == original.sad
+    assert ims == tail
 
 
 def test_keri_native_dumps_loads():
