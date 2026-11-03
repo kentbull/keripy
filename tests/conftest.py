@@ -144,6 +144,13 @@ def isolate_keri_store_roots(tmp_path_factory):
     isolated ``/tmp`` directories. ``LMDBer`` is the base of the db (``Baser``),
     keystore (``Keeper``) and registry (``Reger``) stores, so patching it covers
     all three; ``Configer`` covers the config store.
+
+    Console-script subprocesses need the same roots as their worker. A private
+    ``sitecustomize`` bootstrap propagates only these class settings through
+    inherited ``PYTHONPATH``. This is CI harness configuration, not an installed
+    CLI qualification without ``PYTHONPATH``; the actual console entrypoint is
+    still exercised. The bootstrap and environment override live only for this
+    worker fixture, and existing ``PYTHONPATH`` entries are retained.
     """
     if not os.environ.get("PYTEST_XDIST_WORKER"):
         yield
@@ -155,15 +162,31 @@ def isolate_keri_store_roots(tmp_path_factory):
     root = str(tmp_path_factory.getbasetemp())  # unique per xdist worker
     saved = [(cls, cls.HeadDirPath, cls.AltHeadDirPath)
              for cls in (LMDBer, Configer)]
+    bootstrap = tmp_path_factory.mktemp("keri-subprocess-bootstrap")
+    (bootstrap / "sitecustomize.py").write_text(
+        "from keri.db.dbing import LMDBer\n"
+        "from keri.app.configing import Configer\n"
+        "for cls in (LMDBer, Configer):\n"
+        f"    cls.HeadDirPath = cls.AltHeadDirPath = {root!r}\n",
+        encoding="utf-8",
+    )
+    pythonpath = os.environ.get("PYTHONPATH")
+    os.environ["PYTHONPATH"] = str(bootstrap) + (
+        os.pathsep + pythonpath if pythonpath is not None else "")
     for cls in (LMDBer, Configer):
         cls.HeadDirPath = root
         cls.AltHeadDirPath = root
     try:
         yield
     finally:
+        if pythonpath is None:
+            os.environ.pop("PYTHONPATH", None)
+        else:
+            os.environ["PYTHONPATH"] = pythonpath
         for cls, head, alt in saved:
             cls.HeadDirPath = head
             cls.AltHeadDirPath = alt
+        shutil.rmtree(bootstrap)
 
 
 @pytest.fixture(scope="session")
