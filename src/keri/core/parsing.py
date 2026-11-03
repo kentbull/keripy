@@ -181,7 +181,7 @@ class Parser:
 
     def __init__(self, ims=None, framed=True, piped=False, kvy=None,
                  tvy=None, exc=None, rvy=None, vry=None, local=False,
-                 version=Vrsn_2_0):
+                 version=Vrsn_2_0, rgy=None):
         """
         Initialize instance:
 
@@ -196,6 +196,7 @@ class Parser:
             exc (Exchanger): route EXN message types to this instance
             rvy (Revery): reply (RPY) message handler
             vry (``Verfifier``): credential verifier with wallet storage
+            rgy (Regery | None): native ACDC RIP/BUP registry evidence owner
             local (bool): True means event source is local (protected) for validation
                 False means event source is remote (unprotected) for validation
             version (Versionage): instance of version portion of genus version code
@@ -208,6 +209,7 @@ class Parser:
         self.exc = exc
         self.rvy = rvy
         self.vry = vry
+        self.rgy = rgy
         self.local = True if local else False
 
         self._genus = GenDex.KERI  # only supports KERI
@@ -1687,7 +1689,11 @@ class Parser:
         elif isinstance(serder, SerderACDC):
             ilk = serder.ilk  # dispatch based on ilk
 
-            if ilk is None:  # default for ACDC
+            if ilk in (Ilks.rip, Ilks.bup):
+                if self.rgy is None:
+                    raise ValidationError("No native registry owner to process TEL event")
+                self.rgy.processEvent(**exts)
+            elif ilk is None:  # default for ACDC
                 try:
                     # use last one if more than one
                     prefixer, number, diger = exts['ssts'][-1] if exts['ssts'] else (None, None, None)
