@@ -18,7 +18,7 @@ from .forwarding import Poster, StreamPoster, ForwardHandler, introduce
 from .grouping import (Counselor, MultisigNotificationHandler, multisigInceptExn,
                        multisigRotateExn, multisigInteractExn, multisigRegistryInceptExn,
                        multisigIssueExn, multisigRevokeExn, multisigRpyExn,
-                       multisigExn, getEscrowedEvent, Multiplexor)
+                       multisigExn, multisigRipExn, getEscrowedEvent, Multiplexor)
 from .habbing import (openHby, openHab, Habery, Signator, HaberyDoer, SIGNER,
                       BaseHab, Hab, SignifyHab, SignifyGroupHab, GroupHab)
 from .httping import (SignatureValidationComponent, CesrRequest, CESR_CONTENT_TYPE,
