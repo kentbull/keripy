@@ -19,7 +19,7 @@ from keri.acdc.ipexing import _validDisclosurePath
 from keri.app import openCF, openHby
 from keri.core import (Aggor, Blinder, Codens, Compactor, Counter, Diger, GenDex,
                        Kevery, Kramer, Noncer, Number, Parser, Schemer, SealEvent,
-                       SealSource, messagize, Saider, SerderKERI, Serdery, Texter, exchange)
+                       SealSource, messagize, Saider, SerderACDC, SerderKERI, Serdery, Texter, exchange)
 from keri.db import reopenDB
 from keri.acdc import chaining
 from keri.acdc.chaining import Verdicts
@@ -111,13 +111,13 @@ def _proofed(acdc, *proofs, anchors=None):
                      gvrsn=Vrsn_2_0)
 
 
-def _signed(acdc, hab):
-    """Attach the issuer's current signature factor to an ACDC."""
+def _signed(acdc, hab, *, nested=False, nests=None):
+    """Attach current signatures, optionally carrying or framing nested bodies."""
     if not hab.kever.prefixer.transferable:
         return messagize(
             serder=acdc,
             cigars=hab.sign(ser=acdc.raw, indexed=False),
-            framed=False,
+            framed=False, nested=nested, nests=nests,
             gvrsn=Vrsn_2_0,
         )
 
@@ -127,7 +127,7 @@ def _signed(acdc, hab):
                Number(sn=hab.kever.lastEst.s),
                Diger(qb64=hab.kever.lastEst.d),
                hab.sign(ser=acdc.raw, indexed=True))],
-        framed=False,
+        framed=False, nested=nested, nests=nests,
         gvrsn=Vrsn_2_0,
     )
 
@@ -2928,8 +2928,7 @@ def test_ipex_v2_rejects_false_attribute_section_said():
         exc = Exchanger(hby=hby, handlers=[])
         loadHandlers(hby=hby, exc=exc, notifier=recorder)
 
-        # The ACDC serder accepts this false carried value because it computes
-        # the credential SAID from the canonical attribute commitment instead.
+        # Authoring repairs even a stale claim before the body is signed.
         falseSaid = Diger(ser=b"not the attribute block").qb64
         credential = acdcmap(
             israid=hab.pre,
@@ -2939,14 +2938,16 @@ def test_ipex_v2_rejects_false_attribute_section_said():
         )
         assert credential.verify() is True
 
-        # Prove that the carried attribute SAID is not the value computed from
-        # the expanded attribute block.
+        # Forge the carried claim after authoring, without normalizing it.
         compactor = Compactor(mad=dict(credential.sad["a"]),
                               makify=True,
                               kind=credential.kind)
         compactor.compact()
-        assert credential.sad["a"]["d"] == falseSaid
-        assert compactor.said != falseSaid
+        assert credential.sad["a"]["d"] == compactor.said != falseSaid
+        malformed = SerderACDC(raw=credential.raw.replace(
+            compactor.said.encode(), falseSaid.encode()), verify=False)
+        assert malformed.sad["a"]["d"] == falseSaid
+        assert not malformed.verify()
 
         # Send the malformed credential as a direct Grant.
         grantExn, grantAtc = ipexGrant(
@@ -2956,7 +2957,8 @@ def test_ipex_v2_rejects_false_attribute_section_said():
             origin=_signed(credential, hab),
             modifiers=dict(dp=[[[credential.schema["$id"], "/", []]]]),
         )
-        ims = bytearray(grantExn.raw + grantAtc)
+        # Sign the malformed body itself and retain the valid outer Grant.
+        ims = _signed(grantExn, hab, nests=[_signed(malformed, hab, nested=True)])
         Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
         assert ims == bytearray()
 
@@ -2989,11 +2991,16 @@ def test_ipex_v2_rejects_false_nested_attribute_said():
                              attribute=attribute,
                              iseaid=hab.pre)
 
-        # Ordinary ACDC verification sees the correct outer commitment.
+        # Authoring fills the nested claim; forge only that claim on the wire.
         assert credential.verify() is True
         assert credential.sad["a"]["d"] == compactor.said
-        assert credential.sad["a"]["profile"]["d"] == falseSaid
-        assert compactor.leaves[".profile"].said != falseSaid
+        nestedSaid = compactor.leaves[".profile"].said
+        assert credential.sad["a"]["profile"]["d"] == nestedSaid != falseSaid
+        malformed = SerderACDC(raw=credential.raw.replace(
+            nestedSaid.encode(), falseSaid.encode()), verify=False)
+        assert malformed.sad["a"]["d"] == compactor.said
+        assert malformed.sad["a"]["profile"]["d"] == falseSaid
+        assert not malformed.verify()
 
         # IPEX also checks the nested commitment and rejects the Grant.
         grantExn, grantAtc = ipexGrant(
@@ -3003,7 +3010,8 @@ def test_ipex_v2_rejects_false_nested_attribute_said():
             origin=_signed(credential, hab),
             modifiers=dict(dp=[[[credential.schema["$id"], "/", []]]]),
         )
-        ims = bytearray(grantExn.raw + grantAtc)
+        # Sign the malformed body itself and retain the valid outer Grant.
+        ims = _signed(grantExn, hab, nests=[_signed(malformed, hab, nested=True)])
         Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
         assert ims == bytearray()
 
@@ -3022,7 +3030,7 @@ def test_ipex_v2_rejects_false_aggregate_commitments():
         exc = Exchanger(hby=hby, handlers=[])
         loadHandlers(hby=hby, exc=exc, notifier=recorder)
 
-        # First build an aggregate with a correct element and a false AGID.
+        # Build from a false AGID, then forge that claim after authoring repairs it.
         rootElement = dict(d="", u=Noncer().qb64, i=hab.pre, role="member")
         rootAggor = Aggor(ael=["", rootElement], makify=True, kind=Kinds.json)
         falseAgid = Diger(ser=b"not the aggregate block").qb64
@@ -3030,8 +3038,11 @@ def test_ipex_v2_rejects_false_aggregate_commitments():
                           uuid=Noncer().qb64,
                           aggregate=[falseAgid, rootAggor.ael[1]])
         assert badRoot.verify() is True
-        assert badRoot.sad["A"][0] == falseAgid
-        assert rootAggor.agid != falseAgid
+        assert badRoot.sad["A"][0] == rootAggor.agid != falseAgid
+        malformedRoot = SerderACDC(raw=badRoot.raw.replace(
+            rootAggor.agid.encode(), falseAgid.encode()), verify=False)
+        assert malformedRoot.sad["A"][0] == falseAgid
+        assert not malformedRoot.verify()
 
         # Then keep the AGID correct while falsifying one aggregate element.
         falseElementSaid = Diger(ser=b"not the aggregate element").qb64
@@ -3047,12 +3058,18 @@ def test_ipex_v2_rejects_false_aggregate_commitments():
                              aggregate=[elementAggor.agid, falseElement])
         assert badElement.verify() is True
         assert badElement.sad["A"][0] == elementAggor.agid
-        assert badElement.sad["A"][1]["d"] == falseElementSaid
-        assert elementAggor.ael[1]["d"] != falseElementSaid
+        elementSaid = elementAggor.ael[1]["d"]
+        assert badElement.sad["A"][1]["d"] == elementSaid != falseElementSaid
+        malformedElement = SerderACDC(raw=badElement.raw.replace(
+            elementSaid.encode(), falseElementSaid.encode()), verify=False)
+        assert malformedElement.sad["A"][0] == elementAggor.agid
+        assert malformedElement.sad["A"][1]["d"] == falseElementSaid
+        assert not malformedElement.verify()
 
         # Both malformed credentials are rejected as direct Grants.
-        for message, credential in (("Here is a false aggregate root", badRoot),
-                                    ("Here is a false aggregate element", badElement)):
+        for message, credential, malformed in (
+                ("Here is a false aggregate root", badRoot, malformedRoot),
+                ("Here is a false aggregate element", badElement, malformedElement)):
             grantExn, grantAtc = ipexGrant(
                 hab=hab,
                 recp=hab.pre,
@@ -3060,7 +3077,7 @@ def test_ipex_v2_rejects_false_aggregate_commitments():
                 origin=_signed(credential, hab),
                 modifiers=dict(dp=[[[credential.schema["$id"], "/", []]]]),
             )
-            ims = bytearray(grantExn.raw + grantAtc)
+            ims = _signed(grantExn, hab, nests=[_signed(malformed, hab, nested=True)])
             Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
             assert ims == bytearray()
 
