@@ -3020,127 +3020,50 @@ class SerderACDC(Serder):
 
 
         """
-        # assumes sad['v'] vesion string vield and top-level sad said fields
-        # not including section fields are fully dummied at this point
-        if self.kind != Kinds.cesr:  # non-native so sizify version string
-            raw = self.dumps(sad, self.kind)  # get size of sad with fully dummied vs and saids
-            size = len(raw)
-
-            # generate version string with correct size
-            vs = versify(proto=self.proto, pvrsn=self.pvrsn, kind=self.kind,
-                                 size=size, gvrsn=self.gvrsn)
-            sad["v"] = vs  # update version string in sad
-            # now have correctly sized version string in sad for non-native
-        # else: vs ignored for native cesr for now
-
-        csad = copy.deepcopy(sad)  # make copy to compute most compact sad
-        if (self.pvrsn.major >= 2 and self.ilk in
-                (Ilks.acm, Ilks.act, Ilks.acg, Ilks.ace, None)):  # compactable
-            # compactable so fixup saids and size
+        # Compute the disclosed and most-compact views together. Authoring gets
+        # populated section claims; verification compares this normalized copy
+        # with the received raw, so it never silently repairs received claims.
+        compactable = (self.pvrsn.major >= 2 and self.ilk in
+                       (Ilks.acm, Ilks.act, Ilks.acg, Ilks.ace, None))
+        sectioned = (self.pvrsn.major >= 2 and self.ilk in
+                     (Ilks.sch, Ilks.att, Ilks.agg, Ilks.edg, Ilks.rul))
+        csad = copy.deepcopy(sad)
+        if compactable or sectioned:
             for l in ("s", "a", "e", "r", "A"):
-                if v := csad.get(l, None):  # field exists and is not empty
-                    if isinstance(v, Mapping):  # v is non-empty mapping
-                        said = None
-                        # compact to its most compact said
-                        match l:
-                            case 's':  # schema is only top-level said
-                                sector = Compactor(mad=v,
-                                                    makify=True,
-                                                    strict=False,
-                                                    saids={"$id": 'E',},
-                                                    kind=self.kind)
-                                said = sector.said
+                v = sad.get(l)
+                if not v:
+                    continue
+                if l == "s" and isinstance(v, Mapping):
+                    # Only the schema's own $id is saidive. Property maps and
+                    # arbitrary dictionaries within the schema stay untouched.
+                    sector = Compactor(mad=v, makify=True, strict=False,
+                                       saids={"$id": "E"}, kind=self.kind)
+                    expanded, commitment = sector.mad, sector.said
+                elif l in ("a", "e", "r") and isinstance(v, Mapping):
+                    sector = Compactor(mad=v, makify=True, kind=self.kind)
+                    # Restore only the supplied disclosure: compact children
+                    # stay strings, and missing d fields are never inserted.
+                    sector.compact(paths=["/"])
+                    expanded = sector.partials[("/",)].mad
+                    commitment = sector.said
+                elif l == "A" and isinstance(v, NonStringIterable):
+                    sector = Aggor(ael=v, makify=True, kind=self.kind)
+                    expanded, commitment = sector.ael, sector.agid
+                else:
+                    continue
+                sad[l] = expanded
+                csad[l] = commitment if compactable and commitment else expanded
 
-                            case 'a' | 'e' | 'r':
-                                sector = Compactor(mad=v,
-                                                   makify=True,
-                                                   kind=self.kind)
-                                sector.compact()  # only compact do not expand
-                                said = sector.said
-
-                        if said:
-                            csad[l] = said  # assign said as compaction
-
-                    elif isinstance(v, NonStringIterable):  # v is non-empty iterable
-                        agid = None
-                        # compact to agid
-                        match l:
-                            case 'A':  # aggregator
-                                sector = Aggor(ael=v,
-                                               makify=True,
-                                               kind=self.kind)
-
-                                agid = sector.agid
-                        if agid:
-                            csad[l] = agid  # assign agid as compaction
-
-                    #else: don't change csad[l] its already compact as said/agid
-
-            # Most compact size fixup in vs
-            if self.kind != Kinds.cesr:  # not native so fixup vs
-                # use size from most compact raw so stable said as most compact
-                raw = self.dumps(csad, kind=self.kind)
-                csize = len(raw)
-                vs = versify(proto=self.proto, pvrsn=self.pvrsn, kind=self.kind,
-                                     size=csize, gvrsn=self.gvrsn)
-                csad["v"] = vs  # update version string in sad
-
-            # reserialize using sized, dummied, and fixed up
-            raw = self.dumps(csad, kind=self.kind)
-
-        elif (self.pvrsn.major >= 2 and self.ilk in
-                (Ilks.sch, Ilks.att, Ilks.agg, Ilks.edg, Ilks.rul)):  # partial sections
-            # verify embedded section saids are most compact
-            for l in ("s", "a", "e", "r", "A"):
-                if v := csad.get(l, None):  # field exists and is not empty
-                    if isinstance(v, Mapping):  # v is non-empty mapping
-                        said = None
-                        match l:  # compute embedded Mapper most compact saids
-                            case 's':  # schema is only top-level said $id
-                                sector = Compactor(mad=v,
-                                                      makify=True,
-                                                      strict=False,
-                                                      saids={"$id": 'E',},
-                                                      kind=self.kind)
-                                said = sector.said
-                                slabel ='$id'
-
-                            case 'a' | 'e' | 'r':  # fully compactable sections
-                                sector = Compactor(mad=v,
-                                                      makify=True,
-                                                      kind=self.kind)
-                                sector.compact() # only compact do not expand
-                                said = sector.said
-                                slabel ='d'
-
-
-                        if said:  # there is an embedded said field
-                            if v.get(slabel) != said:
-                                raise InvalidValueError(f"Invalid section {said=} "
-                                                        f"in section message")
-
-                    elif isinstance(v, NonStringIterable):  # v is non-empty iterable
-                        match l:
-                            case 'A':  # compute agid of embedded Aggor
-                                try:
-                                    sector = Aggor(ael=v,
-                                                   makify=True,
-                                                   kind=self.kind)
-
-                                except Exception as ex:
-                                    raise InvalidValueError(f"Invalid aggregate"
-                                        f"section={l} in section message")
-
-                                agid = sector.agid
-                                if not agid:
-                                    raise InvalidValueError(f"Invalid aggregate"
-                                                f" {agid=} in section message")
-
-            raw = self.dumps(csad, kind=self.kind)
-
-        else:  # non-compactable, no need to fixup, already most compact form
-            # compute saidive digestive field values using raw from sized dummied sad
-            raw = self.dumps(csad, kind=self.kind)  # serialize sized dummied sad
+        # Section normalization may change serialized length (e.g. d="" to
+        # a digest). Size both views only after their claims have been computed.
+        if self.kind != Kinds.cesr:
+            size = len(self.dumps(sad, kind=self.kind))
+            sad["v"] = versify(proto=self.proto, pvrsn=self.pvrsn, kind=self.kind,
+                                size=size, gvrsn=self.gvrsn)
+            csize = len(self.dumps(csad, kind=self.kind))
+            csad["v"] = versify(proto=self.proto, pvrsn=self.pvrsn, kind=self.kind,
+                                 size=csize, gvrsn=self.gvrsn)
+        raw = self.dumps(csad, kind=self.kind)
 
         if compactify:
             sad = csad
@@ -3151,7 +3074,7 @@ class SerderACDC(Serder):
             if code in DigDex:  # subclass override if non digestive allowed
                 sad[label] = Diger(ser=raw, code=code).qb64
 
-        # Now reserialize raw with undummied said and unfixed up uncompact sections
+        # Serialize the final SAID and the normalized disclosed sections.
         raw = self.dumps(sad, kind=self.kind)  # assign final raw
 
         if self.kind == Kinds.cesr:# cesr native serialization does not use vs
