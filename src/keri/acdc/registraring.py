@@ -121,8 +121,61 @@ class Regery:
         """
         return self.names.get(name)
 
+    def _eventer(self, regk, rip=None):
+        """Reconstruct a foreign engine from its RIP without creating a local alias."""
+        if regk in self.regs:
+            return self.regs[regk]._eventer
+        rip = rip if rip is not None else self.store.event(regk)
+        if rip is None:
+            return None
+        inception = regeventing._validateRip(rip)
+        if inception.regk != regk:
+            raise ValidationError("stored registry inception does not match its key")
+        return regeventing._RegEventer(db=self.hby.db, issuer=inception.issuer,
+                                       store=self.store, regk=regk)
+
+    def processEvent(self, serder, *, sscs=None, ssts=None, **kwa):
+        """Receive native RIP/BUP evidence and accept only its authenticated TEL.
+
+        Parameters:
+            serder (SerderACDC): incoming native registry event.
+            sscs (list | None): issuer-implied KEL source couples.
+            ssts (list | None): explicit-controller KEL source triples.
+            **kwa: other parser attachments, which do not establish a TEL anchor.
+
+        Returns:
+            bool: True when accepted; False while KEL, anchor, or prior evidence
+                remains unavailable in the existing dependency escrows.
+        """
+        event = _normalizeEventRecord(serder)
+        if event.ilk == "rip":
+            event = regeventing._validateRip(serder)
+            rip = serder
+        else:
+            event = regeventing._validateUpdate(serder, regid=event.regk)
+            rip = self.store.event(event.regk)
+        eventer = self._eventer(event.regk, rip=rip)
+        issuer = eventer.issuer if eventer is not None else None
+        regeventing._validateSourceLocators(serder, db=self.hby.db, issuer=issuer,
+                                            sscs=sscs or (), ssts=ssts or ())
+        if eventer is None:
+            self.store.putEvent(serder)
+            self.store.escrowOutOfOrder(event.regk, event.sn, event.said)
+            return False
+        accepted = eventer.processEvent(serder)
+        if event.ilk == "rip":
+            self._processNativeEscrows(eventer)
+        return accepted
+
+    def _processNativeEscrows(self, eventer):
+        """Give pre-inception updates ordinary anchor discovery before replay."""
+        for _, sn, said in list(self.baser.ooes.getTopItemIter(keys=eventer.regk)):
+            if self.store.anchor(said) is None:
+                self.store.escrowMissingAnchor(eventer.regk, sn, said)
+        eventer.processEscrows()
+
     def processEscrows(self):
-        """Retry queued escrow work for every managed registry.
+        """Retry local and foreign registry dependencies from existing stored keys.
 
         Parameters:
             None
@@ -131,7 +184,13 @@ class Regery:
             None
         """
         for reg in self.regs.values():
-            reg.processEscrows()
+            self._processNativeEscrows(reg._eventer)
+        pending = {keys[0] for escrow in (self.baser.maes, self.baser.ooes)
+                   for keys, _, _ in escrow.getTopItemIter()}
+        for regk in sorted(pending - self.regs.keys()):
+            eventer = self._eventer(regk)
+            if eventer is not None:
+                self._processNativeEscrows(eventer)
 
     def close(self):
         """Close the underlying registry storage backend.

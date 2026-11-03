@@ -351,6 +351,36 @@ def _verifyAnchorCouple(serder, *, db, issuer, number, diger):
     return False
 
 
+def _validateSourceLocators(serder, *, db, issuer, sscs=(), ssts=()):
+    """Reject resolvable wrong source coordinates without retaining sender hints.
+
+    Missing KEL evidence follows ordinary anchor discovery and dependency escrow.
+    Only accepted issuer events can resolve a locator; unverified claims never
+    become stored anchor couples or conditions on later authentic replay.
+    """
+    locators = [(issuer, number, diger) for number, diger in sscs]
+    locators.extend((prefixer.qb64, number, diger)
+                    for prefixer, number, diger in ssts)
+    for controller, number, diger in locators:
+        if issuer is not None and controller != issuer:
+            raise ValidationError("TEL source locator names a different controller")
+        if not isinstance(number, Number) or not isinstance(diger, Diger):
+            raise ValidationError("TEL source locator requires a number and digest")
+        if controller is None:
+            continue  # A BUP cannot establish its issuer before the RIP arrives.
+        accepted = db.kels.getLast(keys=controller, on=number.sn)
+        if accepted is None:
+            continue
+        if accepted != diger.qb64:
+            raise ValidationError("TEL source locator conflicts with accepted KEL digest")
+        anchor = db.evts.get(keys=(controller, accepted))
+        if anchor is None or not db.fullyWitnessed(anchor):
+            continue
+        if not _verifyAnchorCouple(serder, db=db, issuer=controller,
+                                   number=number, diger=diger):
+            raise ValidationError("TEL source locator does not seal this registry event")
+
+
 # Verifier-side public API
 def vetAnchor(serder, *, db, issuer, source=None, told=()):
     """Verify that the registry (TEL) event serder is anchored in the
