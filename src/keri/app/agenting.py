@@ -87,67 +87,96 @@ class Receiptor(doing.DoDoer):
 
         clients = dict()
         doers = []
-        for wit in wits:
-            try:
-                client, clientDoer = httpClient(hab, wit)
-                clients[wit] = client
-                doers.append(clientDoer)
-                self.extend([clientDoer])
-            except (MissingEntryError, gaierror) as e:
-                logger.error(f"unable to create http client for witness {wit}: {e}")
+        try:
+            for wit in wits:
+                try:
+                    client, clientDoer = httpClient(hab, wit)
+                    clients[wit] = client
+                    doers.append(clientDoer)
+                    self.extend([clientDoer])
+                except (MissingEntryError, gaierror) as e:
+                    logger.error(f"unable to create http client for witness {wit}: {e}")
 
-        # send to each witness and gather receipts
-        rcts = dict()
-        for wit, client in clients.items():
-            headers = dict()
-            if wit in auths:
-                headers["Authorization"] = auths[wit]
+            rcts = yield from self._collectReceipts(hab, clients, msg, auths)
 
-            streamCESRRequests(client=client, dest=wit, ims=bytearray(msg), path="/receipts", headers=headers)
-            while not client.responses:
-                yield self.tock
+            wigers = hab.db.wigs.get(keys=(ser.preb, ser.saidb))
+            wigerByWit = {wits[wiger.index]: wiger for wiger in wigers}
 
-            rep = client.respond()
-            if rep.status == 200:
-                hab.psr.parseOne(bytearray(rep.body))
-                rcts[wit] = None
-            else:
-                print(f"invalid response {rep.status} from witnesses {wit}")
+            # send retrieved receipts to all other witnesses
+            for wit in rcts:
+                ewits = [w for w in wits if w != wit and w in wigerByWit]
+                wigers = [wigerByWit[w] for w in ewits]
+                if not wigers:
+                    continue
 
-        wigers = hab.db.wigs.get(keys=(ser.preb, ser.saidb))
-        wigerByWit = {wits[wiger.index]: wiger for wiger in wigers}
+                msg = bytearray()
+                if ser.ked['t'] in (coring.Ilks.icp, coring.Ilks.dip):  # introduce new witnesses
+                    msg.extend(schemes(self.hby.db, eids=ewits))
+                elif ser.ked['t'] in (coring.Ilks.rot, coring.Ilks.drt) and \
+                        ("ba" in ser.ked and wit in ser.ked["ba"]):  # Newly added witness, introduce to all
+                    msg.extend(schemes(self.hby.db, eids=ewits))
 
-        # send retrieved receipts to all other witnesses
-        for wit in rcts:
-            ewits = [w for w in wits if w != wit and w in wigerByWit]
-            wigers = [wigerByWit[w] for w in ewits]
-            if not wigers:
-                continue
+                rserder = eventing.receipt(pre=hab.pre,
+                                           sn=sn,
+                                           said=ser.said,
+                                           version=ser.pvrsn,
+                                           kind=ser.kind)
+                msg.extend(eventing.messagize(serder=rserder, wigers=wigers,
+                                              framed=True, gvrsn=ser.pvrsn))
 
-            msg = bytearray()
-            if ser.ked['t'] in (coring.Ilks.icp, coring.Ilks.dip):  # introduce new witnesses
-                msg.extend(schemes(self.hby.db, eids=ewits))
-            elif ser.ked['t'] in (coring.Ilks.rot, coring.Ilks.drt) and \
-                    ("ba" in ser.ked and wit in ser.ked["ba"]):  # Newly added witness, introduce to all
-                msg.extend(schemes(self.hby.db, eids=ewits))
+                client = clients[wit]
 
-            rserder = eventing.receipt(pre=hab.pre,
-                                       sn=sn,
-                                       said=ser.said,
-                                       version=ser.pvrsn,
-                                       kind=ser.kind)
-            msg.extend(eventing.messagize(serder=rserder, wigers=wigers,
-                                          framed=True, gvrsn=ser.pvrsn))
+                sent = streamCESRRequests(client=client, dest=wit, ims=bytearray(msg))
+                while len(client.responses) < sent:
+                    yield self.tock
 
-            client = clients[wit]
-
-            sent = streamCESRRequests(client=client, dest=wit, ims=bytearray(msg))
-            while len(client.responses) < sent:
-                yield self.tock
-
-        self.remove(doers)
+        finally:
+            self.remove(doers)
 
         return rcts.keys()
+
+    def _collectReceipts(self, hab, clients, msg, auths):
+        """Collect and verify receipt replies using the supplied live clients.
+
+        Args:
+            hab: Local controller habitat whose parser verifies each receipt.
+            clients: Witness-prefix to owned HTTP-client mapping.
+            msg: Exact controller event with matching attachment genus.
+            auths: Optional witness-prefix to authorization-header mapping.
+
+        Yields:
+            float: Cooperative network progress; no accepted rows are written here.
+
+        Returns:
+            dict: Witnesses returning HTTP 200. Only the habitat parser may retain
+                verified signatures; an HTTP response alone is not a valid receipt.
+
+        Extracted from Receiptor.receipt at 325f2507. Dispatch is concurrent;
+        client lifecycle and receipt propagation remain with receipt. The caller
+        retains its existing quorum and deadline policy.
+        """
+        # Dispatch to every witness before waiting. A stalled first endpoint
+        # must not prevent later authenticated receipts from reaching the parser.
+        for wit, client in clients.items():
+            headers = {"Authorization": auths[wit]} if wit in auths else {}
+            streamCESRRequests(client=client, dest=wit, ims=bytearray(msg),
+                               path="/receipts", headers=headers)
+        pending, rcts = dict(clients), {}
+        while pending:
+            for wit, client in list(pending.items()):
+                if not client.responses:
+                    continue
+                rep = client.respond()
+                del pending[wit]
+                if rep.status == 200:
+                    hab.psr.parseOne(bytearray(rep.body))
+                    rcts[wit] = None
+                else:
+                    logger.error(f"invalid response {rep.status} from witness {wit}")
+            if pending:
+                yield self.tock
+
+        return rcts
 
     def get(self, pre, sn=None):
         """
