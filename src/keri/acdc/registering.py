@@ -9,8 +9,10 @@ RegBaser(lmdb) and WebRegBaser(IndexedDB)
 
 from dataclasses import dataclass
 
+from ..core import Blinder, BlindState, BoundState, Number
 from ..db import Komer
-from ..kering import ConfigurationError
+from ..kering import ConfigurationError, Ilks, KeriError, ValidationError
+from .regeventing import vetBlind
 from .regbasing import RegBaser
 from .webregbasing import WebRegBaser
 
@@ -78,6 +80,55 @@ class RegistryStore:
 
     def accept(self, regk, sn, serder):
         return self.baser.accept(regk, sn, serder)
+
+    def _openingEvent(self, said):
+        """Require an accepted BUP, not just a body in dependency escrow."""
+        event = self.event(said)
+        if event is None or event.ilk != Ilks.bup or event.said != said:
+            raise ValidationError("opening requires a known accepted BUP")
+        accepted = self.seqSaider(event.sad['rd'], Number(numh=event.sad['n']).num)
+        if accepted is None or accepted.qb64 != said:
+            raise ValidationError("opening event is not in the accepted TEL")
+        return event
+
+    def putOpening(self, said, blinder):
+        """Explicitly retain one immutable opening of an accepted BUP.
+
+        ``said`` identifies the exact event; ``blinder`` is a Blinder whose
+        full primitive encodings must reproduce that event's BLID. Return True
+        on first insertion, False on exact replay. No root is needed or stored.
+        Credential/Issuee binding and disclosure authorization belong to the
+        consuming operation; possession of this material establishes neither.
+        """
+        if not isinstance(blinder, Blinder):
+            raise ValidationError("opening must be a Blinder")
+        event = self._openingEvent(said)
+        vetBlind(blinder, blid=event.sad['b'])
+        inserted = self.baser.openings.put(said, blinder.qb64)
+        if not inserted and self.baser.openings.get(said) != blinder.qb64:
+            raise ValidationError("held event opening is immutable")
+        return inserted
+
+    def opening(self, said):
+        """Return a fresh verified Blinder for the exact event, or None.
+
+        Recheck accepted membership and full BLID encodings on every read.
+        This does not validate BoundState's credential-specific Issuee reference
+        or authorize publishing the opening with public TEL evidence.
+        """
+        raw = self.baser.openings.get(said)
+        if raw is None:
+            return None
+        event = self._openingEvent(said)
+        vetBlind(raw, blid=event.sad['b'])
+        for clan in (BlindState, BoundState):
+            try:
+                candidate = Blinder(clan=clan, qb64=raw, verify=False)
+            except (KeriError, ValueError, TypeError):
+                continue
+            if candidate.qb64 == raw:
+                return candidate
+        raise ValidationError("invalid held event opening")
 
     def cloneTelIter(self, regk, sn=0):
         """Yield accepted TEL event bodies in sequence from sn inclusive.
