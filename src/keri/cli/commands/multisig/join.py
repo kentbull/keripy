@@ -19,9 +19,9 @@ from ....kering import (TraitCodex, ConfigurationError,
 from ....app import (HaberyDoer, MailboxDirector, WitnessInquisitor,
                      Notifier, Multiplexor, Counselor, Organizer, Poster,
                      multisigInceptExn, multisigInteractExn, multisigRotateExn,
-                     multisigRpyExn, multisigRipExn, multisigRegistryInceptExn, multisigIssueExn,
+                     multisigRpyExn, multisigRipExn, multisigBupExn, multisigRegistryInceptExn, multisigIssueExn,
                      multisigRevokeExn)
-from ....app.grouping import loadHandlers
+from ....app.grouping import loadHandlers, sameRegistryProposal
 
 from ....core import (Prefixer, Number, Diger, Tholder,
                       Schemer, Parser, Revery, SerderKERI,
@@ -159,6 +159,8 @@ class JoinDoer(doing.DoDoer):
                     done = yield from self.rpy(attrs)
                 case '/multisig/rip':
                     done = yield from self.rip(attrs)
+                case '/multisig/bup':
+                    done = yield from self.bup(attrs)
                 case '/multisig/vcp':
                     done = yield from self.vcp(attrs)
                 case '/multisig/iss':
@@ -200,51 +202,63 @@ class JoinDoer(doing.DoDoer):
                 self.rgyV2.close()
 
     def rip(self, attrs):
-        """Prompt for the exact retained RIP anchor and submit one group signature.
+        """Approve one exact retained native registry inception."""
+        return (yield from self._registry(attrs, ilk='rip'))
 
-        A notification authenticates a proposal, not local consent. Declining
-        adds no group signature. Acceptance uses the existing KEL/TEL escrows
-        and Counselor; member delivery is separate from the signing threshold.
+    def bup(self, attrs):
+        """Approve one exact retained BUP without interpreting its blind commitment."""
+        return (yield from self._registry(attrs, ilk='bup'))
+
+    def _registry(self, attrs, *, ilk):
+        """Prompt, contribute and resume native TEL approval through existing owners.
+
+        Receive is distinct from consent. New TEL linkage is rechecked after the
+        prompt; accepted retries reuse the retained exact local contribution.
         """
         if self.rgyV2 is None:
-            raise ConfigurationError("native RIP approval requires --version 2.0")
+            raise ConfigurationError("native registry approval requires --version 2.0")
         wrapper, _ = cloneMessage(self.hby, attrs['d'])
-        if wrapper is None or wrapper.route != '/multisig/rip' or attrs['r'] != wrapper.route:
-            raise ValidationError("RIP notification has no matching retained proposal")
+        if wrapper is None or wrapper.route != f'/multisig/{ilk}' or attrs['r'] != wrapper.route:
+            raise ValidationError("registry notification has no matching retained proposal")
         children = loadParsedNestedSubstreams(self.hby, wrapper.said)
         self.mux.validate(wrapper, nests=children)
-        rip, anchor = [child.serder for child in children]
+        tel, anchor = [child.serder for child in children]
+        regid = tel.said if ilk == 'rip' else tel.sad['rd']
+        ordinal = Number(numh=tel.sad['n']).num
         group = self.hby.habs[wrapper.sad['a']['gid']]
         if (not group.accepted or group.mhab is None
                 or group.mhab.pre not in self.hby.db.signingMembers(pre=group.pre)):
-            raise ValidationError("RIP approval requires an accepted local group member")
+            raise ValidationError("registry approval requires an accepted local group member")
         prior = group.kever.serder.said
         proposal = None
         if self.hby.db.kels.getLast(keys=group.pre, on=anchor.sn) == anchor.said:
             # A restart after approval must resend the retained contribution,
             # rather than sign an accepted historical event with today's keys.
             for said in self.hby.db.meids.get(keys=(anchor.said,)):
+                retained = self.hby.db.exns.get(keys=(said.qb64,))
+                if (retained is None or retained.pre != group.mhab.pre
+                        or not sameRegistryProposal(retained, wrapper)):
+                    continue
                 retained, _ = cloneMessage(self.hby, said.qb64)
-                if (retained.pre == group.mhab.pre and retained.route == '/multisig/rip'
-                        and retained.sad['a'].get('tel') == rip.said):
-                    self.mux.validate(retained, nests=loadParsedNestedSubstreams(self.hby, retained.said))
-                    proposal = retained
-                    attachments = serializeMessage(self.hby, retained.said)[retained.size:]
-                    break
+                self.mux.validate(retained, nests=loadParsedNestedSubstreams(self.hby, retained.said))
+                proposal = retained
+                attachments = serializeMessage(self.hby, retained.said)[retained.size:]
+                break
             if proposal is None:
-                raise ValidationError("accepted RIP anchor has no retained local approval")
+                raise ValidationError("accepted registry anchor has no retained local approval")
         elif anchor.sn != group.kever.sn + 1 or anchor.sad['p'] != prior:
-            raise ValidationError("RIP anchor does not extend the current group event")
+            raise ValidationError("registry anchor does not extend the current group event")
 
-        print(f"\nGroup registry inception proposed for {group.name} ({group.pre}):")
-        print(f"    Registry: {rip.said}\n    Exact group anchor: {anchor.said}")
+        print(f"\nGroup registry {ilk} proposed for {group.name} ({group.pre}):")
+        print(f"    Registry: {regid}\n    TEL event: {tel.said} at ordinal {ordinal}\n    Exact group anchor: {anchor.said}")
         if usage := wrapper.sad['a'].get('usage'):
             print(f"    Usage: {usage}")
         if proposal is None:
-            if not self.auto and input("\nApprove exact RIP anchor [Y|n]? ") not in ('', 'Y', 'y'):
+            if not self.auto and input(f"\nApprove exact {ilk.upper()} anchor [Y|n]? ") not in ('', 'Y', 'y'):
                 return False
+            self.mux.validate(wrapper, nests=children)
             if group.kever.serder.said != prior:
-                raise ValidationError("group changed while RIP approval was pending")
+                raise ValidationError("group changed while registry approval was pending")
 
             if anchor.ilk in ('rot', 'drt'):
                 own = group.rotate(serder=anchor, smids=group.smids, rmids=group.rmids,
@@ -252,9 +266,10 @@ class JoinDoer(doing.DoDoer):
             else:
                 own = messagize(anchor, sigers=group.sign(anchor.raw), gvrsn=Vrsn_2_0)
                 self.psr.parse(ims=bytearray(own), local=True)
-            proposal, attachments = multisigRipExn(
-                group, serializeParsedSubstream(children[0]), own,
-                usage=wrapper.sad['a'].get('usage'))
+            build = multisigRipExn if ilk == 'rip' else multisigBupExn
+            kwa = dict(rgy=self.rgyV2) if ilk == 'bup' else {}
+            proposal, attachments = build(group, serializeParsedSubstream(children[0]), own,
+                                           usage=wrapper.sad['a'].get('usage'), **kwa)
             # Normal authenticated intake records local approval, then Multiplexor
             # replays remote contributions for the same exact anchor.
             self.psr.parseOneBare(ims=bytearray(proposal.raw + attachments), local=True)
@@ -273,14 +288,14 @@ class JoinDoer(doing.DoDoer):
             self.mux.kvy.processEscrows()
             self.counselor.processEscrows()
             self.rgyV2.processEscrows()
-            accepted = self.rgyV2.store.seqEvent(rip.said, 0)
+            accepted = self.rgyV2.store.seqEvent(regid, ordinal)
             submitted = any(cue['said'] == proposal.said and cue['dest'] == proposer
                             for cue in self.postman.cues)
-            if (accepted is not None and accepted.said == rip.said and submitted
+            if (accepted is not None and accepted.said == tel.said and submitted
                     and self.counselor.complete(Prefixer(qb64=group.pre), number, diger)):
                 break
             yield self.tock
-        print(f"Registry {rip.said} accepted; approval submitted to proposing member.")
+        print(f"Registry event {tel.said} accepted; approval submitted to proposing member.")
         return True
 
     def incept(self, attrs):
