@@ -7,11 +7,11 @@ from ....common import Parsery, setupHby, parseVersion
 
 from .....app import (GroupHab, SignifyGroupHab, Receiptor, Anchorer, Notifier, MailboxDirector,
                       HaberyDoer, Multiplexor, Counselor,
-                      Poster, multisigRegistryInceptExn)
+                      Poster, multisigRegistryInceptExn, multisigRipExn)
 from .....app.grouping import loadHandlers
 
 from .....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0, Kinds
-from .....core import SerderKERI, SealEvent, Number, NumDex
+from .....core import SerderKERI, SealEvent, SealSource, Number, NumDex, Diger, messagize
 from .....peer import Exchanger
 from .....vdr import Regery, Registrar
 from .....acdc import Regery as NativeRegery, Registrar as NativeRegistrar
@@ -59,7 +59,7 @@ def registryIncept(args):
             raise ConfigurationError("legacy backers and registry establishment-only options are not supported "
                                      "by native registries; the controller's accepted KEL policy selects anchors")
         return [NativeRegistryInceptor(name=name, base=base, bran=bran, alias=alias,
-                                        registryName=registryName, nonce=nonce)]
+                                        registryName=registryName, nonce=nonce, usage=usage)]
 
     if noBackers and backers:
         print("--no-backers and --backers can not both be provided")
@@ -194,33 +194,49 @@ class RegistryInceptor(doing.DoDoer):
 
 
 class NativeRegistryInceptor(doing.DoDoer):
-    """Own native RIP authoring and ordinary individual KEL completion in this command.
+    """Own native RIP authoring and ordinary controller KEL completion in this command.
 
     The Registrar creates the registry; existing receipting/delegation owners
     complete the exact controller event, and native Regery owns TEL acceptance.
     """
 
-    def __init__(self, name, base, bran, alias, registryName, nonce=None):
-        self.registryName, self.nonce = registryName, nonce
+    def __init__(self, name, base, bran, alias, registryName, nonce=None, usage=None):
+        self.registryName, self.nonce, self.usage = registryName, nonce, usage
+        self.notifier = None
         self.hby = setupHby(name=name, base=base, bran=bran, version=Vrsn_2_0)
         try:
             self.hab = self.hby.habByName(alias)
             if self.hab is None or not self.hab.accepted:
                 raise ConfigurationError(f"{alias} is not an accepted local AID alias")
-            if isinstance(self.hab, (GroupHab, SignifyGroupHab)):
-                raise ConfigurationError("native group registry CLI inception is not supported yet; "
-                                         "use the exact RIP group proposal/join adapter")
+            if isinstance(self.hab, SignifyGroupHab):
+                raise ConfigurationError("native registry CLI cannot sign for a remote Signify group")
+            if isinstance(self.hab, GroupHab) and (self.hab.mhab is None or self.hab.mhab.pre not in
+                                                   self.hby.db.signingMembers(pre=self.hab.pre)):
+                raise ConfigurationError("native registry CLI requires a local group signing member")
             self.rgy = NativeRegery(hby=self.hby, name=name, base=base)
         except Exception:
             self.hby.close()
             raise
         self.registrar = NativeRegistrar(self.rgy)
-        self.receiptor = Receiptor(hby=self.hby)
-        self.swain = Anchorer(hby=self.hby, version=Vrsn_2_0, kind=Kinds.json)
-        doers = [HaberyDoer(habery=self.hby), self.receiptor]
-        if self.hab.kever.delegated:
-            doers.extend([self.swain, MailboxDirector(hby=self.hby, topics=['/receipt', '/replay'],
-                                                     version=Vrsn_2_0, gvrsn=Vrsn_2_0)])
+        doers = [HaberyDoer(habery=self.hby)]
+        if isinstance(self.hab, GroupHab):
+            self.counselor = Counselor(hby=self.hby, version=Vrsn_2_0, kind=Kinds.json)
+            self.postman = Poster(hby=self.hby, version=Vrsn_2_0, kind=Kinds.json)
+            self.notifier = Notifier(self.hby)
+            self.mux = Multiplexor(self.hby, notifier=self.notifier, rgy=self.rgy)
+            self.exc = Exchanger(hby=self.hby, handlers=[])
+            loadHandlers(self.exc, self.mux)
+            self.mbx = MailboxDirector(hby=self.hby, topics=['/receipt', '/multisig', '/replay', '/delegate'],
+                                      exc=self.exc, version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+            self.mbx.parser.rgy = self.rgy
+            doers.extend([self.counselor, self.postman, self.mbx])
+        else:
+            self.receiptor = Receiptor(hby=self.hby)
+            self.swain = Anchorer(hby=self.hby, version=Vrsn_2_0, kind=Kinds.json)
+            doers.append(self.receiptor)
+            if self.hab.kever.delegated:
+                doers.extend([self.swain, MailboxDirector(hby=self.hby, topics=['/receipt', '/replay'],
+                                                         version=Vrsn_2_0, gvrsn=Vrsn_2_0)])
         self.background = list(doers)
         super().__init__(doers=[*doers, doing.doify(self.inceptDo)])
 
@@ -229,6 +245,8 @@ class NativeRegistryInceptor(doing.DoDoer):
             super().exit(deeds=deeds)
         finally:
             if deeds is None:
+                if self.notifier is not None and self.notifier.noter.opened:
+                    self.notifier.noter.close()
                 if self.rgy.store.opened:
                     self.rgy.close()
                 self.hby.close()
@@ -236,21 +254,46 @@ class NativeRegistryInceptor(doing.DoDoer):
     def inceptDo(self, tymth, tock=0.0, **kwa):
         self.wind(tymth)
         yield tock
+        group = isinstance(self.hab, GroupHab)
+        usage = self.usage
+        if group and usage is None:
+            usage = input("Please enter a description of the credential registry: ")
         registry = self.registrar.makeRegistry(self.registryName, self.hab.pre, uuid=self.nonce)
         rip = self.rgy.store.event(registry.regk)
         seal = dict(i=registry.regk, s=rip.sad['n'], d=rip.said)
         author = self.hab.rotate if self.hab.kever.estOnly else self.hab.interact
-        anchor = SerderKERI(raw=author(data=[seal], version=Vrsn_2_0, gvrsn=Vrsn_2_0,
-                                       kind=Kinds.json))
-        if anchor.ilk == 'drt':
+        kwa = {}
+        if group and self.hab.kever.estOnly:
+            kwa = dict(verfers=[self.hby.kevers[mid].verfers[0] for mid in self.hab.smids],
+                       digers=[self.hby.kevers[mid].ndigers[0] for mid in self.hab.rmids])
+        signed = author(data=[seal], version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json, **kwa)
+        anchor = SerderKERI(raw=signed)
+        number, diger = Number(num=anchor.sn), Diger(qb64=anchor.said)
+        if group:
+            tel = messagize(rip, bonds=SealSource(s=anchor.snh, d=anchor.said), gvrsn=Vrsn_2_0)
+            proposal, attachments = multisigRipExn(self.hab, tel, signed, usage=usage)
+            # Persist exact authenticated local consent before any member submission.
+            self.mbx.parser.parseOneBare(ims=bytearray(proposal.raw + attachments), local=True)
+            self.counselor.start(self.hab, self.hab.kever.prefixer, number, diger)
+            for member in self.hby.db.signingMembers(pre=self.hab.pre):
+                if member != self.hab.mhab.pre:
+                    self.postman.send(src=self.hab.mhab.pre, dest=member, topic='multisig',
+                                      serder=proposal, attachment=attachments)
+        elif anchor.ilk == 'drt':
             self.swain.delegation(pre=self.hab.pre, sn=anchor.sn)
             while not self.swain.complete(self.hab.kever.prefixer,
                                            Number(num=anchor.sn, code=NumDex.Huge)):
                 yield tock
         elif self.hab.kever.wits:
             yield from self.receiptor.receipt(self.hab.pre, sn=anchor.sn)
-        while self.rgy.store.seqEvent(registry.regk, 0) is None:
+        while True:
+            if group:
+                self.mux.kvy.processEscrows()
             self.rgy.processEscrows()
+            accepted = self.rgy.store.seqEvent(registry.regk, 0)
+            if (accepted is not None and accepted.said == rip.said
+                    and (not group or self.counselor.complete(self.hab.kever.prefixer, number, diger))):
+                break
             yield tock
         print(f"Registry:  {self.registryName}({registry.regk}) "
               f"\n\tcreated for Identifier Prefix:  {self.hab.pre}")

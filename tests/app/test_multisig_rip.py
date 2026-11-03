@@ -11,6 +11,7 @@ from keri.acdc.registraring import Regery
 from keri.app import Counselor, Multiplexor, Notifier, openHby
 from keri.app.grouping import loadHandlers, multisigRipExn
 from keri.cli.commands.multisig.join import JoinDoer
+from keri.cli.commands.vc.registry.incept import NativeRegistryInceptor
 from keri.kering import ValidationError
 from keri.core import Diger, Number, Parser, SealSource, SerderACDC, SerderKERI, exchange, interact, messagize
 from keri.peer import Exchanger
@@ -18,7 +19,7 @@ from keri.peer.exchanging import serializeParsedSubstream
 
 
 @contextmanager
-def participant_stores(*, temp=True, base=""):
+def participant_stores(*, temp=True, base="", est_only=False):
     with ExitStack() as stack:
         hbys = [stack.enter_context(openHby(name=f'rip-{uuid4().hex}-{i}', temp=temp, base=base,
                                            version=Vrsn_2_0)) for i in range(3)]
@@ -30,7 +31,7 @@ def participant_stores(*, temp=True, base=""):
                     ims=bytearray(member.msgOwnInception(gvrsn=Vrsn_2_0)), local=True)
         mids = [member.pre for member in members]
         groups = [hby.makeGroupHab(group='issuer', mhab=member, smids=mids,
-                                   isith='2', nsith='2', version=Vrsn_2_0, kind=Kinds.json)
+                                   isith='2', nsith='2', estOnly=est_only, version=Vrsn_2_0, kind=Kinds.json)
                   for hby, member in zip(hbys, members)]
         inception = hbys[0].db.evts.get((groups[0].pre, groups[0].pre))
         inception_stream = messagize(inception, sigers=[hby.db.sigs.get((groups[0].pre, inception.said))[0]
@@ -323,3 +324,102 @@ def test_join_exit_closes_native_owner_before_escrow_doer_starts():
             assert joined.rgyV2.store.opened
             joined.exit()
             assert not joined.rgyV2.store.opened
+
+
+@pytest.mark.parametrize('est_only', [False, True], ids=['interaction', 'accepted-establishment-only'])
+@pytest.mark.parametrize('answer', ['n', 'y'], ids=['decline', 'approve'])
+def test_native_registry_command_proposes_exact_anchor_for_real_join(monkeypatch, est_only, answer):
+    with participant_stores(temp=False, base=f'r10group-{uuid4().hex}', est_only=est_only) as participants:
+        hbys, groups, rgys = participants
+        gid, mids = groups[0].pre, [group.mhab.pre for group in groups]
+        if est_only:
+            for group in groups:
+                wire = group.mhab.rotate(version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+                for hby in hbys:
+                    Parser(kvy=hby.kvy, version=Vrsn_2_0).parse(ims=bytearray(wire), local=True)
+        name, base = hbys[0].name, hbys[0].base
+        rgys[0].close()
+        hbys[0].close()
+        command = NativeRegistryInceptor(name=name, base=base, bran=None, alias='issuer',
+                                           registryName='membership', usage='member credentials')
+        operation = command.inceptDo(tymth=lambda: 0.0)
+        try:
+            next(operation)
+            next(operation)  # One contribution cannot satisfy the ordinary 2-of-3 threshold.
+            queued = list(command.postman.evts)
+            assert [event['dest'] for event in queued] == mids[1:]
+            wrapper = queued[0]['serder']
+            assert command.exc.complete(wrapper.said), 'own authenticated consent must precede submission'
+            children = Parser(version=Vrsn_2_0).parseOneBare(
+                ims=bytearray(wrapper.raw + queued[0]['attachment']), processive=False).nests
+            rip, anchor = [child.serder for child in children]
+            assert anchor.ilk == ('rot' if est_only else 'ixn')
+            assert wrapper.sad['a'] == dict(gid=gid, tel=rip.said, anc=anchor.said, usage='member credentials')
+            assert dict(i=rip.said, s='0', d=rip.said) in anchor.seals
+            assert [(number.num, diger.qb64) for number, diger in children[0].sscs] == [(anchor.sn, anchor.said)]
+            assert command.hab.kever.sn == 0
+            assert command.rgy.store.seqEvent(rip.said, 0) is None
+            assert not command.counselor.complete(command.hab.kever.prefixer, Number(num=1), Diger(qb64=anchor.said))
+            notifier, _, receiver = processors(hbys[1], rgys[1])
+            receiver.parse(ims=bytearray(wrapper.raw + queued[0]['attachment']))
+            attrs = next(notifier.noter.notes.getTopItemIter())[1].attrs
+            notifier.noter.close()
+            monkeypatch.setattr('builtins.input', lambda _: answer)
+            with restart_join(hbys[1], rgys[1]) as joined:
+                approval = joined.rip(attrs)
+                if answer == 'n':
+                    with pytest.raises(StopIteration) as done:
+                        next(approval)
+                    assert done.value.value is False
+                    assert not joined.postman.evts
+                    next(operation)
+                    assert command.rgy.store.seqEvent(rip.said, 0) is None
+                    assert command.hab.kever.sn == 0
+                else:
+                    next(approval)
+                    returned = joined.postman.evts[0]
+                    assert returned['dest'] == mids[0]
+                    command.mbx.parser.parse(ims=bytearray(returned['serder'].raw + returned['attachment']))
+                    command.mux.kvy.processEscrows()
+                    command.counselor.processEscrows()
+                    with pytest.raises(StopIteration):
+                        next(operation)
+                    assert command.rgy.store.seqEvent(rip.said, 0).raw == rip.raw
+                    assert command.hab.kever.serder.raw == anchor.raw
+                    assert command.counselor.complete(command.hab.kever.prefixer, Number(num=1), Diger(qb64=anchor.said))
+                    assert groups[2].kever.sn == 0
+                    assert len(command.hby.db.sigs.get((gid, anchor.said))) == 2
+                    assert list(command.hby.ks.rroots.getTopItemIter()) == []
+                    approval.close()
+        finally:
+            operation.close()
+            command.exit()
+            assert not command.rgy.store.opened and not command.hby.db.opened
+            assert not command.notifier.noter.opened
+
+
+def test_native_registry_command_prompt_cancellation_precedes_registry_and_kel_mutation(monkeypatch):
+    with participant_stores(temp=False, base=f'r10group-{uuid4().hex}') as participants:
+        hbys, _, rgys = participants
+        name, base = hbys[0].name, hbys[0].base
+        rgys[0].close()
+        hbys[0].close()
+        command = NativeRegistryInceptor(name=name, base=base, bran=None, alias='issuer',
+                                           registryName='cancelled')
+        operation = command.inceptDo(tymth=lambda: 0.0)
+        try:
+            def cancel(prompt):
+                assert 'description' in prompt
+                assert command.hab.kever.sn == 0 and command.rgy.names == {}
+                assert list(command.rgy.baser.evts.getTopItemIter()) == []
+                raise KeyboardInterrupt
+            monkeypatch.setattr('builtins.input', cancel)
+            next(operation)
+            with pytest.raises(KeyboardInterrupt):
+                next(operation)
+            assert command.hab.kever.sn == 0 and command.rgy.names == {}
+        finally:
+            operation.close()
+            command.exit()
+            assert not command.rgy.store.opened and not command.hby.db.opened
+            assert not command.notifier.noter.opened

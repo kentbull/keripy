@@ -93,24 +93,31 @@ def test_default_registry_commands_preserve_legacy_store(tmp_path):
     assert 'legacy' not in kli(tmp_path, 'vc', 'registry', 'list', *common, '--version', '2.0')
 
 
-def test_native_group_cli_refuses_before_registry_or_kel_mutation(tmp_path):
+def test_native_group_installed_cli_accepts_exact_registry_anchor(tmp_path):
     name, base, common = create_issuer(tmp_path)
     hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_2_0)
     member = hby.habByName('issuer')
     group = hby.makeGroupHab(group='group', mhab=member, smids=[member.pre],
-                            isith='1', nsith='1', version=Vrsn_2_0)
-    assert group.accepted
-    prefix, prior = group.pre, group.kever.serder.said
+                            isith='1', nsith='1', data=[dict(d=member.kever.serder.said)],
+                            version=Vrsn_2_0)
+    assert group.accepted and group.pre != member.pre
+    prefix = group.pre
     hby.close()
-    refused = kli(tmp_path, 'vc', 'registry', 'incept', *common, '--version', '2.0',
-                  '--alias', 'group', '--registry-name', 'group-registry', succeeds=False)
-    assert 'native group registry CLI inception is not supported yet' in refused
+    created = kli(tmp_path, 'vc', 'registry', 'incept', *common, '--version', '2.0',
+                  '--alias', 'group', '--registry-name', 'group-registry', '--usage', 'membership')
     hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_2_0)
     rgy = Regery(hby=hby, name=name, base=base)
     try:
-        assert hby.habs[prefix].kever.serder.said == prior
-        assert rgy.names == {}
-        assert list(rgy.baser.evts.getTopItemIter()) == []
+        registry = rgy.registryByName('group-registry')
+        rip = rgy.store.seqEvent(registry.regk, 0)
+        anchor = hby.habs[prefix].kever.serder
+        assert rip.said in created and anchor.sn == 1
+        assert dict(i=rip.said, s='0', d=rip.said) in anchor.seals
+        assert rgy.store.anchor(rip.said)[1].qb64 == anchor.said
+        wrappers = [event for _, event in hby.db.exns.getTopItemIter()
+                    if event.route == '/multisig/rip']
+        assert len(wrappers) == 1 and wrappers[0].sad['a']['usage'] == 'membership'
+        assert list(hby.ks.rroots.getTopItemIter()) == []
     finally:
         rgy.close()
         hby.close()
