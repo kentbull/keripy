@@ -112,13 +112,10 @@ class JoinDoer(doing.DoDoer):
         kwa = dict(version=self.version, gvrsn=self.version, kind=Kinds.json) if self.version is not None else {}
         self.mbx = MailboxDirector(hby=self.hby, exc=self.exc, topics=['/receipt', '/multisig', '/replay',
                                                                        '/delegate'],
-                                   **kwa)
-        self.mbx.parser.rgy = self.rgyV2
+                                   rgy=self.rgyV2, **kwa)
         self.postman = Poster(hby=self.hby, version=self.version, kind=Kinds.json)
 
         doers = [self.hbyDoer, self.witq,  self.mbx, self.counselor, self.registrar, self.credentialer, self.postman]
-        if self.rgyV2 is not None:
-            doers.append(doing.doify(self.registryDo))
         self.toRemove = list(doers)
         doers.extend([doing.doify(self.joinDo)])
         self.auto = auto
@@ -188,17 +185,6 @@ class JoinDoer(doing.DoDoer):
             super().exit(deeds=deeds)
         finally:
             if deeds is None and self.rgyV2 is not None and self.rgyV2.store.opened:
-                self.rgyV2.close()
-
-    def registryDo(self, tymth, tock=0.03125, **kwa):
-        """Retry native TEL dependencies within the existing join command lifetime."""
-        try:
-            yield tock
-            while True:
-                self.rgyV2.processEscrows()
-                yield tock
-        finally:
-            if self.rgyV2.store.opened:
                 self.rgyV2.close()
 
     def rip(self, attrs):
