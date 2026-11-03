@@ -19,7 +19,7 @@ from keri.acdc.ipexing import _validDisclosurePath
 from keri.app import openCF, openHby
 from keri.core import (Aggor, Blinder, Codens, Compactor, Counter, Diger, GenDex,
                        Kevery, Kramer, Noncer, Number, Parser, Schemer, SealEvent,
-                       SealSource, messagize, SerderKERI, Serdery, Texter, exchange)
+                       SealSource, messagize, Saider, SerderKERI, Serdery, Texter, exchange)
 from keri.db import reopenDB
 from keri.acdc import chaining
 from keri.acdc.chaining import Verdicts
@@ -8543,10 +8543,14 @@ def test_ipex_v2_rejects_substituted_presentation_registry():
             proof, presented = registrar.present(actualRegistry, grant=grant)
             _anchor(issuee, actualRegistry, presented)
 
-            # Simulate foreign evidence indexed under the issuer-declared key.
+            # Inject misindexed storage directly: normal acceptance refuses it.
             declaredRegk = Diger(ser=b"declared presentation registry").qb64
-            rgy.store.accept(declaredRegk, 0, rip)
-            rgy.store.accept(declaredRegk, 1, presented)
+            for sn, event in enumerate((rip, presented)):
+                rgy.baser.evts.pin(keys=event.said, val=event)
+                rgy.baser.tels.pin(keys=declaredRegk, on=sn,
+                                  val=Saider(qb64=event.said))
+            rgy.baser.heads.pin(keys=declaredRegk,
+                               val=Saider(qb64=presented.said))
 
             # Vet the substituted chain through the production registry path.
             handler = IpexHandler(resource="/ipex/grant",
