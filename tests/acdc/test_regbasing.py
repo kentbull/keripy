@@ -12,7 +12,7 @@ from keri.db import openLMDB, subing
 
 
 def test_regbaser_store_contract():
-    """Test the native six-store registry database contract."""
+    """Test public TEL stores and the separate held-opening store."""
     with openLMDB(cls=regbasing.RegBaser,
                   name="test-regbaser", temp=True) as baser:
         assert isinstance(baser, regbasing.RegBaser)
@@ -33,8 +33,9 @@ def test_regbaser_store_contract():
         assert baser.heads.klas is coring.Saider
         assert isinstance(baser.maes, subing.B64OnIoSetSuber)
         assert isinstance(baser.ooes, subing.B64OnIoSetSuber)
+        assert isinstance(baser.openings, subing.Suber)
 
-        for name in ("evts", "ancs", "tels", "heads", "maes", "ooes"):
+        for name in ("evts", "ancs", "tels", "heads", "maes", "ooes", "openings"):
             assert getattr(baser, name).sdb.flags()["dupsort"] is False
 
         issuer = "EA2X8Lfrl9lZbCGz8cfKIvM_cqLyTYVLSFLhnttezlzQ"

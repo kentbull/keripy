@@ -10,13 +10,13 @@ import os
 
 from ..core import Diger, Number, Saider, SerderACDC
 from ..db import (LMDBer, onKey, B64OnIoSetSuber, CatCesrSuber, CesrOnSuber,
-                  CesrSuber, SerderSuber)
+                  CesrSuber, SerderSuber, Suber)
 from ..kering import Ilks, ValidationError
 
 
 class RegBaser(LMDBer):
     """
-    RegBaser sets up named sub databases for public ACDC registry TELs.
+    RegBaser stores public ACDC registry TELs and explicitly held openings.
 
     Attributes:
         see superclass LMDBer for inherited attributes
@@ -70,6 +70,12 @@ class RegBaser(LMDBer):
             More than one value per effective DB key is allowed in insertion
             order without dupsort.
 
+        .openings is a Suber of exact CESR opening tuples keyed by accepted
+            BUP SAID. RegistryStore verifies both acceptance and the BLID on
+            write/read. These are private held disclosure material, not roots;
+            ordinary public TEL cloning never includes them. Intake does not
+            retain incoming openings implicitly.
+
     """
 
     TailDirPath = os.path.join("keri", "acdc", "reg")
@@ -111,6 +117,7 @@ class RegBaser(LMDBer):
         self.heads = CesrSuber(db=self, subkey='heds.', klas=Saider)
         self.maes = B64OnIoSetSuber(db=self, subkey='maes.')
         self.ooes = B64OnIoSetSuber(db=self, subkey='ooes.')
+        self.openings = Suber(db=self, subkey='opns.')
 
         return self.opened
 
