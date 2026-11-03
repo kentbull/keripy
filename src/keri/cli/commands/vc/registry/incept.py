@@ -227,8 +227,8 @@ class NativeRegistryInceptor(doing.DoDoer):
             self.exc = Exchanger(hby=self.hby, handlers=[])
             loadHandlers(self.exc, self.mux)
             self.mbx = MailboxDirector(hby=self.hby, topics=['/receipt', '/multisig', '/replay', '/delegate'],
-                                      exc=self.exc, version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
-            self.mbx.parser.rgy = self.rgy
+                                      exc=self.exc, rgy=self.rgy, version=Vrsn_2_0,
+                                      gvrsn=Vrsn_2_0, kind=Kinds.json)
             doers.extend([self.counselor, self.postman, self.mbx])
         else:
             self.receiptor = Receiptor(hby=self.hby)

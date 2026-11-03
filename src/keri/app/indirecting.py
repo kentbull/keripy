@@ -510,7 +510,7 @@ class MailboxDirector(doing.DoDoer):
         ._tock is hidden attribute for .tock property"""
 
     def __init__(self, hby, topics, ims=None, verifier=None, kvy=None, exc=None, rep=None, cues=None, rvy=None,
-                 tvy=None, witnesses=True, version=None, gvrsn=None, kind=None, **kwa):
+                 tvy=None, witnesses=True, version=None, gvrsn=None, kind=None, rgy=None, **kwa):
         """
         Initialize instance.
 
@@ -521,11 +521,15 @@ class MailboxDirector(doing.DoDoer):
 
         Parameters:
             hab: Habitat instance of local controller's context
+            rgy: optional borrowed native Regery, sharing this Habery's KEL evidence.
+                Parser intake and escrow retries use it; the caller owns closing it.
+            rvy: optional borrowed Revery; register reply handlers on its actual router.
             client: TCP Client instance
             direct: Boolean, True means direwct mode process cured receipts
                 False means indirect mode don't process cue'ed receipts"""
         self.hby = hby
         self.verifier = verifier
+        self.rgy = rgy
         self.exchanger = exc
         self.rep = rep
         self.topics = topics
@@ -544,7 +548,7 @@ class MailboxDirector(doing.DoDoer):
                       doing.doify(self.msgDo),
                       doing.doify(self.escrowDo)])
 
-        self.rtr = routing.Router()
+        self.rtr = rvy.rtr if rvy is not None else routing.Router()
         self.rvy = rvy if rvy is not None else routing.Revery(db=self.hby.db, rtr=self.rtr, cues=cues,
                                                               lax=True, local=False)
 
@@ -575,6 +579,7 @@ class MailboxDirector(doing.DoDoer):
                                      exc=self.exchanger,
                                      rvy=self.rvy,
                                      vry=self.verifier,
+                                     rgy=self.rgy,
                                      version=parser_version)
 
         super(MailboxDirector, self).__init__(doers=doers, **kwa)
@@ -710,6 +715,8 @@ class MailboxDirector(doing.DoDoer):
         while True:
             self.kvy.processEscrows()
             self.rvy.processEscrowReply()
+            if self.rgy is not None:
+                self.rgy.processEscrows()
             if self.exchanger is not None:
                 self.exchanger.processEscrow()
             if self.tvy is not None:
