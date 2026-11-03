@@ -534,7 +534,127 @@ class IpexHandler:
             return False
         if registries:
             raise MissingChainError("Grant awaits issuance of its fresh registries")
-        return self._verifyGrantState(serder, *context)
+        if self._verifyGrantState(serder, *context):
+            return True
+        # Preserve ordinary final reductions, including satisfied optional edges.
+        # Only a genuinely absent opening can change a refused issuer factor to
+        # retryable unknown; no state or acceptance record is manufactured.
+        presentation = self._presentationState(serder, *context)
+        if presentation is not None and presentation[0]:
+            nodes, order = context
+            verdict = self._evaluateNode(order[0], nodes=nodes, memo={},
+                                         pending=presentation[0])
+            if (verdict is not None and verdict.verdict == chaining.Verdicts.unknown
+                    and verdict.retryable):
+                raise MissingChainError("Grant awaits current issuer-registry openings")
+        return False
+
+    def presentationContext(self, serder, *, nests, sscs=None, evidence=None, retained=False):
+        """Return per-registry auxiliary scope, never an admission verdict.
+
+        This local auxiliary policy is stricter than ordinary optional graph
+        reduction: all supplied openings and every non-registry issuer factor
+        must authenticate. Presentation-registry authorization must already be
+        complete. A separate discloser needs this node's issuer to endorse this
+        exact Grant; an origin issuer cannot delegate another issuer's registry.
+        Exchanger owns retained sender authentication and the fixed lifetime.
+        """
+        context = self._verifyContext(serder, nests=nests, sscs=sscs,
+                                      evidence=evidence, retained=retained)
+        if not context:
+            return {}
+        presentation = self._presentationState(serder, *context)
+        if presentation is None:
+            return {}
+        pending, registries = presentation
+        nodes, order = context
+        verdict = self._evaluateNode(order[0], nodes=nodes, memo={}, pending=pending)
+        if (verdict is None or not (verdict.verdict == chaining.Verdicts.valid or
+                verdict.verdict == chaining.Verdicts.unknown and verdict.retryable)):
+            return {}
+        tsgs, cigars, seals = evidence or ([], [], [])
+        tsgs, cigars, seals = self.verifyEvidence(
+            serder, tsgs=tsgs, cigars=cigars, sourceSeals=seals)
+        endorsers = ({pre.qb64 for pre, *_ in tsgs}
+                     | {cigar.verfer.qb64 for cigar in cigars}
+                     | {pre.qb64 for pre, *_ in seals})
+        authorized = {}
+        for regk, saids in registries.items():
+            for said in saids:
+                nest = nodes[said]
+                acdc = nest["serder"] if isinstance(nest, dict) else nest.serder
+                if (serder.pre not in (acdc.israid, acdc.iseaid)
+                        and acdc.israid not in endorsers):
+                    break
+            else:
+                authorized[regk] = tuple(saids)
+        return authorized
+
+    def _presentationState(self, serder, nodes, order):
+        """Classify missing issuer openings after validating all supplied claims.
+
+        Accepted TEL history proves registry ownership, not its undisclosed
+        state. Missing current/suffix openings remain unknown. A supplied proof
+        must match an accepted event in a registry selected by this node and
+        bind that node (or this Grant for a presentation registry).
+        """
+        from . import regeventing
+
+        pending, registries = set(), {}
+        try:
+            for said in order:
+                nest = nodes[said]
+                acdc = nest["serder"] if isinstance(nest, dict) else nest.serder
+                proofs = self._blindProofs(nest)
+                regk = acdc.sad.get("rd")
+                if not regk:
+                    if (proofs or self._verifyIssuerAuthNode(acdc, nest).verdict
+                            != chaining.Verdicts.valid):
+                        return None
+                    continue
+                evidence = self._registryEvidence(regk)
+                if evidence is None:
+                    return None
+                rip, updates = evidence
+                if not updates or rip.said != regk or rip.israid != acdc.israid:
+                    return None  # Fresh RIP authority remains pendingGrant's job.
+                regeventing.vet(rip, updates, db=self.hby.db)
+                allowed = {update.sad["b"]: (said, acdc) for update in updates}
+                # Presentation proofs share the node-local attachment stream.
+                # Load their accepted events only when a supplied proof needs it.
+                if any(proof.said not in allowed for proof in proofs):
+                    for issuee, preg in self._presentationRegistries(acdc) or []:
+                        prip, pups = self._registryEvidence(preg)
+                        if prip.said != preg or prip.israid != issuee:
+                            return None
+                        regeventing.vet(prip, pups, db=self.hby.db)
+                        for up in pups:
+                            if (up.sad["b"] in allowed
+                                    and allowed[up.sad["b"]] != (serder.said, None)):
+                                return None  # One BLID cannot select two targets.
+                            allowed[up.sad["b"]] = (serder.said, None)
+                opened = {}
+                for proof in proofs:
+                    if proof.said in opened or proof.said not in allowed:
+                        return None
+                    target, credential = allowed[proof.said]
+                    td, state = regeventing.vetBlind(proof, blid=proof.said)
+                    regeventing.vetBound(proof, acdc=credential, db=self.hby.db)
+                    if (td or state) and td != target:
+                        return None
+                    opened[proof.said] = (td, state)
+                for update in reversed(updates):
+                    if update.sad["b"] not in opened:
+                        pending.add(said)
+                        break
+                    if any(opened[update.sad["b"]]):
+                        break
+                else:
+                    return None  # A wholly disclosed placeholder TEL binds no ACDC.
+                registries.setdefault(regk, []).append(said)
+        except (KeriError, ValueError, TypeError):
+            return None
+        return pending, registries
 
     def pendingGrant(self, serder, *, nests, sscs=None, evidence=None):
         """Return fresh registry scope after shared context checks, without writes.
@@ -650,7 +770,7 @@ class IpexHandler:
         return True
 
     def _verifyContext(self, serder, attachments=None, nests=None, sscs=None,
-                       evidence=None):
+                       evidence=None, *, retained=False):
         """Validate exchange context, schemas and disclosure authorization.
 
         Parameters:
@@ -663,6 +783,8 @@ class IpexHandler:
             sscs (list | None): Sender source-seal couples retained after KRAM.
             evidence (tuple | None): Post-KRAM signature groups, cigars, and
                 source-seal triples accepted for route validation.
+            retained (bool): Recheck this exact accepted Grant's context without
+                treating its own prior-response link as a competing response.
 
         Returns:
             tuple | bool: Grant nodes/order, an empty tuple for another valid
@@ -744,7 +866,8 @@ class IpexHandler:
             return False
         else:
             # Retrieve prior serder
-            pserder = self._verifyReplyChain(verb=verb, serder=serder, dig=dig)
+            pserder = self._verifyReplyChain(verb=verb, serder=serder, dig=dig,
+                                             retained=retained)
             if pserder is None:
                 return False
 
@@ -988,7 +1111,7 @@ class IpexHandler:
 
         return nodes
 
-    def _verifyReplyChain(self, verb, serder, dig):
+    def _verifyReplyChain(self, verb, serder, dig, *, retained=False):
         """Validate the prior-link rules for a reply inside an IPEX thread.
 
         Parameters:
@@ -1033,8 +1156,11 @@ class IpexHandler:
         if serder.ked.get("x", "") != xid:
             return None
 
-        if self.response(pserder) is not None:
-            return None
+        if (response := self.response(pserder)) is not None:
+            accepted = self.hby.db.exns.get(keys=(serder.said,)) if retained else None
+            if (verb != Ipex.grant or accepted is None or accepted.raw != serder.raw
+                    or response.said != serder.said):
+                return None
 
         return pserder
 
@@ -1437,7 +1563,7 @@ class IpexHandler:
             records (dict | None): Node SAID to the ``RegStateRecord`` its
                 registry proof authenticated, filled in as nodes are evaluated so
                 the caller can persist what each registry said.
-            pending (Collection): Fresh issuance node SAIDs whose own state is
+            pending (Collection): Node SAIDs whose issuer registry state is
                 unresolved. Their edges are still evaluated in full; no state
                 record is produced for them. Empty for final verification.
 
@@ -1460,7 +1586,7 @@ class IpexHandler:
         # Both what authenticates the node and what its registry says about it,
         # as one verdict. A verdict rather than a raise, so an Operator that does
         # not need this node is not made to wait on it.
-        auth = (chaining.unknown("fresh registry awaits issuance", retryable=True)
+        auth = (chaining.unknown("registry awaits authenticated state", retryable=True)
                 if said in pending else self._verifyIssuerAuthNode(
                     serder=nserder, nest=nest, records=records))
 

@@ -6006,6 +6006,7 @@ def test_ipex_v2_escrows_registry_backed_grant_until_tel_evidence_arrives(sender
             assert ims == bytearray()
             assert recipientHby.db.exns.get(keys=(grantExn.said,)) is None
             assert recipientHby.db.epse.get(keys=(grantExn.said,)) is not None
+            deadline = recipientHby.db.epsd.get(keys=(grantExn.said,)).dts
             assert len(recipientHby.db.ests.get(
                 keys=(grantExn.said, anchorHab.pre))) == 1
             assert recorder.items == []
@@ -6038,11 +6039,12 @@ def test_ipex_v2_escrows_registry_backed_grant_until_tel_evidence_arrives(sender
 
             if not validProof:
                 # Once TEL evidence is available, the proof for a different
-                # credential is a permanent refusal. Remove all escrow rows.
+                # credential is a permanent refusal. Evict its evidence while
+                # preserving the first Grant lifetime against retransmission.
                 assert recipientHby.db.exns.get(keys=(grantExn.said,)) is None
                 assert list(recipientHby.db.erpy.getTopItemIter()) == []
                 assert recipientHby.db.epse.get(keys=(grantExn.said,)) is None
-                assert recipientHby.db.epsd.get(keys=(grantExn.said,)) is None
+                assert recipientHby.db.epsd.get(keys=(grantExn.said,)).dts == deadline
                 assert list(recipientHby.db.esigs.getTopItemIter(
                     keys=(grantExn.said, ""))) == []
                 assert recipientHby.db.ecigs.get(keys=(grantExn.said,)) == []

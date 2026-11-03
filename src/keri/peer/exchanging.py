@@ -477,6 +477,11 @@ class Exchanger:
                                   cigars=cigars,
                                   sourceSeals=sourceSeals)
 
+        # One original auxiliary lifetime also covers a Grant's schema wait.
+        if self._isV2Grant(serder):
+            self.hby.db.epsd.put(keys=(dig,), val=Dater(dts=helping.toIso8601(
+                self._partialSignedDeadline(serder))))
+
         # Freeze the PSE deadline once; retransmission must not extend it.
         # Older receipt-time rows expire conservatively after this transition.
         if dater is not None:
@@ -489,6 +494,20 @@ class Exchanger:
                 vals=[bytes(serializeParsedSubstream(nest)) for nest in nests],
             )
         return escrow.put(keys=keys, val=serder)
+
+    @staticmethod
+    def _isV2Grant(serder):
+        return serder.pvrsn.major >= 2 and serder.ked["r"] == "/ipex/grant"
+
+    def _removeEscrowDeadline(self, serder, dater):
+        """Keep a V2 Grant's first lifetime even after its escrow body is evicted."""
+        dig = serder.said
+        schemaPending = any(self.hby.db.emse.getTopItemIter(keys=(dig,)))
+        if dater is self.hby.db.emsd and schemaPending:
+            return
+        if dater is self.hby.db.epsd and self._isV2Grant(serder):
+            return
+        dater.rem(keys=(dig,))
 
     def _partialSignedDeadline(self, serder):
         """Use an accepted Grant's XID lifetime, otherwise the ordinary PSE window."""
@@ -583,9 +602,7 @@ class Exchanger:
             dateKeys = (dig,)
             if self.hby.db.exns.get(keys=(dig,)) is not None:
                 escrow.rem(keys=escrowKeys)
-                if not sharedDate or not any(
-                        self.hby.db.emse.getTopItemIter(keys=(dig,))):
-                    dater.rem(keys=dateKeys)
+                self._removeEscrowDeadline(serder, dater)
                 continue
 
             try:
@@ -653,8 +670,7 @@ class Exchanger:
                 if (escrow is self.hby.db.emse and
                         self.hby.db.epse.get(keys=(dig,)) is not None):
                     escrow.rem(keys=escrowKeys)
-                    if not any(self.hby.db.emse.getTopItemIter(keys=(dig,))):
-                        dater.rem(keys=dateKeys)
+                    self._removeEscrowDeadline(serder, dater)
                 if logger.isEnabledFor(logging.TRACE):
                     logger.trace("Exchange %s unescrow failed: %s\n",
                                  label, ex.args[0])
@@ -662,9 +678,7 @@ class Exchanger:
             except Exception as ex:
                 saved = self.hby.db.exns.get(keys=(dig,)) is not None
                 escrow.rem(keys=escrowKeys)
-                if not sharedDate or not any(
-                        self.hby.db.emse.getTopItemIter(keys=(dig,))):
-                    dater.rem(keys=dateKeys)
+                self._removeEscrowDeadline(serder, dater)
                 pending = (self.hby.db.epse.get(keys=(dig,)) is not None
                            or any(self.hby.db.emse.getTopItemIter(keys=(dig,))))
                 if not saved and not pending:
@@ -693,9 +707,7 @@ class Exchanger:
                         )
                     if moved:
                         escrow.rem(keys=escrowKeys)
-                        if not sharedDate or not any(
-                                self.hby.db.emse.getTopItemIter(keys=(dig,))):
-                            dater.rem(keys=dateKeys)
+                        self._removeEscrowDeadline(serder, dater)
                     if logger.isEnabledFor(logging.TRACE):
                         logger.trace("Exchange %s unescrow still pending: said=%s",
                                      label, serder.said)
@@ -703,9 +715,7 @@ class Exchanger:
 
                 saved = self.hby.db.exns.get(keys=(dig,)) is not None
                 escrow.rem(keys=escrowKeys)
-                if not sharedDate or not any(
-                        self.hby.db.emse.getTopItemIter(keys=(dig,))):
-                    dater.rem(keys=dateKeys)
+                self._removeEscrowDeadline(serder, dater)
                 pending = (self.hby.db.epse.get(keys=(dig,)) is not None
                            or any(self.hby.db.emse.getTopItemIter(keys=(dig,))))
                 if not saved and not pending:
@@ -756,6 +766,9 @@ class Exchanger:
 
         exnDiger = Diger(qb64=serder.said)
         if self.hby.db.exns.get(keys=(dig,)) is None:
+            if self._isV2Grant(serder):
+                self.hby.db.epsd.put(keys=(dig,), val=Dater(dts=helping.toIso8601(
+                    self._partialSignedDeadline(serder))))
             # An accepted empty set replaces provisional rows too; pin([]) does not.
             self.hby.db.epath.rem(keys=(dig,))
             self.hby.db.enst.rem(keys=(dig,))
@@ -780,7 +793,42 @@ class Exchanger:
         self.hby.db.exns.put(keys=(dig,), val=serder)
         if escrowed:
             self.hby.db.epse.rem(dig)
-            self.hby.db.epsd.rem(dig)
+            self._removeEscrowDeadline(serder, self.hby.db.epsd)
+
+    def presentationContext(self, said, *, xid, sender, recipient):
+        """Read a live, authenticated Grant's exact retained presentation scope.
+
+        Accepted or pending presence is not authorization. Reverify stored
+        authentication and shared disclosure rules before returning
+        (Grant, retained nests, registry -> selected node SAIDs). A legacy
+        accepted Grant without an original deadline is unavailable. This lookup
+        changes no stores and cannot authorize admission or fresh-root DH.
+        """
+        accepted = self.hby.db.exns.get(keys=(said,))
+        serder = accepted or self.hby.db.epse.get(keys=(said,))
+        dater = self.hby.db.epsd.get(keys=(said,))
+        handler = self.routes.get("/ipex/grant")
+        if (serder is None or dater is None or handler is None
+                or not self._isV2Grant(serder)
+                or serder.pre != sender or serder.ked.get("ri") != recipient
+                or (serder.said if serder.ilk == Ilks.xip else serder.ked.get("x")) != xid
+                or self.hby.db.erpy.get(keys=(said,)) is not None
+                or helping.nowUTC() >= dater.datetime):
+            return None
+        try:
+            tsgs, cigars = verify(self.hby, serder)
+            seals = [(Prefixer(qb64=keys[1]), number, diger)
+                     for keys, (number, diger) in self.hby.db.ests.getTopItemIter(
+                         keys=(said, ""))]
+            nests = loadParsedNestedSubstreams(self.hby, said)
+            registries = handler.presentationContext(
+                serder, nests=nests, retained=accepted is not None,
+                sscs=[(number, diger) for pre, number, diger in seals if pre.qb64 == sender],
+                evidence=(tsgs, cigars, seals))
+        except (ValidationError, MissingChainError, MissingSchemaError,
+                MissingSenderKeyStateError):
+            return None
+        return (serder, nests, registries) if registries else None
 
     def pendingGrant(self, said, *, xid, sender, recipient):
         """Read an authenticated, live pending issuance Grant and registry scope.
