@@ -3830,8 +3830,8 @@ def test_ipex_v2_grant_validates_disclosed_node_schema(monkeypatch):
                  version=Vrsn_2_0) as hby:
         hab = hby.makeHab(name="test")
 
-        # Record issuer and schema validation order. Issuer-auth runs per node
-        # inside the DAG reduction, so hook the per-node check.
+        # Shared context validates schemas before final issuer-state reduction,
+        # so an unresolved schema cannot authorize a pending issuance context.
         stages = []
         verifyIssuerAuth = IpexHandler._verifyIssuerAuthNode
         verifyNodeSchemas = IpexHandler._verifyNodeSchemas
@@ -3902,7 +3902,7 @@ def test_ipex_v2_grant_validates_disclosed_node_schema(monkeypatch):
         ims.extend(grantAtc)
         Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
         assert ims == bytearray()
-        assert stages[:2] == ["issuer-auth", "node-schema"]
+        assert stages == ["node-schema"]
 
         # Assert the Grant is escrowed for its missing root schema
         assert hby.db.exns.get(keys=(grant.said,)) is None
@@ -9786,3 +9786,275 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
         finally:
             recipientRgy.close()
             issuerRgy.close()
+
+
+@pytest.fixture
+def fresh_issuance():
+    """Accepted RIP and real threshold-signing actors, with no BUP yet."""
+    with openHby(name="pending-issuance", base="test", version=Vrsn_2_0) as hby:
+        issuer = hby.makeHab(name="issuer", icount=2, isith="2", ncount=2, nsith="2")
+        issuee = hby.makeHab(name="issuee")
+        rgy = Regery(hby=hby, name="pending-issuance", temp=True)
+        try:
+            registrar = Registrar(rgy=rgy)
+            registry = registrar.makeRegistry(name="fresh", prefix=issuer.pre)
+            _anchor(issuer, registry, rgy.store.event(registry.regk))
+            acdc = acdcmap(israid=issuer.pre, iseaid=issuee.pre, regid=registry.regk,
+                           attribute=dict(d="", role="member"))
+            exc = Exchanger(hby=hby, handlers=[])
+            loadHandlers(hby=hby, exc=exc, notifier=Recorder(), rgy=rgy)
+            yield hby, issuer, issuee, rgy, registrar, registry, acdc, exc
+        finally:
+            rgy.close()
+
+
+def _receive_ipex(exc, message, atc):
+    """Exercise the real parser/exchanger boundary with complete signed bytes."""
+    ims = bytearray(message.raw + atc)
+    Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
+    assert not ims
+
+
+@pytest.mark.parametrize("opener", ["grant", "apply", "offer"])
+@pytest.mark.parametrize("anchored", [False, True])
+def test_pending_grant_finishes_only_after_issued_proof(fresh_issuance, opener, anchored):
+    """Keep the original Grant pending through each opener until real state verifies."""
+    from keri.acdc.ipexing import _normalizeNodeStream, _sign
+    hby, issuer, issuee, rgy, registrar, registry, acdc, exc = fresh_issuance
+    prior = {}
+    plan = [[[acdc.schema["$id"], "/", []]]]
+    if opener == "apply":
+        apply, atc = ipexApply(hab=issuee, recp=issuer.pre, message="apply",
+                               modifiers=dict(dp=plan), ax=[anchored])
+        _receive_ipex(exc, apply, atc)
+        prior["apply"] = apply
+    elif opener == "offer":
+        offer, atc = ipexOffer(hab=issuer, recp=issuee.pre, message="offer",
+                               origin=acdc.raw, modifiers=dict(dp=plan), ax=[anchored])
+        _receive_ipex(exc, offer, atc)
+        agree, atc = ipexAgree(hab=issuee, message="agree", offer=offer)
+        _receive_ipex(exc, agree, atc)
+        prior["agree"] = agree
+    message, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="issue", origin=acdc.raw,
+                              ax=[anchored], **prior)
+    _receive_ipex(exc, message, atc)
+    xid = message.said if message.ilk == Ilks.xip else message.ked["x"]
+    scope = dict(xid=xid, sender=issuer.pre, recipient=issuee.pre)
+    assert hby.db.epse.get((message.said,)) is not None
+    assert hby.db.exns.get((message.said,)) is None
+    assert hby.db.exrs.get((message.said, acdc.said)) is None
+    signatures = [(key, sig.qb64) for key, sig in hby.db.esigs.getTopItemIter(keys=(message.said,))]
+    pending, registries = exc.pendingGrant(message.said, **scope)
+    assert pending.raw == message.raw and registries == (registry.regk,)
+    assert [(key, sig.qb64) for key, sig in hby.db.esigs.getTopItemIter(keys=(message.said,))] == signatures
+    for field in scope:
+        assert exc.pendingGrant(message.said, **{**scope, field: Diger(ser=b"wrong").qb64}) is None
+    if anchored:
+        hby.db.ests.trim(keys=(message.said,))
+        assert exc.pendingGrant(message.said, **scope) is None
+        _receive_ipex(exc, message, atc)
+        assert exc.pendingGrant(message.said, **scope) is not None
+
+    admit, atc = ipexAdmit(hab=issuee, message="too early", grant=message)
+    _receive_ipex(exc, admit, atc)
+    assert hby.db.exns.get((admit.said,)) is None
+    opening, bup = registrar.issue(registry, acdc=acdc, state="issued")
+    _anchor(issuer, registry, bup)
+    assert exc.pendingGrant(message.said, **scope) is None  # No second DH after issuance.
+    signed = _sign(hab=issuer, serder=message,
+                   nests=[_normalizeNodeStream(_proofed(acdc, opening))], anchor=anchored)
+    _receive_ipex(exc, message, signed[message.size:])
+    assert hby.db.exns.get((message.said,)).raw == message.raw
+    assert hby.db.epse.get((message.said,)) is None
+    assert hby.db.exrs.get((message.said, acdc.said)).state == "issued"
+    admit, atc = ipexAdmit(hab=issuee, message="verified", grant=message)
+    _receive_ipex(exc, admit, atc)
+    assert hby.db.exns.get((admit.said,)) is not None
+
+
+def test_pending_grant_reauthenticates_threshold_and_lifetime(fresh_issuance):
+    """An epse row with one signature never authorizes DH; lookup writes nothing."""
+    hby, issuer, issuee, _, _, registry, acdc, exc = fresh_issuance
+    message, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="issue", origin=acdc.raw)
+    parsed = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(message.raw + atc), framed=False, processive=False)[0]
+    prefixer, number, diger, sigers = parsed.tsgs[0]
+    partial = [(prefixer, number, diger, sigers[:1])]
+    with pytest.raises(MissingSignatureError):
+        exc.processEvent(serder=message, tsgs=partial, nests=parsed.nests)
+    scope = dict(xid=message.said, sender=issuer.pre, recipient=issuee.pre)
+    assert hby.db.epse.get((message.said,)) is not None
+    assert exc.pendingGrant(message.said, **scope) is None
+    _receive_ipex(exc, message, atc)
+    assert exc.pendingGrant(message.said, **scope)[1] == (registry.regk,)
+    # Rechecking, rather than trusting a previously sufficient row, catches lost evidence.
+    hby.db.esigs.trim(keys=(message.said,))
+    assert exc.pendingGrant(message.said, **scope) is None
+    _receive_ipex(exc, message, atc)
+    from keri.core import Dater
+    expired = helping.nowUTC() - timedelta(milliseconds=1)
+    hby.db.epsd.pin((message.said,), Dater(dts=helping.toIso8601(expired)))
+    assert exc.pendingGrant(message.said, **scope) is None
+
+
+@pytest.mark.parametrize("opener", ["grant", "apply"])
+def test_pending_grant_preserves_original_kram_deadline(fresh_issuance, fakeHelpingClock, opener):
+    """Human-scale pending time survives retries, but never cache pruning or expiry."""
+    hby, issuer, issuee, _, _, _, acdc, exc = fresh_issuance
+    with openCF(name="pending-kram", base="test", temp=True) as cf:
+        cf.put(dict(kram=dict(enabled=True, denials=[],
+                             caches={"~": [1000, 5000, 60000, 120000, 5000, 60000, 240000]})))
+        kramer = Kramer(db=hby.db, cf=cf)
+        kvy = Kevery(db=hby.db, lax=False, local=False, kramer=kramer, exc=exc)
+        prior = {}
+        if opener == "apply":
+            apply, atc = ipexApply(hab=issuee, recp=issuer.pre, message="apply",
+                                   modifiers=dict(dp=[[[acdc.schema["$id"], "/", []]]]))
+            Parser(version=Vrsn_2_0).parse(ims=bytearray(apply.raw + atc), kvy=kvy)
+            prior["apply"] = apply
+            fakeHelpingClock.advance(seconds=30)
+        grant, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="wait",
+                                origin=acdc.raw, **prior)
+        Parser(version=Vrsn_2_0).parse(ims=bytearray(grant.raw + atc), kvy=kvy)
+        xid = grant.said if opener == "grant" else apply.said
+        scope = dict(xid=xid, sender=issuer.pre, recipient=issuee.pre)
+        cache = hby.db.kramTMSC.get((issuer.pre, xid, grant.said))
+        deadline = helping.fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
+        assert hby.db.epsd.get((grant.said,)).datetime == deadline
+        fakeHelpingClock.advance(seconds=30)
+        exc.processEscrow()
+        _receive_ipex(exc, grant, atc)
+        assert hby.db.epsd.get((grant.said,)).datetime == deadline
+        assert exc.pendingGrant(grant.said, **scope) is not None
+        # A lost/pruned cache cannot turn the fixed deadline into a new receipt window.
+        hby.db.kramTMSC.rem((issuer.pre, xid, grant.said))
+        exc.TimeoutPSE = 3600
+        fakeHelpingClock.set(helping.toIso8601(deadline - timedelta(milliseconds=1)))
+        assert exc.pendingGrant(grant.said, **scope) is not None
+        fakeHelpingClock.advance(milliseconds=1)
+        assert exc.pendingGrant(grant.said, **scope) is None
+        exc.processEscrow()
+        assert hby.db.epse.get((grant.said,)) is None
+        assert hby.db.exns.get((grant.said,)) is None
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_partial_exchange_deadline_preserves_timeout(fresh_issuance, fakeHelpingClock, legacy):
+    """Ordinary partials retain their timeout; old receipt rows expire conservatively."""
+    from keri.core import Dater
+    hby, issuer, issuee, _, _, _, _, exc = fresh_issuance
+    message, atc = ipexApply(hab=issuer, recp=issuee.pre, message="partial",
+                             modifiers=dict(dp=[[]]))
+    parsed = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(message.raw + atc), framed=False, processive=False)[0]
+    prefixer, number, diger, sigers = parsed.tsgs[0]
+    with pytest.raises(MissingSignatureError):
+        exc.processEvent(serder=message, tsgs=[(prefixer, number, diger, sigers[:1])])
+    deadline = helping.nowUTC() + timedelta(seconds=exc.TimeoutPSE)
+    assert hby.db.epsd.get((message.said,)).datetime == deadline
+    if legacy:
+        hby.db.epsd.pin((message.said,), Dater())  # Pre-change receipt timestamp.
+    else:
+        fakeHelpingClock.advance(seconds=exc.TimeoutPSE)
+        exc.processEscrow()
+        assert hby.db.epse.get((message.said,)) is not None
+        assert hby.db.epsd.get((message.said,)).datetime == deadline
+    fakeHelpingClock.advance(milliseconds=1)
+    exc.processEscrow()
+    assert hby.db.epse.get((message.said,)) is None
+
+
+@pytest.mark.parametrize("fault", ["wrong-issuee", "invalid-proof", "missing-rip", "missing-schema"])
+def test_pending_grant_refuses_missing_authority(fresh_issuance, fault):
+    """A schema, issuer/issuee binding or supplied invalid proof cannot be bypassed."""
+    hby, issuer, issuee, _, _, registry, acdc, exc = fresh_issuance
+    if fault != "invalid-proof":
+        acdc = acdcmap(israid=issuer.pre,
+                       iseaid=issuer.pre if fault == "wrong-issuee" else issuee.pre,
+                       regid=Diger(ser=b"absent RIP").qb64 if fault == "missing-rip" else registry.regk,
+                       schema=Diger(ser=b"absent schema").qb64 if fault == "missing-schema" else None,
+                       attribute=dict(d="", role="member"))
+        origin = acdc.raw
+    else:
+        wrong = Blinder.blind(acdc=Diger(ser=b"unrelated credential").qb64, state="issued")
+        origin = _proofed(acdc, wrong)
+    message, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="refuse", origin=origin)
+    _receive_ipex(exc, message, atc)
+    assert exc.pendingGrant(message.said, xid=message.said,
+                            sender=issuer.pre, recipient=issuee.pre) is None
+    assert hby.db.exns.get((message.said,)) is None
+    assert hby.db.exrs.get((message.said, acdc.said)) is None
+
+
+@pytest.mark.parametrize("fault", [None, "dangling", "invalid-proof"])
+def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault):
+    """OR cannot accept a fresh registry, and a pending node cannot hide bad edges."""
+    hby, issuer, issuee, _, _, registry, acdc, exc = fresh_issuance
+    if fault == "dangling":
+        acdc = acdcmap(israid=issuer.pre, iseaid=issuee.pre, regid=registry.regk,
+                       attribute=dict(d="", role="member"),
+                       edge=dict(d="", lost=dict(d="", n=Diger(ser=b"absent node").qb64)))
+    ready = acdcmap(israid=issuer.pre, iseaid=issuee.pre, attribute=dict(d="", role="ready"))
+    readyNest = _signed(ready, issuer)
+    if fault == "invalid-proof":
+        ready = acdcmap(israid=issuer.pre, iseaid=issuee.pre, regid=registry.regk,
+                        attribute=dict(d="", role="ready"))
+        readyNest = _proofed(ready, Blinder.blind(acdc=Diger(ser=b"unrelated").qb64,
+                                                state="issued"))
+    origin = acdcmap(israid=issuer.pre, iseaid=issuee.pre, attribute=dict(d="", role="origin"),
+                     edge=dict(d="", o="OR", fresh=dict(d="", n=acdc.said, o="E1E"),
+                               ready=dict(d="", n=ready.said, o="E1E")))
+    plan = [[origin.schema["$id"], "/", []], [acdc.schema["$id"], "/e/fresh/_/", []],
+            [ready.schema["$id"], "/e/ready/_/", []]]
+    message, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="OR pending",
+                              origin=_signed(origin, issuer), artifacts=[acdc.raw, readyNest],
+                              modifiers=dict(dp=[plan]))
+    _receive_ipex(exc, message, atc)
+    context = exc.pendingGrant(message.said, xid=message.said,
+                               sender=issuer.pre, recipient=issuee.pre)
+    assert (context is None) == (fault is not None)
+    if fault is None:
+        assert context[1] == (registry.regk,)
+    assert hby.db.exns.get((message.said,)) is None
+    assert list(hby.db.exrs.getTopItemIter(keys=(message.said,))) == []
+
+
+@pytest.mark.parametrize("fresh", [False, True])
+@pytest.mark.parametrize("authority", ["missing", "foreign"])
+def test_pending_discovery_preserves_optional_missing_registry(fresh_issuance, fresh, authority):
+    """An optional missing/foreign RIP preserves final OR but cannot authorize DH."""
+    hby, issuer, issuee, rgy, registrar, _, acdc, exc = fresh_issuance
+    regk = Diger(ser=b"missing optional RIP").qb64
+    if authority == "foreign":
+        foreign = registrar.makeRegistry(name="foreign", prefix=issuee.pre)
+        _anchor(issuee, foreign, rgy.store.event(foreign.regk))
+        regk = foreign.regk
+    missing = acdcmap(israid=issuer.pre, iseaid=issuee.pre,
+                      regid=regk,
+                      attribute=dict(d="", role="missing"))
+    ready = acdcmap(israid=issuer.pre, iseaid=issuee.pre,
+                    attribute=dict(d="", role="ready"))
+    edges = dict(d="", o="OR", missing=dict(d="", n=missing.said, o="E1E"),
+                 ready=dict(d="", n=ready.said, o="E1E"))
+    artifacts = [missing.raw, _signed(ready, issuer)]
+    if fresh:
+        edges["fresh"] = dict(d="", n=acdc.said, o="E1E")
+        artifacts.append(acdc.raw)
+    origin = acdcmap(israid=issuer.pre, iseaid=issuee.pre, edge=edges,
+                     attribute=dict(d="", role="origin"))
+    plan = [[origin.schema["$id"], "/", []], [missing.schema["$id"], "/e/missing/_/", []],
+            [ready.schema["$id"], "/e/ready/_/", []]]
+    if fresh:
+        plan.append([acdc.schema["$id"], "/e/fresh/_/", []])
+    message, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="optional RIP",
+                              origin=_signed(origin, issuer), artifacts=artifacts,
+                              modifiers=dict(dp=[plan]))
+    parsed = Parser(version=Vrsn_2_0).parse(
+        ims=bytearray(message.raw + atc), framed=False, processive=False)[0]
+    handler = exc.routes["/ipex/grant"]
+    nodes, _ = handler._walkGraph(origin.said, parsed.nests, closed=True)
+    assert handler._evaluateNode(origin.said, nodes=nodes, memo={}).verdict == Verdicts.valid
+    _receive_ipex(exc, message, atc)
+    assert (hby.db.exns.get((message.said,)) is not None) == (not fresh)
+    assert exc.pendingGrant(message.said, xid=message.said,
+                            sender=issuer.pre, recipient=issuee.pre) is None

@@ -522,9 +522,136 @@ class IpexHandler:
         # Store this policy per route-specific handler instance.
         self.acceptsMissingEvidence = resource == "/ipex/grant"
 
-    def verify(self, serder, attachments=None, nests=None, sscs=None,
-               evidence=None):
-        """Validate the verb, prior link, and single-response rule.
+    def verify(self, serder, attachments=None, nests=None, sscs=None, evidence=None):
+        """Require shared context checks before final Grant registry verification."""
+        context = self._verifyContext(serder, attachments, nests, sscs, evidence)
+        if context is False:
+            return False
+        if not context:
+            return True
+        registries = self._pendingIssuance(serder, *context)
+        if registries is None:
+            return False
+        if registries:
+            raise MissingChainError("Grant awaits issuance of its fresh registries")
+        return self._verifyGrantState(serder, *context)
+
+    def pendingGrant(self, serder, *, nests, sscs=None, evidence=None):
+        """Return fresh registry scope after shared context checks, without writes.
+
+        Exchanger must authenticate the stored sender evidence before calling.
+        This authorizes an auxiliary issuance context, never credential admission.
+        """
+        if serder.ked["r"] != "/ipex/grant":
+            return ()
+        context = self._verifyContext(serder, nests=nests, sscs=sscs, evidence=evidence)
+        return self._pendingIssuance(serder, *context) if context else ()
+
+    def _pendingIssuance(self, serder, nodes, order):
+        """Classify proofless fresh registries without inventing an issued state.
+
+        Pending-root authorization is deliberately stricter than final graph
+        acceptance: every other supplied issuer proof must authenticate, even on
+        an optional edge. Its state vocabulary remains the application's policy.
+        None refuses the context, () means no fresh issuance, and a nonempty tuple
+        names eligible registries. All candidates stay unknown during reductions.
+        """
+        if self.rgy is None:
+            return ()
+        from . import regeventing
+
+        pending = {}
+        for said in order:
+            nest = nodes[said]
+            acdc = nest["serder"] if isinstance(nest, dict) else nest.serder
+            regk = acdc.sad.get("rd")
+            if (not regk or self._blindProofs(nest)
+                    or acdc.israid != serder.pre or acdc.iseaid != serder.ked["ri"]):
+                continue
+            try:
+                rip, updates = self._registryEvidence(regk)
+            except MissingChainError:
+                # Absence is not fresh issuance authority. Leave this node to
+                # the final reducers unless another genuine candidate exists.
+                continue
+            if updates:
+                continue  # An existing registry is never a fresh DH candidate.
+            if rip.said != regk or rip.israid != serder.pre:
+                continue
+            try:
+                regeventing.vetRip(rip)
+                regeventing.vetAnchor(rip, db=self.hby.db, issuer=serder.pre)
+            except ValidationError:
+                continue
+            pending[said] = regk
+
+        if not pending:
+            return ()
+        for said in order:
+            if said in pending:
+                continue
+            nest = nodes[said]
+            acdc = nest["serder"] if isinstance(nest, dict) else nest.serder
+            if self._verifyIssuerAuthNode(acdc, nest).verdict != chaining.Verdicts.valid:
+                return None
+        verdict = self._evaluateNode(order[0], nodes=nodes, memo={}, pending=pending)
+        if verdict is None or not verdict.retryable:
+            return None
+        # Even if OR reduced to valid, absent issuance must not enter accepted stores.
+        return tuple(dict.fromkeys(pending.values()))
+
+    def _verifyGrantState(self, serder, grantNodes, grantOrder):
+        """Evaluate and retain authenticated registry state after context validation."""
+        origins = serder.ked["a"]["o"]
+        # Stage 6: evaluate the disclosed DAG to one verdict, rooted at the
+        # origin. A node's verdict is its own issuer-auth proof conjoined
+        # with its reduced Edge Section, and a leaf's verdict is its Operator
+        # relation and schema pins conjoined with the far node's verdict --
+        # so the far node's status reaches the m-ary reduction as a member
+        # rather than as a separate operator-blind sweep beside it. The
+        # origin is where the answer is read, and its own issuer-auth sits
+        # outside every reduction because no edge points at it.
+        records = {}
+        verdict = self._evaluateNode(origins[0], nodes=grantNodes, memo={},
+                                     records=records)
+        if verdict is None:  # malformed shape somewhere in the disclosed DAG
+            return False
+
+        if verdict.verdict != chaining.Verdicts.valid:
+            # An unknown the recipient can still resolve -- a registry whose
+            # TEL has not replicated, a pinned schema not yet cached -- keeps
+            # the exchange retryable through the Exchanger's escrow. An
+            # unknown nothing settles, and anything decided against, refuses
+            # here: escrowing either would promise a retry that cannot
+            # succeed.
+            # A pinned schema goes to the Exchanger's schema escrow, which
+            # asks for it by SAID; any other retryable unknown waits on TEL
+            # or KEL proof. One schema at a time, as that escrow expects.
+            if (verdict.verdict == chaining.Verdicts.unknown
+                    and verdict.retryable):
+                for cause in verdict.causes:
+                    if isinstance(cause, MissingSchemaError):
+                        raise cause
+                raise MissingChainError(verdict.reason)
+            return False
+
+        # The grant is accepted, so keep what each disclosed node's registry
+        # said about it for whoever judges acceptability. Written only
+        # here, after every refusal above, so a refused or escrowed grant
+        # leaves no rows behind.
+        for nodeSaid, record in records.items():
+            self.hby.db.exrs.pin(
+                keys=(serder.said, nodeSaid),
+                val=ExchangeRegistryStateRecord(regid=record.regid,
+                                                said=record.said,
+                                                sn=record.sn,
+                                                state=record.state,
+                                                stamp=record.stamp))
+        return True
+
+    def _verifyContext(self, serder, attachments=None, nests=None, sscs=None,
+                       evidence=None):
+        """Validate exchange context, schemas and disclosure authorization.
 
         Parameters:
             serder (Serder): Incoming IPEX exchange message.
@@ -538,8 +665,8 @@ class IpexHandler:
                 source-seal triples accepted for route validation.
 
         Returns:
-            bool: True when the message is valid for the linear IPEX workflow,
-                False otherwise.
+            tuple | bool: Grant nodes/order, an empty tuple for another valid
+                message, or False on refusal. No registry-state rows are written.
 
         Raises:
             MissingChainError: When a disclosed ACDC's issuer-auth proof needs
@@ -550,6 +677,7 @@ class IpexHandler:
             MissingSenderKeyStateError: When a required sender anchor refers
                 to KEL evidence that is not yet available locally.
         """
+        context = ()
         nests = nests if nests is not None else []
         sscs = sscs if sscs is not None else []
 
@@ -736,39 +864,7 @@ class IpexHandler:
                                                     grantNodes=grantNodes):
                     return False
 
-                # Stage 6: evaluate the disclosed DAG to one verdict, rooted at the
-                # origin. A node's verdict is its own issuer-auth proof conjoined
-                # with its reduced Edge Section, and a leaf's verdict is its Operator
-                # relation and schema pins conjoined with the far node's verdict --
-                # so the far node's status reaches the m-ary reduction as a member
-                # rather than as a separate operator-blind sweep beside it. The
-                # origin is where the answer is read, and its own issuer-auth sits
-                # outside every reduction because no edge points at it.
-                records = {}
-                verdict = self._evaluateNode(origins[0], nodes=grantNodes, memo={},
-                                             records=records)
-                if verdict is None:  # malformed shape somewhere in the disclosed DAG
-                    return False
-
-                if verdict.verdict != chaining.Verdicts.valid:
-                    # An unknown the recipient can still resolve -- a registry whose
-                    # TEL has not replicated, a pinned schema not yet cached -- keeps
-                    # the exchange retryable through the Exchanger's escrow. An
-                    # unknown nothing settles, and anything decided against, refuses
-                    # here: escrowing either would promise a retry that cannot
-                    # succeed.
-                    # A pinned schema goes to the Exchanger's schema escrow, which
-                    # asks for it by SAID; any other retryable unknown waits on TEL
-                    # or KEL proof. One schema at a time, as that escrow expects.
-                    if (verdict.verdict == chaining.Verdicts.unknown
-                            and verdict.retryable):
-                        for cause in verdict.causes:
-                            if isinstance(cause, MissingSchemaError):
-                                raise cause
-                        raise MissingChainError(verdict.reason)
-                    return False
-
-                # Validate each authenticated node against its own schema.
+                # Validate every node's schema before any pending authorization.
                 if not self._verifyNodeSchemas(nodes=grantNodes, order=grantOrder):
                     return False
 
@@ -809,20 +905,9 @@ class IpexHandler:
                     if not any(aid and aid in anchorers for aid in candidates):
                         return False
 
-                # The grant is accepted, so keep what each disclosed node's registry
-                # said about it for whoever judges acceptability. Written only
-                # here, after every refusal above, so a refused or escrowed grant
-                # leaves no rows behind.
-                for nodeSaid, record in records.items():
-                    self.hby.db.exrs.pin(
-                        keys=(serder.said, nodeSaid),
-                        val=ExchangeRegistryStateRecord(regid=record.regid,
-                                                        said=record.said,
-                                                        sn=record.sn,
-                                                        state=record.state,
-                                                        stamp=record.stamp))
+                context = (grantNodes, grantOrder)
 
-        return True
+        return context
 
     def _verifySourceAnchor(self, serder, aid, number, diger):
         """Verify one source reference against the anchorer's accepted KEL."""
@@ -1331,7 +1416,7 @@ class IpexHandler:
 
         return nodes, order
 
-    def _evaluateNode(self, said, *, nodes, memo, records=None):
+    def _evaluateNode(self, said, *, nodes, memo, records=None, pending=()):
         """Evaluate one disclosed node to a verdict, recursing through its edges.
 
         A node is valid when its own issuer-auth proof vets and its Edge Section
@@ -1352,6 +1437,9 @@ class IpexHandler:
             records (dict | None): Node SAID to the ``RegStateRecord`` its
                 registry proof authenticated, filled in as nodes are evaluated so
                 the caller can persist what each registry said.
+            pending (Collection): Fresh issuance node SAIDs whose own state is
+                unresolved. Their edges are still evaluated in full; no state
+                record is produced for them. Empty for final verification.
 
         Returns:
             EdgeVerdict | None: the node's verdict, or ``None`` when some shape
@@ -1372,8 +1460,9 @@ class IpexHandler:
         # Both what authenticates the node and what its registry says about it,
         # as one verdict. A verdict rather than a raise, so an Operator that does
         # not need this node is not made to wait on it.
-        auth = self._verifyIssuerAuthNode(serder=nserder, nest=nest,
-                                          records=records)
+        auth = (chaining.unknown("fresh registry awaits issuance", retryable=True)
+                if said in pending else self._verifyIssuerAuthNode(
+                    serder=nserder, nest=nest, records=records))
 
         edges = nserder.sad.get("e")
         if not edges:
@@ -1399,6 +1488,7 @@ class IpexHandler:
                                                      nserder=nserder,
                                                      memo=memo,
                                                      records=records,
+                                                     pending=pending,
                                                      inheritedPins=())
                 else:
                     verdict = self._evaluateGroupEdge(edge,
@@ -1407,6 +1497,7 @@ class IpexHandler:
                                                       nested=False,
                                                       memo=memo,
                                                       records=records,
+                                                      pending=pending,
                                                       inheritedPins=())
                 if verdict is None:
                     return None
@@ -1418,7 +1509,7 @@ class IpexHandler:
         return memo[said]
 
     def _evaluateLeafEdge(self, group, *, nodes, nserder, memo, records=None,
-                          inheritedPins=()):
+                          inheritedPins=(), pending=()):
         """Evaluate one disclosed leaf edge against its referenced far node.
 
         Parameters:
@@ -1535,7 +1626,7 @@ class IpexHandler:
             behind an Operator this verifier could not evaluate.
             """
             farVerdict = self._evaluateNode(edgeSaid, nodes=nodes, memo=memo,
-                                            records=records)
+                                            records=records, pending=pending)
             if farVerdict is None:
                 return None
             return chaining.reduceAnd([own, farVerdict])
@@ -1648,7 +1739,7 @@ class IpexHandler:
         return withFarNode(own)
 
     def _evaluateGroupEdge(self, group, *, nodes, nserder, nested, memo,
-                           records=None, inheritedPins=()):
+                           records=None, inheritedPins=(), pending=()):
         """Evaluate one disclosed edge group and reduce its child results.
 
         Parameters:
@@ -1720,6 +1811,7 @@ class IpexHandler:
                                                  nserder=nserder,
                                                  memo=memo,
                                                  records=records,
+                                                 pending=pending,
                                                  inheritedPins=nextPins)
             else:
                 verdict = self._evaluateGroupEdge(node,
@@ -1728,6 +1820,7 @@ class IpexHandler:
                                                   nested=True,
                                                   memo=memo,
                                                   records=records,
+                                                  pending=pending,
                                                   inheritedPins=nextPins)
             if verdict is None:
                 return None

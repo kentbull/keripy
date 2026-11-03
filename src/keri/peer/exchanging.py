@@ -12,7 +12,7 @@ from hio.help import decking, ogler
 from ..kering import (Vrsn_1_0, Vrsn_2_0, Ilks, Colds, sniff,
                       Kinds, Version, versify,
                       ValidationError, MissingChainError, MissingSchemaError,
-                      MissingSignatureError)
+                      MissingSignatureError, MissingSenderKeyStateError)
 from ..core import (Counter, Pather, Dater, Diger, Number,
                     Prefixer, Seqner, Saider,
                     Serder, SerderKERI, Texter,
@@ -478,9 +478,11 @@ class Exchanger:
                                   cigars=cigars,
                                   sourceSeals=sourceSeals)
 
-        # Store the entry time when required
+        # Freeze the PSE deadline once; retransmission must not extend it.
+        # Older receipt-time rows expire conservatively after this transition.
         if dater is not None:
-            dater.put(keys=keys, val=Dater())
+            dater.put(keys=keys, val=Dater(dts=helping.toIso8601(
+                self._partialSignedDeadline(serder))))
         self.hby.db.epath.pin(keys=(dig,), vals=[bytes(p) for p in pathed])
         if nests:
             self.hby.db.enst.pin(
@@ -488,6 +490,17 @@ class Exchanger:
                 vals=[bytes(serializeParsedSubstream(nest)) for nest in nests],
             )
         return escrow.put(keys=keys, val=serder)
+
+    def _partialSignedDeadline(self, serder):
+        """Use an accepted Grant's XID lifetime, otherwise the ordinary PSE window."""
+        if serder.ked["r"] == "/ipex/grant":
+            xid = serder.said if serder.ilk == Ilks.xip else serder.ked.get("x")
+            cache = self.hby.db.kramTMSC.get(keys=(serder.pre, xid, serder.said))
+            if cache is not None and cache.rdt:
+                # xl is exchange validity; pxl only retains replay evidence.
+                return (helping.fromIso8601(cache.xdt)
+                        + datetime.timedelta(milliseconds=cache.xl))
+        return helping.nowUTC() + datetime.timedelta(seconds=self.TimeoutPSE)
 
     def escrowPSEvent(self, serder, tsgs, pathed, cigars=None,
                       sourceSeals=None, nests=None):
@@ -552,7 +565,6 @@ class Exchanger:
         self._replayEscrowType(
             escrow=self.hby.db.epse,
             dater=self.hby.db.epsd,
-            timeout=self.TimeoutPSE,
             label="partially signed",
         )
 
@@ -562,18 +574,17 @@ class Exchanger:
             escrow=self.hby.db.emse,
             dater=self.hby.db.emsd,
             label="missing schema",
-            absolute=True,
         )
 
-    def _replayEscrowType(self, escrow, dater, label, timeout=None,
-                          absolute=False):
+    def _replayEscrowType(self, escrow, dater, label):
         """Replay every exchange in one specified escrow category."""
+        sharedDate = escrow is self.hby.db.emse
         for escrowKeys, serder in escrow.getTopItemIter():
             dig = escrowKeys[0]
-            dateKeys = (dig,) if absolute else escrowKeys
+            dateKeys = (dig,)
             if self.hby.db.exns.get(keys=(dig,)) is not None:
                 escrow.rem(keys=escrowKeys)
-                if not absolute or not any(
+                if not sharedDate or not any(
                         self.hby.db.emse.getTopItemIter(keys=(dig,))):
                     dater.rem(keys=dateKeys)
                 continue
@@ -585,14 +596,15 @@ class Exchanger:
                 sigers = []
 
                 dtnow = helping.nowUTC()
-                escrowedAt = dater.get(keys=dateKeys)
-                if escrowedAt is None:
+                deadline = dater.get(keys=dateKeys)
+                if deadline is None:
                     raise ValidationError("Missing exn escrowed event datetime "
                                           f"at dig = {dig}.")
 
-                dte = escrowedAt.datetime
-                stale = dtnow > dte if absolute else (
-                    dtnow - dte) > datetime.timedelta(seconds=timeout)
+                dte = deadline.datetime
+                stale = dtnow > dte
+                if not sharedDate and serder.ked["r"] == "/ipex/grant":
+                    stale = dtnow >= dte
                 if stale:
                     # escrow stale so raise ValidationError which unescrows below
                     raise ValidationError("Stale exn event escrow "
@@ -651,7 +663,7 @@ class Exchanger:
             except Exception as ex:
                 saved = self.hby.db.exns.get(keys=(dig,)) is not None
                 escrow.rem(keys=escrowKeys)
-                if not absolute or not any(
+                if not sharedDate or not any(
                         self.hby.db.emse.getTopItemIter(keys=(dig,))):
                     dater.rem(keys=dateKeys)
                 pending = (self.hby.db.epse.get(keys=(dig,)) is not None
@@ -682,7 +694,7 @@ class Exchanger:
                         )
                     if moved:
                         escrow.rem(keys=escrowKeys)
-                        if not absolute or not any(
+                        if not sharedDate or not any(
                                 self.hby.db.emse.getTopItemIter(keys=(dig,))):
                             dater.rem(keys=dateKeys)
                     if logger.isEnabledFor(logging.TRACE):
@@ -692,7 +704,7 @@ class Exchanger:
 
                 saved = self.hby.db.exns.get(keys=(dig,)) is not None
                 escrow.rem(keys=escrowKeys)
-                if not absolute or not any(
+                if not sharedDate or not any(
                         self.hby.db.emse.getTopItemIter(keys=(dig,))):
                     dater.rem(keys=dateKeys)
                 pending = (self.hby.db.epse.get(keys=(dig,)) is not None
@@ -761,6 +773,40 @@ class Exchanger:
         if escrowed:
             self.hby.db.epse.rem(dig)
             self.hby.db.epsd.rem(dig)
+
+    def pendingGrant(self, said, *, xid, sender, recipient):
+        """Read an authenticated, live pending issuance Grant and registry scope.
+
+        The operation owner supplies its exact Grant and parties. Escrow presence
+        is not authentication: verify all retained sender evidence afresh, then
+        apply the route's shared context and fresh-registry checks. This lookup
+        neither accepts the Grant nor changes authentication/escrow stores.
+        Returns (serder, registries), or None when unavailable or unauthorized.
+        """
+        serder = self.hby.db.epse.get(keys=(said,))
+        dater = self.hby.db.epsd.get(keys=(said,))
+        handler = self.routes.get("/ipex/grant")
+        if (serder is None or dater is None or handler is None
+                or serder.ked["r"] != "/ipex/grant"
+                or serder.pre != sender or serder.ked.get("ri") != recipient
+                or (serder.said if serder.ilk == Ilks.xip else serder.ked.get("x")) != xid
+                or self.hby.db.exns.get(keys=(said,)) is not None
+                or self.hby.db.erpy.get(keys=(said,)) is not None
+                or helping.nowUTC() >= dater.datetime):
+            return None
+        try:
+            tsgs, cigars = verify(self.hby, serder)
+            seals = [(Prefixer(qb64=keys[1]), number, diger)
+                     for keys, (number, diger) in self.hby.db.ests.getTopItemIter(
+                         keys=(said, ""))]
+            registries = handler.pendingGrant(
+                serder, nests=loadParsedNestedSubstreams(self.hby, said),
+                sscs=[(number, diger) for pre, number, diger in seals if pre.qb64 == sender],
+                evidence=(tsgs, cigars, seals))
+        except (ValidationError, MissingChainError, MissingSchemaError,
+                MissingSenderKeyStateError):
+            return None
+        return (serder, registries) if registries else None
 
     def lead(self, hab, said):
         """ Determines is current member represented by hab is the lead of an exn message
