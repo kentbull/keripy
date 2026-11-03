@@ -901,6 +901,10 @@ class Baser(LMDBer):
             KRAM removes entries after it forwards the message, detects a sender
             key-state change, or prunes the incomplete message.
 
+        .kramNEST is an IoSetSuber of serialized nested CESR substreams keyed
+            by (AID, MID). It shares the other partial attachments' forwarding,
+            sender-state-change and pruning lifetime; it is not accepted evidence.
+
         .kramBSSS is named subDB instance of CatCesrIoSetSuber for KRAM partially
             signed multi-key bound state sextuple attachments.
             subkey 'bsss.'
@@ -1406,6 +1410,8 @@ class Baser(LMDBer):
 
         # ptds: pathed streams (raw bytes)
         self.kramPTDS = subing.IoSetSuber(db=self, subkey='ptds.')
+
+        self.kramNEST = subing.IoSetSuber(db=self, subkey='knst.')
 
         # bsqs: blind state quadruples (diger, noncer, noncer, labeler)
         self.kramBSQS = subing.CatCesrIoSetSuber(db=self, subkey='bsqs.',

@@ -1916,7 +1916,7 @@ def test_clean_baser(tmp_path, fakeHelpingClock):
         state = natHab.db.states.get(keys=natHab.pre)  # Serder instance
         assert state.s == '6'
         assert state.f == '6'
-        assert natHab.db.env.stat()['entries'] <= 109 #68
+        assert natHab.db.env.stat()['entries'] <= 110  # includes KRAM nested evidence
 
         grant = exchange(sender=natHab.pre,
                          route="/test/grant",
@@ -2016,7 +2016,7 @@ def test_clean_baser(tmp_path, fakeHelpingClock):
         partials = ("kramPMKM", "kramPMKS", "kramPMSK", "kramTRQS",
                     "kramTSGS", "kramULGS", "kramCIGS", "kramSSCS",
                     "kramSSTS", "kramFRCS", "kramTDCS", "kramPTDS",
-                    "kramBSQS", "kramBSSS", "kramTMQS")
+                    "kramBSQS", "kramBSSS", "kramTMQS", "kramNEST")
         for name in partials:
             assert natHab.db.putVal(db=getattr(natHab.db, name).sdb,
                                    key=b"orphan", val=b"\xff\x00")
@@ -2029,7 +2029,7 @@ def test_clean_baser(tmp_path, fakeHelpingClock):
             assert ldig == natHab.kever.serder.saidb
             serder = natHab.db.evts.get(keys=(natHab.pre, ldig))
             assert serder.said == natHab.kever.serder.said
-            assert natHab.db.env.stat()['entries'] <= 109 #68
+            assert natHab.db.env.stat()['entries'] <= 110  # includes KRAM nested evidence
 
             # verify name pre kom in db
             data = natHab.db.habs.get(keys=natHab.pre)
