@@ -20,7 +20,6 @@ from ..core import (Counter, Pather, Dater, Diger, Number,
                     SealSource, SealEvent, SealKind, TypeMedia, Parser,
                     messagize,
                     verifySigs)
-from ..db import fetchTsgs
 from ..help import helping
 
 ExchangeMessageTimeWindow = timedelta(seconds=300)
@@ -820,7 +819,8 @@ class Exchanger:
     def lead(self, hab, said):
         """ Determines is current member represented by hab is the lead of an exn message
 
-        Lead is the signer of the exn with the lowest signing index
+        Lead is the lowest verified sender signing index at its referenced
+        establishment event, resolved through the member's historical contribution.
 
         Parameters:
             hab (Hab): Habitat for sending of exchange message represented by SAID
@@ -828,21 +828,28 @@ class Exchanger:
 
         Returns:
             bool: True means hab is the lead"""
-        from ..app import GroupHab
+        from ..app import GroupHab, SignifyGroupHab
 
-        if not isinstance(hab, GroupHab):
+        if not isinstance(hab, (GroupHab, SignifyGroupHab)):
             return True
 
-        keys = [verfer.qb64 for verfer in hab.kever.verfers]
-        tsgs = fetchTsgs(self.hby.db.esigs, Diger(qb64=said))
-        if not tsgs:  # otherwise it contains a list of sigs
+        serder = self.hby.db.exns.get(keys=(said,))
+        if serder is None or serder.pre != hab.pre:
             return False
-
-        (_, _, _, sigers) = tsgs[0]
-        windex = min([siger.index for siger in sigers])
-
-        # True if Elected to send an EXN to its receiver
-        return hab.mhab.kever.verfers[0].qb64 == keys[windex]
+        try:
+            tsgs, _ = verify(self.hby, serder)
+            for prefixer, number, diger, sigers in tsgs:
+                if prefixer.qb64 != hab.pre:
+                    continue
+                # Preserve the first-reference ordering after filtering the sender.
+                _, verfers = self.hby.db.resolveVerifiers(
+                    pre=hab.pre, sn=number.sn, dig=diger.qb64)
+                contribution = hab.mhab.kever.fetchLatestContribTo(verfers=verfers)
+                return (contribution is not None and
+                        contribution[1] == min(siger.index for siger in sigers))
+        except (MissingSignatureError, ValidationError):
+            return False
+        return False
 
     def complete(self, said):
         """
