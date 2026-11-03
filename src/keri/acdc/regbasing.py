@@ -9,8 +9,9 @@ Support for RegBaser(LMDBer)
 import os
 
 from ..core import Diger, Number, Saider, SerderACDC
-from ..db import (LMDBer, B64OnIoSetSuber, CatCesrSuber, CesrOnSuber,
+from ..db import (LMDBer, onKey, B64OnIoSetSuber, CatCesrSuber, CesrOnSuber,
                   CesrSuber, SerderSuber)
+from ..kering import Ilks, ValidationError
 
 
 class RegBaser(LMDBer):
@@ -112,3 +113,68 @@ class RegBaser(LMDBer):
         self.ooes = B64OnIoSetSuber(db=self, subkey='ooes.')
 
         return self.opened
+
+    def accept(self, regk, sn, serder):
+        """Atomically persist one already authenticated registry acceptance.
+
+        Body, accepted ordinal, and head commit together. Exact replay returns
+        False without moving the head; a new acceptance returns True. Inconsistent
+        slots or frontier linkage raise ValidationError. Protocol validation and
+        anchor arbitration remain the caller's responsibility.
+
+        Parameters:
+            regk (str): registry inception SAID whose frontier to advance.
+            sn (int): accepted ordinal, starting at zero for inception.
+            serder (SerderACDC): registry event already authenticated by the caller.
+        """
+        inception = serder.ilk == Ilks.rip
+        if (serder.ilk not in (Ilks.rip, Ilks.bup)
+                or Number(numh=serder.sad['n']).num != sn
+                or (serder.said if inception else serder.sad['rd']) != regk
+                or inception != (sn == 0)):
+            raise ValidationError("registry event does not match its accepted slot")
+
+        eventkey = self.evts._tokey(serder.said)
+        regkey = self.tels._tokey(regk)
+        seqkey = onKey(regkey, sn, sep=self.tels.sep.encode())
+        headkey = self.heads._tokey(regk)
+        raw = self.evts._ser(serder)
+        said = self.tels._ser(Saider(qb64=serder.said))
+
+        with self.env.begin(write=True) as txn:
+            existing = txn.get(seqkey, db=self.tels.sdb)
+            if existing is not None and existing != said:
+                raise ValidationError(f"conflicting registry event at {regk}:{sn}")
+
+            body = txn.get(eventkey, db=self.evts.sdb)
+            if body is not None and body != raw:
+                raise ValidationError(f"conflicting registry body {serder.said}")
+
+            head = txn.get(headkey, db=self.heads.sdb)
+            headsn = -1
+            if head is not None:
+                headsaid = self.heads._des(head)
+                headraw = txn.get(self.evts._tokey(headsaid.qb64), db=self.evts.sdb)
+                if headraw is None:
+                    raise ValidationError(f"missing registry head body for {regk}")
+                headser = self.evts._des(headraw)
+                headsn = Number(numh=headser.sad['n']).num
+                headseq = onKey(regkey, headsn, sep=self.tels.sep.encode())
+                if txn.get(headseq, db=self.tels.sdb) != head:
+                    raise ValidationError(f"inconsistent accepted registry head for {regk}")
+
+            if existing is not None:
+                if body is None or headsn < sn:
+                    raise ValidationError(f"incomplete accepted registry event {regk}:{sn}")
+                return False
+
+            if sn != headsn + 1:
+                raise ValidationError(f"noncontiguous registry event at {regk}:{sn}")
+            if not inception and serder.sad['p'] != headsaid.qb64:
+                raise ValidationError(f"mismatched registry prior at {regk}:{sn}")
+
+            txn.put(eventkey, raw, db=self.evts.sdb)
+            txn.put(seqkey, said, db=self.tels.sdb)
+            txn.put(headkey, self.heads._ser(Saider(qb64=serder.said)),
+                    db=self.heads.sdb)
+        return True
