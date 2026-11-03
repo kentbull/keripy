@@ -3526,24 +3526,37 @@ class SignifyHab(BaseHab):
         return msgs
 
 
-def _groupWitnesser(hab, *, sn=None, dig=None):
-    """Elect from the exact accepted event and historical member contribution."""
+def _groupWitnesserSelection(hab, *, sn=None, dig=None):
+    """Return the accepted coordinator's establishment and lowest verified index.
+
+    This is the existing witnesser selection, shared with live group operations
+    that freeze its result. It establishes no member identity or signing consent.
+    """
     if sn is None and dig is None:
         sn, dig = hab.kever.sn, hab.kever.serder.said
     if sn is None or hab.db.kels.getLast(keys=hab.pre, on=sn) != dig:
-        return False
+        return None
     event = hab.db.evts.get(keys=(hab.pre, dig))
     if event is None or event.pre != hab.pre or event.sn != sn:
-        return False
+        return None
     establishment = hab.kvy.fetchEstEvent(hab.pre, sn)
     if establishment is None:
-        return False
+        return None
     sigers = hab.db.sigs.get(keys=(hab.pre, dig))
     _, indices = eventing.verifySigs(event.raw, sigers, establishment.verfers)
     if not indices or not establishment.tholder.satisfy(indices):
+        return None
+    return establishment, min(indices)
+
+
+def _groupWitnesser(hab, *, sn=None, dig=None):
+    """Elect from the exact accepted event and historical member contribution."""
+    selection = _groupWitnesserSelection(hab, sn=sn, dig=dig)
+    if selection is None:
         return False
+    establishment, index = selection
     contribution = hab.mhab.kever.fetchLatestContribTo(verfers=establishment.verfers)
-    return contribution is not None and contribution[1] == min(indices)
+    return contribution is not None and contribution[1] == index
 
 
 class SignifyGroupHab(SignifyHab):
