@@ -2449,6 +2449,11 @@ class Reger(LMDBer):
         # Holds the credential
         self.creds = SerderSuber(db=self, subkey="creds.", klas=SerderACDC)
 
+        # Exact independent section views; presence is held evidence, not admission.
+        self.sections = SerderSuber(db=self, subkey="sects.", klas=SerderACDC)
+        # All held message SAIDs for a (section field, section commitment).
+        self.sectionIds = CesrDupSuber(db=self, subkey="sidx.", klas=Saider)
+
         # database of anchors to credentials.  prefix is either AID with direct credential
         # anchor or TEL event AID (same as credential SAID) when credential uses revocation registry
         self.cancs = CatCesrSuber(db=self, subkey='cancs.',
