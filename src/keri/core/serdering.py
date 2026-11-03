@@ -183,7 +183,7 @@ class Serdery:
             lsize = 0  # label size in bytes
             if not fixed:  # extract label for version field
                 labeler = Labeler(qb64b=ims[ctr.fullSize:])  # offset past ctr
-                lsize = labeler.fullsize
+                lsize = labeler.fullSize
 
             verser = Verser(qb64b=ims[ctr.fullSize+lsize:])  # in text domain
             proto, pvrsn, gvrsn = verser.versage
