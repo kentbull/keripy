@@ -15,7 +15,7 @@ from keri.db import basing
 @pytest.mark.parametrize("version", [kering.Vrsn_1_0, kering.Vrsn_2_0], ids=["v1", "v2"])
 @pytest.mark.parametrize("content_type", ["application/cesr", "application/cesr+json"])
 @pytest.mark.parametrize("valid", [True, False], ids=["valid-signature", "invalid-signature"])
-def test_cesr_http_loopback_preserves_detached_attachments(version, content_type, valid):
+def test_cesr_http_loopback_preserves_detached_attachments(version, content_type, valid, unused_tcp_port):
     signer = signing.Signer(raw=b's' * 32)
     serder = eventing.incept(keys=[signer.verfer.qb64],
                             version=version, kind=kering.Kinds.json)
@@ -28,7 +28,8 @@ def test_cesr_http_loopback_preserves_detached_attachments(version, content_type
     endpoint = indirecting.HttpEnd()
     app = falcon.App()
     app.add_route("/", endpoint)
-    with http.openServer(host="127.0.0.1", port=0, app=app) as server:
+    with http.openServer(host="127.0.0.1", port=unused_tcp_port, app=app) as server:
+        assert server.servant.opened
         with http.openClient(hostname="127.0.0.1", port=server.servant.ha[1]) as client:
             httping.createCESRRequest(bytearray(message), client, dest=serder.pre)
             request = client.requests[-1]
