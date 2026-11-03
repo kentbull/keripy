@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from collections import namedtuple
 
 from .. import help
-from ..kering import (Ilks, ValidationError,
+from ..kering import (Ilks, KeriError, ValidationError,
                       InvalidValueError,
                       MissingAnchorError, MisdigestError, MissequenceError,
                       MisregistryError, MisanchorError, RootSealError,
@@ -480,7 +480,9 @@ def vetUpdate(bup, rip):
 def vetBlind(blinder, *, blid):
     """Verify a disclosed blinded-state attribute block against the BLID
     anchored by a blindable update (bup) event, by recomputing the BLID over
-    the disclosed fields.
+    the exact disclosed CESR primitive encodings. The anchored digest selects
+    the algorithm; its canonical 44-character encoding must match the opening's
+    declared d. Both object and wire inputs must encode one complete opening.
 
     Returns:
         (acdc, state) (tuple[str, str]): the disclosed transaction ACDC said
@@ -496,26 +498,30 @@ def vetBlind(blinder, *, blid):
         UnverifiedBlindError: the disclosure does not reproduce blid, so it
             proves nothing about the registry's state
     """
-    candidates = []
-    if isinstance(blinder, Blinder):
-        candidates.append(blinder)
-    else:
-        qb64 = blinder.decode() if hasattr(blinder, "decode") else blinder
-        for clan in (BlindState, BoundState):
-            try:
-                candidates.append(Blinder(clan=clan, qb64=qb64))
-            except Exception:
-                continue
-        if not candidates:
-            raise UnverifiedBlindError(f"Undecodable disclosed blinded-state "
-                                       f"block for blid={blid}.")
+    try:
+        diger = Diger(qb64=blid)
+    except (KeriError, ValueError, TypeError):
+        raise UnverifiedBlindError("Invalid anchored blinded-state digest.") from None
+    # The ACDC BLID profile permits any supported digestive code of this size.
+    if diger.qb64 != blid or len(diger.qb64) != 44:
+        raise UnverifiedBlindError("BLID must be one canonical 44-character digest.")
 
-    for candidate in candidates:
-        crew = dict(candidate.crew._asdict())
-        crew['d'] = ''
-        redone = Blinder(crew=candidate.clan(**crew), makify=True)
-        if redone.said == blid:
-            return (redone.acdc, redone.state)
+    try:
+        qb64 = (blinder.qb64 if isinstance(blinder, Blinder) else
+                blinder.decode() if hasattr(blinder, "decode") else blinder)
+    except (KeriError, ValueError, TypeError):
+        raise UnverifiedBlindError("Undecodable disclosed blinded-state block.") from None
+
+    for clan in (BlindState, BoundState):
+        try:
+            candidate = Blinder(clan=clan, qb64=qb64, verify=False)
+        except (KeriError, ValueError, TypeError):
+            continue
+        if candidate.qb64 != qb64 or candidate.said != blid:
+            continue  # Enforce canonical primitives and consume all supplied bytes.
+        dummied = b'#' * 44 + b''.join(value.qb64b for value in candidate.data[1:])
+        if diger.verify(dummied):
+            return (candidate.acdc, candidate.state)
 
     raise UnverifiedBlindError(f"Disclosed blinded-state block does not "
                                f"reproduce the anchored blid={blid}: the "
