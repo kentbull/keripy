@@ -152,15 +152,12 @@ class Counselor(doing.DoDoer):
                 self.hby.db.gpse.rem(keys=(pre,))
                 ghab = self.hby.habs[pre]
                 kever = ghab.kever
-                keys = [verfer.qb64 for verfer in kever.verfers]
                 sigers = self.hby.db.sigs.get(keys=(pre, sdig))
                 if not sigers:  # otherwise its a list of sigs
                     continue
 
-                windex = min([siger.index for siger in sigers])
-
                 # True if Elected to perform delegation and witnessing
-                witered = ghab.mhab.kever.verfers[0].qb64 == keys[windex]
+                witered = ghab.witnesser(sn=number.sn, dig=diger.qb64)
 
                 if kever.delegated and kever.ilk in (Ilks.dip, Ilks.drt):
                     # We are a delegated identifier, must wait for delegator approval for dip and drt
@@ -202,8 +199,7 @@ class Counselor(doing.DoDoer):
             ghab = self.hby.habs[pre]
             kever = ghab.kevers[pre]
 
-            keys = [verfer.qb64 for verfer in kever.verfers]
-            witer = ghab.mhab.kever.verfers[0].qb64 == keys[0]  # We are elected to perform delegation and witnessing
+            witer = ghab.witnesser(sn=number.sn, dig=diger.qb64)
 
             if witer:  # We are elected witnesser, We've already done out part in Boatswain, we are done.
                 if self.swain.complete(prefixer=kever.prefixer, number=Number(num=kever.sn, code=NumDex.Huge)):
@@ -240,8 +236,7 @@ class Counselor(doing.DoDoer):
             # Load all the witness receipts we have so far
             wigers = self.hby.db.wigs.get(keys=(pre, diger.qb64))
             ghab = self.hby.habs[pre]
-            keys = [verfer.qb64 for verfer in kever.verfers]
-            witer = ghab.mhab.kever.verfers[0].qb64 == keys[0]
+            witer = ghab.witnesser(sn=number.sn, dig=diger.qb64)
             if len(wigers) == len(kever.wits):  # We have all of them, this event is finished
                 if witer and len(kever.wits) > 0:
                     witnessed = False

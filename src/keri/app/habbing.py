@@ -3526,6 +3526,26 @@ class SignifyHab(BaseHab):
         return msgs
 
 
+def _groupWitnesser(hab, *, sn=None, dig=None):
+    """Elect from the exact accepted event and historical member contribution."""
+    if sn is None and dig is None:
+        sn, dig = hab.kever.sn, hab.kever.serder.said
+    if sn is None or hab.db.kels.getLast(keys=hab.pre, on=sn) != dig:
+        return False
+    event = hab.db.evts.get(keys=(hab.pre, dig))
+    if event is None or event.pre != hab.pre or event.sn != sn:
+        return False
+    establishment = hab.kvy.fetchEstEvent(hab.pre, sn)
+    if establishment is None:
+        return False
+    sigers = hab.db.sigs.get(keys=(hab.pre, dig))
+    _, indices = eventing.verifySigs(event.raw, sigers, establishment.verfers)
+    if not indices or not establishment.tholder.satisfy(indices):
+        return False
+    contribution = hab.mhab.kever.fetchLatestContribTo(verfers=establishment.verfers)
+    return contribution is not None and contribution[1] == min(indices)
+
+
 class SignifyGroupHab(SignifyHab):
     """Remote-signer group (multisig) habitat.
 
@@ -3547,6 +3567,14 @@ class SignifyGroupHab(SignifyHab):
         self.rmids = smids if rmids is None else rmids  # Empty means no rotation members.
 
         super(SignifyGroupHab, self).__init__(**kwa)
+
+
+    def witnesser(self, *, sn=None, dig=None):
+        """Elect from the accepted group event, defaulting to its current head.
+
+        Supply both sn and dig to select an exact historical accepted event.
+        """
+        return _groupWitnesser(self, sn=sn, dig=dig)
 
 
     def incept(self, *, serder, sigers, **kwa):
@@ -4005,25 +4033,16 @@ class GroupHab(BaseHab):
                                  gvrsn=gvrsn, genusify=genusify)
 
 
-    def witnesser(self):
-        """Return whether this member hab holds the lowest-index signing key in the group.
+    def witnesser(self, *, sn=None, dig=None):
+        """Return whether this member contributed the lowest verified signing index.
 
-        The member holding the lowest signing index among all signatures currently
-        recorded in the database is elected by convention to perform coordination
-        duties on behalf of the group, such as submitting delegation and witnessing
-        requests.
+        Parameters:
+            sn (int | None): accepted group event ordinal; defaults to the current event.
+            dig (str | None): exact accepted digest, supplied together with sn.
 
         Returns:
-            bool: ``True`` if ``mhab``'s zeroth verfer matches the group signing
-                key at the lowest recorded signer index; ``False`` otherwise, including
-                when no signatures are found in the database for the current event."""
-        kever = self.kever
-        keys = [verfer.qb64 for verfer in kever.verfers]
-        sigers = self.db.sigs.get(keys=(self.pre, kever.serder.saidb))
-        if not sigers:  # otherwise its a list of sigs
-            return False
-
-        windex = min([siger.index for siger in sigers])
-
-        # True if Elected to perform delegation and witnessing
-        return self.mhab.kever.verfers[0].qb64 == keys[windex]
+            bool: False for an unavailable/mismatched event or insufficient verified
+                signatures. Member and group rotations do not change the historical
+                contribution to the selected event's establishment keys.
+        """
+        return _groupWitnesser(self, sn=sn, dig=dig)

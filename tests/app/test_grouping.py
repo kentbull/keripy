@@ -108,6 +108,7 @@ def test_counselor_explicit_version_propagates_to_default_anchorer_and_delegator
                               sigs=FakeSigsStore([SimpleNamespace(index=1)]))
     fake_ghab = SimpleNamespace(
         pre=pre,
+        witnesser=lambda **kwa: False,
         kever=SimpleNamespace(
             verfers=[SimpleNamespace(qb64="DFirst"), SimpleNamespace(qb64="DSecond")],
             delegated=True,
