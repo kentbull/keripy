@@ -84,24 +84,34 @@ def deriveRoot(private, *, role, x, grant, registry, issuer, issuee,
 
 
 class Dhke:
-    """Individual DH for explicitly approved pending Grants.
+    """DH for explicitly approved pending Grants, with one custodian per party.
 
     The caller injects this instance as Kevery.qvy and registers it at
-    /ipex/dhke on Revery's existing router. ``cues`` carries signed reply bytes
-    as {kin: 'reply', dest: issuer, msg: bytes}; the application owns delivery.
+    /ipex/dhke on Revery's existing router. ``cues`` carries immutable signed
+    bytes as {kin: 'query'|'reply'|'sign', dest: aid, msg: bytes}; 'sign' asks
+    local members to review a proposal. The application owns delivery.
     JSON bodies preserve registry-keyed maps (native strict map labels cannot
     encode every registry ID). Attachments use the normal V2 CESR framing.
     Operations and retry bytes are process-local. A new instance authorizes
     nothing; it cannot recover an unfinished exchange's ephemeral keys.
+
+    A local group explicitly names its already elected coordinator event and
+    custodian. Only that member generates/derives keys; other members contribute
+    ordinary signatures to its exact proposal. Own complete queries/replies
+    return through the same Parser/KRAM/Revery threshold owners before a query
+    becomes outstanding or a reply permits Keeper retention. No signature pool
+    or recovery state belongs to this operation.
     """
     Route = "/ipex/dhke"
 
     def __init__(self, hab, exc):
         from collections import deque
-        from ..app.habbing import GroupHab
-        if isinstance(hab, GroupHab) or hab.db is not exc.hby.db:
-            raise ValueError("DH requires an individual local habitat")
+        from ..app.habbing import GroupHab, Hab
+        if (not isinstance(hab, (Hab, GroupHab)) or hab.db is not exc.hby.db
+                or isinstance(hab, GroupHab) and not isinstance(hab.mhab, Hab)):
+            raise ValueError("DH requires a local signing habitat and its Exchanger")
         self.hab, self.exc = hab, exc
+        self.group = isinstance(hab, GroupHab)
         self.cues = deque()
         self._operations = {}
 
@@ -111,12 +121,20 @@ class Dhke:
         if not (mgr.aeid and mgr.encrypter and mgr.decrypter):
             raise AuthError("DH requires an encrypted, unlocked Keeper")
 
-    def approve(self, grant):
-        """Select one exact pending Grant, without generating or storing keys."""
+    def approve(self, grant, *, coordinator=None, custodian=None):
+        """Select a pending Grant; group consent names its own (sn, SAID) and member.
+
+        This local profile freezes the existing witnesser selection at approval.
+        The issuee may choose its own accepted KEL event without a preceding
+        Apply. Neither opposite-party signatures nor later signatures reelect it.
+        """
         from ..kering import Ilks, ValidationError
         self._unlocked()
         for existing in self._operations.values():
             if existing["grant"] == grant:
+                if ((coordinator is not None and coordinator != existing['coordinator'])
+                        or (custodian is not None and custodian != existing['custodian'])):
+                    raise ValidationError("DH coordinator and custodian are already frozen")
                 self._live(existing)
                 return existing["x"]
         message = self.exc.hby.db.epse.get((grant,))
@@ -132,12 +150,55 @@ class Dhke:
         bodies = tuple(nest.serder.raw for nest in loadParsedNestedSubstreams(self.exc.hby, grant))
         op = dict(grant=grant, raw=message.raw, bodies=bodies, x=xid, issuer=issuer, issuee=issuee,
                   registries=None, private={}, public={}, peer=None,
-                  query=None, reply=None, completed=False, abandoned=False)
+                  query=None, reply=None, proposal=None, contribution=None,
+                  coordinator=None, custodian=None, election=None,
+                  completed=False, abandoned=False)
+        if self.group:
+            from ..app.habbing import _groupWitnesserSelection
+            if not isinstance(coordinator, tuple) or len(coordinator) != 2 or not custodian:
+                raise ValidationError("group DH requires its own accepted coordinator and custodian")
+            selection = _groupWitnesserSelection(self.hab, sn=coordinator[0], dig=coordinator[1])
+            if selection is None:
+                raise ValidationError("group coordinator event lacks accepted threshold evidence")
+            establishment, index = selection
+            op.update(coordinator=coordinator, custodian=custodian,
+                      election=(establishment.said, index, establishment.verfers[index].qb64))
+        elif coordinator is not None or custodian is not None:
+            raise ValidationError("individual DH has no group coordinator")
         context = self._live(op)
         op["registries"] = context[1]
         self._roots(op)
         self._operations[xid] = op
         return xid
+
+    def _custody(self, op, *, lead=False):
+        """Recheck frozen election evidence and current membership without reelecting."""
+        from ..core.eventing import verifySigs
+        from ..kering import ValidationError
+        if not self.group:
+            return True
+        sn, dig = op['coordinator']
+        db = self.hab.db
+        establishment = self.hab.kvy.fetchEstEvent(self.hab.pre, sn)
+        event = db.evts.get(keys=(self.hab.pre, dig))
+        member = db.kevers.get(op['custodian'])
+        if (db.kels.getLast(keys=self.hab.pre, on=sn) != dig or event is None
+                or event.pre != self.hab.pre or event.said != dig or event.sn != sn or establishment is None
+                or establishment.said != op['election'][0] or member is None):
+            raise ValidationError("frozen group coordinator evidence is unavailable")
+        _, indices = verifySigs(event.raw, db.sigs.get(keys=(self.hab.pre, dig)), establishment.verfers)
+        if not establishment.tholder.satisfy(indices) or op['election'][1] not in indices:
+            raise ValidationError("frozen group coordinator signature evidence is unavailable")
+        contribution = member.fetchLatestContribTo(verfers=establishment.verfers)
+        if (contribution is None or contribution[1] != op['election'][1]
+                or contribution[2].qb64 != op['election'][2]
+                or member.fetchLatestContribTo(verfers=self.hab.kever.verfers) is None
+                or self.hab.mhab.kever.fetchLatestContribTo(verfers=self.hab.kever.verfers) is None):
+            raise ValidationError("frozen DH custodian or local member is no longer authorized")
+        elected = self.hab.mhab.pre == op['custodian']
+        if lead and not elected:
+            raise ValidationError("only the frozen DH custodian may generate or derive keys")
+        return elected
 
     def _pending(self, op):
         """Read the original pending operation without changing its lifecycle."""
@@ -145,6 +206,7 @@ class Dhke:
         from ..kering import ValidationError
         from ..peer.exchanging import loadParsedNestedSubstreams
         self._unlocked()
+        self._custody(op)
         db = self.exc.hby.db
         message, deadline = db.epse.get((op["grant"],)), db.epsd.get((op["grant"],))
         if (op["abandoned"] or message is None or message.raw != op["raw"]
@@ -176,26 +238,36 @@ class Dhke:
                 raise ValidationError("registry root conflicts with this live DH operation")
 
     def start(self, grant):
-        """Return the issuer's exact signed query; repeats never change keys."""
+        """Return the issuer query, initially a partial proposal for a group.
+
+        Feed the ordinary full aggregate through Parser before sending a group's
+        query to its peer. Repeats preserve keys and the already signed bytes.
+        """
         from ..core import query
         from ..kering import Kinds, ValidationError, Vrsn_2_0
         xid = self.approve(grant)
         op = self._operations[xid]
         if self.hab.pre != op["issuer"]:
             raise ValidationError("only the issuer starts DH")
+        self._custody(op, lead=True)
         self._roots(op)
-        if op["query"] is None:
+        if op["query"] is None and op['proposal'] is None:
             for registry in op["registries"]:
                 op["private"][registry], op["public"][registry] = generateKeyPair()
             message = query(pre=self.hab.pre, route=self.Route, replyRoute=self.Route,
                             query=dict(x=xid, pk=op["public"]), pvrsn=Vrsn_2_0, kind=Kinds.json)
-            op["query"] = bytes(self.hab.endorse(message, last=True, gvrsn=Vrsn_2_0))
-        return op["query"]
+            signed = bytes(self.hab.endorse(message, last=True, gvrsn=Vrsn_2_0))
+            if self.group:
+                op['proposal'], op['contribution'] = message.raw, signed
+            else:
+                op['query'] = signed
+        return op["query"] or op['contribution']
 
-    def _preflight(self, serder, field, role):
+    def _preflight(self, serder, field, role, *, own=False):
         from ..kering import ValidationError
         data = serder.ked.get(field)
-        if (not serder.verify() or serder.pvrsn.major != 2 or serder.ked.get("r") != self.Route
+        from ..kering import Vrsn_2_0
+        if (not serder.verify() or serder.pvrsn != Vrsn_2_0 or serder.ked.get("r") != self.Route
                 or not isinstance(data, dict) or set(data) != {"x", "pk"}
                 or not isinstance(data["x"], str) or not isinstance(data["pk"], dict)):
             raise ValidationError("invalid DH message shape")
@@ -203,20 +275,65 @@ class Dhke:
         if op is None:
             raise ValidationError("DH transaction has no local approval")
         self._live(op)
-        sender = op["issuer"] if role == "issuee" else op["issuee"]
+        sender = op[role] if own else op["issuer"] if role == "issuee" else op["issuee"]
         if self.hab.pre != op[role] or serder.pre != sender:
             raise ValidationError("wrong DH sender or local recipient")
         if set(data["pk"]) != set(op["registries"]):
             raise ValidationError("DH registry scope differs from the selected Grant")
         for public in data["pk"].values():
             decodePublicKey(public)
-        if op["peer"] is not None and op["peer"] != data["pk"]:
+        if not own and op["peer"] is not None and op["peer"] != data["pk"]:
             raise ValidationError("conflicting DH public keys")
         self._roots(op)
         return op, data["pk"]
 
+    def contribute(self, xid, proposal):
+        """Explicitly sign one unchanged custodian proposal; never perform DH.
+
+        The partial custodian signature authenticates only this review/signing
+        action. Complete route thresholds still belong to KRAM and Revery.
+        The caller transports/aggregates ordinary endorsements; no pool is kept.
+        """
+        from ..core import Parser
+        from ..core.eventing import verifySigs
+        from ..kering import Ilks, ValidationError, Vrsn_2_0
+        if not self.group:
+            raise ValidationError("DH contribution requires a local group member")
+        ims = bytearray(proposal)
+        parsed = Parser(version=Vrsn_2_0).parseOne(ims=ims, processive=False)
+        if ims or parsed is None or any(value for key, value in vars(parsed).items()
+                                       if key not in ('serder', 'sigers', 'tsgs', 'lsgs')):
+            raise ValidationError("DH proposal must be one signed query or reply")
+        message = parsed.serder
+        if message.ilk not in (Ilks.qry, Ilks.rpy):
+            raise ValidationError("DH proposal must be a query or reply")
+        query = message.ilk == Ilks.qry
+        op, public = self._preflight(message, 'q' if query else 'a',
+                                     'issuer' if query else 'issuee', own=True)
+        if op['x'] != xid or (query and message.sad.get('rr') != self.Route):
+            raise ValidationError("DH proposal differs from the approved transaction")
+        if not query and op['peer'] is None:
+            raise ValidationError("group reply requires its authenticated peer query")
+        if op['proposal'] is not None and op['proposal'] != message.raw:
+            raise ValidationError("DH proposal body is already frozen")
+        kever = self.hab.kever
+        signatures = list(parsed.sigers)
+        signatures.extend(siger for pre, sigers in parsed.lsgs if pre.qb64 == self.hab.pre
+                          for siger in sigers)
+        signatures.extend(siger for pre, number, diger, sigers in parsed.tsgs
+                          if pre.qb64 == self.hab.pre and number.sn == kever.lastEst.s
+                          and diger.qb64 == kever.lastEst.d for siger in sigers)
+        _, indices = verifySigs(message.raw, signatures, kever.verfers)
+        contribution = self.hab.db.kevers[op['custodian']].fetchLatestContribTo(verfers=kever.verfers)
+        if contribution is None or contribution[1] not in indices:
+            raise ValidationError("DH proposal lacks the frozen custodian's signature")
+        signed = bytes(self.hab.endorse(message, last=query, gvrsn=Vrsn_2_0))
+        op['proposal'], op['public'], op['contribution'] = message.raw, dict(public), signed
+        return signed
+
     def _derive(self, op, peer, role):
         """Compute every root before any Keeper write, including low-order checks."""
+        self._custody(op, lead=True)
         return {registry: deriveRoot(
             op["private"][registry], role=role, x=op["x"], grant=op["grant"],
             registry=registry, issuer=op["issuer"], issuee=op["issuee"],
@@ -233,39 +350,76 @@ class Dhke:
 
     def processQuery(self, serder, *, lsgs=None, tsgs=None, sigers=None, cigars=None, **kwa):
         """Authenticate the issuer independently of optional KRAM acceptance."""
-        from ..core import reply
+        from ..core import messagize, reply
         from ..kering import Ilks, Kinds, MissingSignatureError, ValidationError, Vrsn_2_0
         from ..peer.exchanging import verifyQueryAttachments
         if serder.ilk != Ilks.qry or serder.ked.get("rr") != self.Route:
             raise ValidationError("invalid DH query or return route")
-        op, peer = self._preflight(serder, "q", "issuee")
+        own = self.group and serder.pre == self.hab.pre
+        op, peer = self._preflight(serder, "q", 'issuer' if own else 'issuee', own=own)
+        if own and op['proposal'] != serder.raw:
+            raise ValidationError("own DH query lacks exact local proposal approval")
         if not verifyQueryAttachments(self.exc.hby, serder, lsgs=lsgs,
                                        tsgs=tsgs, sigers=sigers, cigars=cigars):
             raise MissingSignatureError("DH query lacks the issuer signature threshold")
+        if own:
+            groups = [group for group in tsgs or [] if group[0].qb64 == self.hab.pre]
+            lasts = [group for group in lsgs or [] if group[0].qb64 == self.hab.pre]
+            if op['query'] is None:
+                op['query'] = bytes(messagize(serder, tsgs=groups,
+                    lsgs=lasts if not groups else None,
+                    sigers=sigers if not groups and not lasts else None, gvrsn=Vrsn_2_0))
+            if self._custody(op):
+                self.cues.append(dict(kin='query', dest=op['issuee'], msg=op['query']))
+            return
+        if self.group and not self._custody(op):
+            op['peer'] = dict(peer)
+            return  # Non-leads can now review the lead's reply; they never generate keys.
         if op["reply"] is None:
-            if not op["public"]:
-                for registry in op["registries"]:
-                    op["private"][registry], op["public"][registry] = generateKeyPair()
-            roots = self._derive(op, peer, "issuee")
-            message = reply(pre=self.hab.pre, route=self.Route,
-                            data=dict(x=op["x"], pk=op["public"]), pvrsn=Vrsn_2_0, kind=Kinds.json)
-            signed = bytes(self.hab.endorse(message, gvrsn=Vrsn_2_0))
-            self._retain(op, peer, roots)
-            op["reply"] = signed
+            if op['proposal'] is None:
+                if not op["public"]:
+                    for registry in op["registries"]:
+                        op["private"][registry], op["public"][registry] = generateKeyPair()
+                roots = self._derive(op, peer, "issuee")
+                message = reply(pre=self.hab.pre, route=self.Route,
+                                data=dict(x=op["x"], pk=op["public"]), pvrsn=Vrsn_2_0, kind=Kinds.json)
+                signed = bytes(self.hab.endorse(message, gvrsn=Vrsn_2_0))
+                if self.group:
+                    op['proposal'], op['contribution'], op['peer'] = message.raw, signed, dict(peer)
+                else:
+                    self._retain(op, peer, roots)
+                    op["reply"] = signed
+            if self.group:
+                self.cues.append(dict(kin='sign', dest=self.hab.pre, msg=op['contribution']))
+                return
         self.cues.append(dict(kin="reply", dest=op["issuer"], msg=op["reply"]))
 
     def processReply(self, *, serder, diger, route, cigars=None, tsgs=None):
         """Verify the issuee reply through Revery before deriving or retaining."""
-        from ..kering import Ilks, ValidationError
+        from ..core import messagize
+        from ..db import fetchTsgs
+        from ..kering import Ilks, ValidationError, Vrsn_2_0
         if serder.ilk != Ilks.rpy or route != self.Route:
             raise ValidationError("invalid DH reply")
-        op, peer = self._preflight(serder, "a", "issuer")
-        if op["query"] is None:
+        own = self.group and serder.pre == self.hab.pre
+        op, peer = self._preflight(serder, "a", 'issuee' if own else 'issuer', own=own)
+        if own and (op['proposal'] != serder.raw or op['peer'] is None):
+            raise ValidationError("own DH reply lacks exact local proposal approval")
+        if not own and op["query"] is None:
             raise ValidationError("DH reply has no outstanding query")
         if not self.hab.rvy.acceptReply(serder=serder, saider=diger, route=route,
                                         aid=op["issuee"], cigars=cigars, tsgs=tsgs):
             return
-        if not op["completed"]:
+        if own:
+            if self._custody(op) and not op['completed']:
+                self._retain(op, op['peer'], self._derive(op, op['peer'], 'issuee'))
+            if op['reply'] is None:
+                groups = [group for group in fetchTsgs(db=self.hab.db.tsgs, diger=diger)
+                          if group[0].qb64 == self.hab.pre]
+                op['reply'] = bytes(messagize(serder, tsgs=groups, gvrsn=Vrsn_2_0))
+            if self._custody(op):
+                self.cues.append(dict(kin='reply', dest=op['issuer'], msg=op['reply']))
+        elif self._custody(op) and not op["completed"]:
             self._retain(op, peer, self._derive(op, peer, "issuer"))
 
     def finish(self, xid):
