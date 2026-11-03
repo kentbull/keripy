@@ -9717,6 +9717,14 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
             accepted(dict(d="", s=sectionSchemer.said, holder=leaf(good)),
                      [goodNest],
                      "a satisfiable pin on the Edge Section itself")
+            inlineSchemer = Schemer(sed={"$id": "", "version": "1.0.0",
+                                        "type": "object", "required": ["a"]})
+            accepted(dict(d="", s=inlineSchemer.sed, holder=leaf(good)),
+                     [goodNest],
+                     "a satisfiable inline pin on the Edge Section itself")
+            accepted(dict(d="", holder=dict(leaf(good), s=inlineSchemer.sed)),
+                     [goodNest],
+                     "a satisfiable inline pin on a leaf")
 
             unsatisfiable = deepcopy(good.sad["s"])
             unsatisfiable["$id"] = ""
@@ -9726,6 +9734,11 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
             refused(dict(d="", s=unsatisfiableSchemer.said, holder=leaf(good)),
                     [goodNest],
                     "an unsatisfiable pin on the Edge Section itself")
+            invalidInline = Schemer(sed={"$id": "", "version": "1.0.0",
+                                        "type": "object", "required": ["nope"]})
+            refused(dict(d="", s=invalidInline.sed, holder=leaf(good)),
+                    [goodNest],
+                    "an unsatisfiable inline pin on the Edge Section itself")
 
             # A registry's transaction state is "a string from a small finite set"
             # defined *per registry*, with issued/revoked only the spec's example.
