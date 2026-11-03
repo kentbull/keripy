@@ -10,12 +10,12 @@ import pysodium
 import pytest
 
 from keri import Kinds, Vrsn_1_0, Vrsn_2_0
-from keri.kering import MissingSignatureError
+from keri.kering import MissingSignatureError, MissingChainError, MissingSchemaError
 from keri.core import (Salter, Counter, Dater, Texter, Pather, Kevery, Kramer,
                        Diger, Prefixer, Number, Verser, Noncer, Labeler,
                        SealEvent, SealSource, SealKind, TypeMedia, Mediar,
                        SerderKERI, Parser, messagize,
-                       MtrDex, Codens, exchange)
+                       MtrDex, Codens, exchange, exchept)
 
 from keri.app import (Notifier, Counselor, Multiplexor,
                       openCF, openHab, openHby,
@@ -28,6 +28,146 @@ from keri.peer.exchanging import serializeParsedSubstream
 from keri.vdr import incept
 
 TEST_VERSION = Vrsn_1_0
+
+
+@pytest.fixture
+def retained_exchange():
+    """Real sender/endorser signatures with a route-controlled acceptance boundary."""
+    class Handler:
+        resource = "/ipex/retained-view"
+        mode = "accept"
+
+        def verifyEvidence(self, serder, *, tsgs, cigars, sourceSeals, invalid):
+            return tsgs, cigars, sourceSeals
+
+        def verify(self, serder, **kwa):
+            if self.mode == "chain":
+                raise MissingChainError("missing proof")
+            if self.mode == "schema":
+                raise MissingSchemaError(Diger(ser=b"missing schema").qb64)
+            return self.mode != "refuse"
+
+        def handle(self, serder, **kwa):
+            pass
+
+    with (openHby(name="retained-sender", temp=True, version=Vrsn_2_0) as senderHby,
+          openHby(name="retained-receiver", temp=True, version=Vrsn_2_0) as receiver):
+        sender = senderHby.makeHab(name="sender", isith='2', icount=3,
+                                   version=Vrsn_2_0, kind=Kinds.json)
+        endorser = senderHby.makeHab(name="endorser", version=Vrsn_2_0, kind=Kinds.json)
+        parser = Parser(version=Vrsn_2_0)
+        nested = []
+        for hab in (sender, endorser):
+            inception = hab.msgOwnEvent(sn=0, framed=True, gvrsn=Vrsn_2_0)
+            parser.parse(ims=bytearray(inception), kvy=receiver.kvy)
+            nested.append(parser.parse(ims=bytearray(inception), processive=False)[0])
+        handler = Handler()
+        exc = Exchanger(hby=receiver, handlers=[handler])
+        paths = [Pather(parts=["e", "credential"]).qb64b + Texter(text="subset").qb64b,
+                 Pather(parts=["e", "extra"]).qb64b + Texter(text="fuller").qb64b]
+        yield receiver, sender, endorser, handler, exc, paths, nested
+
+
+def retained_message(sender, route, ilk, nonce=0):
+    kwa = dict(sender=sender.pre, receiver=sender.pre, route=route,
+               attributes=dict(n=nonce), version=Vrsn_2_0, kind=Kinds.json)
+    return (exchept(**kwa) if ilk == "xip" else
+            exchange(xid=Diger(ser=b"retained negotiation").qb64, **kwa))
+
+
+def signed_group(hab, message, signatures=None):
+    return (hab.kever.prefixer, Number(sn=hab.kever.lastEst.s),
+            Diger(qb64=hab.kever.lastEst.d),
+            signatures if signatures is not None else hab.sign(ser=message.raw, indexed=True))
+
+
+@pytest.mark.parametrize("ilk", ["xip", "exn"])
+def test_first_accepted_disclosure_survives_authenticated_replay(retained_exchange, ilk):
+    receiver, sender, endorser, handler, exc, paths, nests = retained_exchange
+    message = retained_message(sender, handler.resource, ilk)
+    assert exc.processEvent(message, tsgs=[signed_group(sender, message)],
+                            ptds=paths[:1], nests=nests[:1]) is True
+    first_paths = receiver.db.epath.get((message.said,))
+    first_nests = receiver.db.enst.get((message.said,))
+
+    # The same signed body may arrive with fuller disclosures and another endorser.
+    assert exc.processEvent(message, tsgs=[signed_group(sender, message),
+                                          signed_group(endorser, message)],
+                            ptds=paths, nests=nests) is True
+    assert receiver.db.epath.get((message.said,)) == first_paths
+    assert receiver.db.enst.get((message.said,)) == first_nests
+    assert list(receiver.db.esigs.getTopItemIter(keys=(message.said, endorser.pre)))
+    assert receiver.db.eidx.get((endorser.pre,))[0].qb64 == message.said
+
+    # A distinct negotiation retains its own fuller accepted view.
+    separate = retained_message(sender, handler.resource, ilk, nonce=1)
+    assert separate.said != message.said
+    assert exc.processEvent(separate, tsgs=[signed_group(sender, separate)],
+                            ptds=paths, nests=nests) is True
+    assert len(receiver.db.epath.get((separate.said,))) == 2
+    assert len(receiver.db.enst.get((separate.said,))) == 2
+    assert receiver.db.epath.get((message.said,)) == first_paths
+    assert receiver.db.enst.get((message.said,)) == first_nests
+
+
+@pytest.mark.parametrize("ilk", ["xip", "exn"])
+@pytest.mark.parametrize("failure", ["partial", "invalid", "chain", "schema", "refuse"])
+def test_rejected_replay_cannot_mutate_accepted_disclosure(retained_exchange, ilk, failure):
+    receiver, sender, _, handler, exc, paths, nests = retained_exchange
+    message = retained_message(sender, handler.resource, ilk)
+    group = signed_group(sender, message)
+    assert exc.processEvent(message, tsgs=[group], ptds=paths[:1], nests=nests[:1]) is True
+    first_paths = receiver.db.epath.get((message.said,))
+    first_nests = receiver.db.enst.get((message.said,))
+    first_auth = [(key, sig.qb64) for key, sig in receiver.db.esigs.getTopItemIter(
+        keys=(message.said,))]
+    exc.cues.clear()
+
+    if failure in ("partial", "invalid"):
+        signatures = (group[3][:1] if failure == "partial" else
+                      sender.sign(ser=b"wrong message", indexed=True))
+        with pytest.raises(MissingSignatureError):
+            exc.processEvent(message, tsgs=[signed_group(sender, message, signatures)],
+                              ptds=paths, nests=nests)
+    else:
+        handler.mode = failure
+        assert exc.processEvent(message, tsgs=[group], ptds=paths, nests=nests) is (
+            False if failure == "refuse" else None)
+
+    assert receiver.db.epath.get((message.said,)) == first_paths
+    assert receiver.db.enst.get((message.said,)) == first_nests
+    assert [(key, sig.qb64) for key, sig in receiver.db.esigs.getTopItemIter(
+        keys=(message.said,))] == first_auth
+    assert receiver.db.epse.get((message.said,)) is None
+    assert list(receiver.db.emse.getTopItemIter(keys=(message.said,))) == []
+    assert receiver.db.epsd.get((message.said,)) is None
+    assert receiver.db.emsd.get((message.said,)) is None
+    assert list(exc.cues) == []
+
+
+@pytest.mark.parametrize("ilk", ["xip", "exn"])
+@pytest.mark.parametrize("pending", ["signature", "schema"])
+@pytest.mark.parametrize("nest_count", [0, 1], ids=["empty", "one-nest"])
+def test_first_acceptance_replaces_provisional_disclosure(retained_exchange, ilk, pending,
+                                                        nest_count):
+    receiver, sender, _, handler, exc, paths, nests = retained_exchange
+    message = retained_message(sender, handler.resource, ilk)
+    group = signed_group(sender, message)
+    if pending == "signature":
+        with pytest.raises(MissingSignatureError):
+            exc.processEvent(message, tsgs=[signed_group(sender, message, group[3][:1])],
+                              ptds=paths, nests=nests)
+    else:
+        handler.mode = "schema"
+        assert exc.processEvent(message, tsgs=[group], ptds=paths, nests=nests) is None
+        handler.mode = "accept"
+    assert len(receiver.db.epath.get((message.said,))) == 2
+    assert len(receiver.db.enst.get((message.said,))) == 2
+    assert exc.processEvent(message, tsgs=[group], ptds=paths[:nest_count],
+                            nests=nests[:nest_count]) is True
+    assert len(receiver.db.epath.get((message.said,))) == nest_count
+    assert len(receiver.db.enst.get((message.said,))) == nest_count
+    assert receiver.db.epse.get((message.said,)) is None
 
 
 def test_nesting():
