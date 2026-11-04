@@ -15,7 +15,7 @@ parser.add_argument('--sender', required=True, help='exact authorized sender AID
 parser.add_argument('--event', required=True, help='exact accepted BUP for this held opening')
 parser.add_argument('--opening', required=True, help='one held CESR state opening, never a root')
 source = parser.add_mutually_exclusive_group(required=True)
-source.add_argument('--message', help='exact signed encrypted reply file')
+source.add_argument('--message', action='append', help='exact signed encrypted reply file; repeat to aggregate contributions to the same body')
 source.add_argument('--listen', action='store_true', help='listen through the ordinary mailboxes after approval')
 parser.add_argument('--evidence', action='append', default=[], help='signed public KEL/TEL support file')
 parser.add_argument('--timeout', type=float, default=120.0, help='finite approval/intake lifetime; restart requires fresh approval')
