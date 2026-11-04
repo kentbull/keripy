@@ -10,7 +10,7 @@ from keri.acdc import Regery, Registrar, acdcmap
 from keri.acdc.salting import RegistrySalt
 from keri.app import openCF, openHby
 from keri.app.habbing import GroupHab, SignifyGroupHab, SignifyHab
-from keri.core import (Blinder, Cipher, Codens, Counter, Encrypter, Kevery, Kramer, MtrDex, Parser,
+from keri.core import (Blinder, Cipher, Codens, Counter, Diger, Encrypter, Kevery, Kramer, MtrDex, Parser,
                        Salter, SealSource, SerderKERI, Signer, messagize, reply)
 from keri.kering import AuthError, Kinds, ValidationError
 
@@ -116,6 +116,11 @@ def test_individual_copy_rechecks_exact_accepted_opening(enabled, bound):
         assert retained(w, w.alice).qb64 == w.root.qb64
         receive(w.alice, wire)
         assert retained(w, w.alice).qb64 == w.root.qb64
+        fresh = parsed(w.issuer.salt.prepare(w.registry, w.alice.hab.pre, w.alice.hab.pre))
+        # Identical Keeper retention is still a successful newly authenticated receipt.
+        assert w.alice.salt.processReply(serder=fresh.serder, diger=Diger(qb64=fresh.serder.said),
+            route=RegistrySalt.Route, cigars=fresh.cigars, tsgs=fresh.tsgs,
+            attachments={'sigers': fresh.sigers}) is True
         cipher = w.alice.hab.mgr.ks.rroots.get((w.alice.hab.pre, w.registry))
         assert cipher.qb64 != w.root.qb64
         assert w.alice.rgy.store.opening(w.event.said) is None
