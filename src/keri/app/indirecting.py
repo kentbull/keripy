@@ -146,7 +146,7 @@ def createHttpServer(host, port, app, keypath=None, certpath=None, cafilepath=No
     Returns:
         hio.core.http.Server"""
     if keypath is not None and certpath is not None and cafilepath is not None:
-        servant = tcp.ServerTls(certify=False,
+        servant = tcp.ServerTls(host=host, certify=False,
                                 keypath=keypath,
                                 certpath=certpath,
                                 cafilepath=cafilepath,
