@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from contextlib import ExitStack
+from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from uuid import uuid4
 
@@ -271,26 +272,30 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             doing.Doist(real=True, tock=0.03125, limit=5).do(doers=[delivery])
             assert delivery.done
             signing.close()
-            refused = kli(tmp_path, 'ipex', 'admit', *holders[0]['args'], *common,
-                '--coordinator', coordinator, '--custodian', holders[1]['member'], succeeds=False)
+            # Independent stores permit these negative selections concurrently within the same live query.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                refused = pool.submit(kli, tmp_path, 'ipex', 'admit', *holders[0]['args'], *common,
+                    '--coordinator', coordinator, '--custodian', holders[1]['member'], succeeds=False)
+                timedout = pool.submit(kli, tmp_path, 'ipex', 'admit', *holders[1]['args'], '--said', selected['grant'],
+                    '--input', str(grantfile), '--deliver', '--timeout', '0.2', '--coordinator', coordinator,
+                    '--custodian', holders[0]['member'], succeeds=False)
+                refused, timedout = refused.result(), timedout.result()
             assert 'custodian' in refused
-            timedout = kli(tmp_path, 'ipex', 'admit', *holders[1]['args'], '--said', selected['grant'],
-                '--input', str(grantfile), '--deliver', '--timeout', '0.2', '--coordinator', coordinator,
-                '--custodian', holders[0]['member'], succeeds=False)
             assert 'before --timeout' in timedout and '"admitted": true' not in timedout
-            hby = setupHby(name=holders[1]['name'], base=holders[1]['base'], bran=PASSCODE,
-                          noPrompt=True, version=V2)
+            store = Baser(name=holders[1]['name'], base=holders[1]['base'], readonly=True, reopen=True)
+            keeper = Keeper(name=holders[1]['name'], base=holders[1]['base'], readonly=True, reopen=True)
             try:
-                assert hby.db.exns.get((selected['grant'],)) is None
-                assert not list(hby.ks.rroots.getTopItemIter())
-                assert hby.db.epse.get((selected['grant'],)).raw == frames[-1].serder.raw
-                assert hby.db.exns.get((wrong.said,)) is None
-                original_deadline = hby.db.epsd.get((selected['grant'],)).dts
-                cache = hby.db.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
+                assert store.exns.get((selected['grant'],)) is None
+                assert not list(keeper.rroots.getTopItemIter())
+                assert store.epse.get((selected['grant'],)).raw == frames[-1].serder.raw
+                assert store.exns.get((wrong.said,)) is None
+                original_deadline = store.epsd.get((selected['grant'],)).dts
+                cache = store.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
                 assert cache is not None and cache.rdt and cache.xl == 300000
                 assert fromIso8601(original_deadline) == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
             finally:
-                hby.close()
+                keeper.close()
+                store.close()
             start(['ipex', 'admit', *holders[0]['args'], *common, '--coordinator', coordinator,
                 '--custodian', holders[0]['member'], '--output', str(tmp_path / 'group-lead.cesr')], logs[1])
             phase(logs[1], 'group_dh_proposed')
