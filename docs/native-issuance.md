@@ -2,8 +2,7 @@
 
 `ipex grant` and `ipex admit` retain their v1 behavior by default. Native live
 issuance is opt-in with `--version 2.0` and requires encrypted, unlocked local
-individual issuers. Holders may use an individual habitat or the group issuance
-profile below. Provision accepted peer KELs, witness/mailbox locations,
+signers. Issuers and holders have the explicit group profiles below. Provision accepted peer KELs, witness/mailbox locations,
 and schema evidence first. The commands borrow native Regery, Exchanger, DH,
 and the existing witness/delegation and mailbox owners.
 
@@ -68,6 +67,45 @@ Timeout/cancellation abandons this process's operation; a restart requires fresh
 explicit selection and cannot recover lost ephemeral keys. Signed observer
 queries and group Unblind/presentation are outside this group issuance profile.
 
+For a group issuer sending to an individual holder, first use native registry
+inception and the other members' existing `multisig join --version 2.0` to accept
+the exact RIP and controller anchor. Create the public credential body in the
+elected custodian's managed registry. The fresh Grant author must be that existing
+custodian; these options do not elect a new one.
+
+```sh
+# Leave the custodian process running through the holder's verified Admit.
+kli ipex grant --name issuer-member-1 --alias issuer-group --version 2.0 \
+  --credential body.cesr --recipient "$HOLDER_AID" --issue --deliver \
+  --coordinator "$GROUP_EVENT_SAID" --custodian "$CUSTODIAN_MEMBER_AID" \
+  --consent-lifetime 120 --proposal-output proposal.cesr \
+  --input holder-public.cesr --output grant-public.cesr --timeout 120
+# Another member independently selects the exact packet and the same scope.
+kli ipex grant --name issuer-member-2 --alias issuer-group --version 2.0 \
+  --credential body.cesr --recipient "$HOLDER_AID" --issue --deliver \
+  --coordinator "$GROUP_EVENT_SAID" --custodian "$CUSTODIAN_MEMBER_AID" \
+  --consent-lifetime 120 --proposal proposal.cesr --input holder-public.cesr --timeout 120
+```
+
+Each member validates the accepted RIP directly; only the custodian needs a
+managed registry alias. The command approves that exact Grant and one unchanged,
+authenticated custodian DH query. Ordinary signature thresholds precede native
+query transmission. A nonlead reports `phase: contributed`, creates no DH keys or
+registry root, and exits. Its store is then available for `multisig join`, which
+separately prompts for the exact BUP and controller anchor. The custodian remains
+live until native accepted BUP, witnessed anchor, issued credential opening and
+the selected holder's verified Admit all succeed. The holder uses the individual
+Admit command above, with the group and member public KEL evidence available.
+
+`--consent-lifetime` is a required finite policy for a group issuer's first partial
+Grant escrow, separate from `--timeout`. Set it before the first intake. Existing
+deadlines never renew, including retries with a larger value. Ordinary configured
+KRAM original-timestamp windows still govern wrapper and Grant authentication
+and may expire earlier. The library's default ten-second fallback stays unchanged.
+`/multisig/qry` is this CLI's scoped coordination extension carrying the native
+DH query, not a new auxiliary protocol. Root provisioning/receipt after issuance
+uses the existing separate commands; this flow ends at verified Admit.
+
 Optionally require a configured observer to supply the selected registry's
 public evidence before Admit:
 
@@ -110,5 +148,5 @@ keys or revive a timed-out operation. Select a new fresh registry/transaction
 when an incomplete operation cannot finish.
 
 This command supports one disclosed credential in one fresh issuer-controlled
-registry. Group issuers, anchored Agree/Grant, multi-node/shared-registry profiles,
+registry. Anchored Agree/Grant, multi-node/shared-registry profiles,
 presentation, Unblind, and provisioning are outside this live issuance unit.

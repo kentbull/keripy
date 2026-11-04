@@ -45,6 +45,12 @@ parser.add_argument('--issue', action='store_true', help='authorize live DH and 
 parser.add_argument('--authenticate', '-z', action='store_true')
 parser.add_argument('--code', default=[], action='append', help='selected witness AID:code')
 parser.add_argument('--code-time')
+parser.add_argument('--coordinator', help='exact accepted group controller event SAID for existing DH election')
+parser.add_argument('--custodian', help='existing elected group member AID; only this member performs DH')
+parser.add_argument('--proposal', help='exact member-signed /multisig/exn Grant packet to approve')
+parser.add_argument('--proposal-output', help='exclusive-create exact Grant proposal packet')
+parser.add_argument('--consent-lifetime', type=float,
+                    help='explicit finite partial Grant consent lifetime in seconds; never renews existing deadlines')
 
 
 def handler(args):

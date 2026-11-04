@@ -20,7 +20,7 @@ from keri.core import Parser, SerderACDC, exchange
 from keri.cli.common.groupadmitting import ProofRoute
 from keri.db import Baser
 from keri.app import Keeper
-from keri.peer.exchanging import serializeParsedSubstream, verify
+from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from keri.kering import KeriError
 from keri.help import fromIso8601
 
@@ -353,6 +353,185 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
 
 def test_installed_group_holder_contributes_to_live_dh_and_one_exact_admit(tmp_path, live_parties):
     group_issue(tmp_path, live_parties)
+
+
+def issuer_group(tmp_path, live_parties):
+    from tests.cli.commands.vc.test_native_registry_cli import group_registry
+    issuers, holder, coordinator = group_registry(tmp_path, live_parties)
+    lead, _ = issuers
+    # Conversation policy is configured before the first native Grant, separately from PSE consent.
+    for side in (*issuers, holder):
+        hby = setupHby(name=side['name'], base=side['base'], bran=PASSCODE, noPrompt=True, version=V2)
+        try:
+            config = hby.cf.get()
+            config['kram'] = dict(enabled=True, denials=[],
+                caches={'~': [1000, 60000, 60000, 300000, 60000, 60000, 300000]})
+            hby.cf.put(config)
+        finally:
+            hby.close()
+    bodyfile = tmp_path / 'issuer-body.cesr'
+    kli(tmp_path, 'vc', 'create', *lead['args'], '--registry-name', 'issuer-fresh',
+        '--recipient', holder['pre'], '--data', '{"role":"group issuer"}', '--output', str(bodyfile))
+    return issuers, holder, coordinator, bodyfile
+
+
+def test_installed_group_issuer_exact_grant_query_and_bup_join(tmp_path, live_parties):
+    issuers, holder, coordinator, bodyfile = issuer_group(tmp_path, live_parties)
+    lead, peer = issuers
+    body = SerderACDC(raw=bodyfile.read_bytes())
+    proposal, grantfile = tmp_path / 'issuer-proposal.cesr', tmp_path / 'issuer-grant.cesr'
+    logs = [tmp_path / name for name in ('issuer-lead.log', 'issuer-peer.log', 'individual-holder.log')]
+    common = ['--credential', str(bodyfile), '--recipient', holder['pre'], '--issue', '--deliver',
+        '--coordinator', coordinator, '--custodian', lead['member'], '--consent-lifetime', '70', '--timeout', '65']
+    processes = []
+    with ExitStack() as stack:
+        def start(arguments, log):
+            output = stack.enter_context(log.open('w'))
+            process = subprocess.Popen([shutil.which('kli'), *arguments], cwd=tmp_path,
+                stdout=output, stderr=subprocess.STDOUT)
+            processes.append(process)
+            return process
+
+        def phase(log, name):
+            deadline = time.monotonic() + 15
+            while True:
+                for line in log.read_text().splitlines():
+                    if line.startswith('{') and json.loads(line).get('phase') == name:
+                        return json.loads(line)
+                assert all(p.poll() in (None, 0) for p in processes), '\n'.join(path.read_text() for path in logs if path.exists())
+                assert time.monotonic() < deadline, log.read_text()
+                time.sleep(0.03)
+
+        try:
+            # The first partial Grant survives ten seconds only by the original explicit consent policy.
+            start(['ipex', 'grant', *lead['args'], *common, '--input', str(holder['public']),
+                '--proposal-output', str(proposal), '--output', str(grantfile)], logs[0])
+            selected = phase(logs[0], 'group_proposed')
+            store = Baser(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
+            try:
+                original = store.epsd.get((selected['grant'],)).dts
+            finally:
+                store.close()
+            time.sleep(10.2)
+            store = Baser(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
+            keeper = Keeper(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
+            try:
+                assert store.exns.get((selected['grant'],)) is None and store.erpy.get((selected['grant'],)) is None
+                assert store.epsd.get((selected['grant'],)).dts == original
+                assert not list(keeper.rroots.getTopItemIter())
+            finally:
+                keeper.close()
+                store.close()
+            # Fresh explicit peer consent signs this packet and the authenticated custodian query, then exits.
+            contributor = start(['ipex', 'grant', *peer['args'], *common, '--proposal', str(proposal),
+                '--input', str(holder['public'])], logs[1])
+            contributor.wait(timeout=20)
+            assert contributor.returncode == 0 and '"phase": "contributed"' in logs[1].read_text(), logs[1].read_text()
+            store = Baser(name=peer['name'], base=peer['base'], readonly=True, reopen=True)
+            keeper = Keeper(name=peer['name'], base=peer['base'], readonly=True, reopen=True)
+            try:
+                assert not list(keeper.rroots.getTopItemIter())
+                assert store.exns.get((selected['grant'],)) is None
+            finally:
+                keeper.close()
+                store.close()
+            start(['ipex', 'admit', *holder['args'], '--said', selected['grant'],
+                '--input', str(lead['public']), '--input', str(grantfile), '--deliver', '--timeout', '35'], logs[2])
+            # DH roots alone do not authorize an accepted BUP or Admit without the second anchor signature.
+            bup = phase(logs[0], 'group_bup_proposed')
+            hby = setupHby(name=peer['name'], base=peer['base'], bran=PASSCODE, noPrompt=True, version=V2)
+            rgy = Regery(hby, name=peer['name'], base=peer['base'])
+            try:
+                assert body.regid not in rgy.regs
+                assert rgy.store.headEvent(body.regid).ilk == 'rip'
+            finally:
+                rgy.close()
+                hby.close()
+            store = Baser(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
+            try:
+                assert store.erpy.get((selected['grant'],)) is None
+                assert store.kels.getLast(keys=lead['pre'], on=2) != bup['anchor']
+                assert store.epsd.get((selected['grant'],)).dts == original
+            finally:
+                store.close()
+            joined = subprocess.run([shutil.which('kli'), 'multisig', 'join', '--name', peer['name'],
+                '--base', peer['base'], '--passcode', PASSCODE, '--version', '2.0'],
+                input='\n', text=True, capture_output=True, cwd=tmp_path, timeout=25)
+            assert joined.returncode == 0 and 'Approve exact BUP anchor' in joined.stdout, joined.stdout + joined.stderr
+            for process in processes:
+                process.wait(timeout=25)
+            assert all(p.returncode == 0 for p in processes), '\n'.join(path.read_text() for path in logs)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
+    result = next(json.loads(line) for line in reversed(logs[0].read_text().splitlines()) if line.startswith('{'))
+    assert result['admitted'] and result['registry_issued']
+    assert result == next(json.loads(line) for line in reversed(logs[2].read_text().splitlines()) if line.startswith('{'))
+    roots, queries = [], []
+    for side in (*issuers, holder):
+        hby = setupHby(name=side['name'], base=side['base'], bran=PASSCODE, noPrompt=True, version=V2)
+        rgy = Regery(hby, name=side['name'], base=side['base'])
+        try:
+            hab = hby.habByName(side['alias'])
+            root = hab.mgr.getRegistryRoot(hab.pre, body.regid)
+            roots.append(root.qb64 if root else None)
+            assert rgy.store.headEvent(body.regid).said == bup['bup']
+            if side is not peer:
+                grant = hby.db.exns.get((selected['grant'],))
+                assert grant is not None
+                tsgs, _ = verify(hby, grant)
+                assert {sig.index for pre, _, _, sigers in tsgs if pre.qb64 == lead['pre'] for sig in sigers} == {0, 1}
+                response = hby.db.exns.get((result['admit'],))
+                verify(hby, response)
+                assert response.pre == holder['pre'] and response.sad['p'] == selected['grant']
+                assert hby.db.exrs.get((selected['grant'], body.said)).state == 'issued'
+            else:
+                assert hby.db.exns.get((selected['grant'],)) is None
+                assert not list(hby.ks.rroots.getTopItemIter())
+            for _, packet in hby.db.exns.getTopItemIter():
+                if packet.route == '/multisig/qry':
+                    child = loadParsedNestedSubstreams(hby, packet.said)[0]
+                    queries.append((child.serder.raw, {sig.index for pre, sigers in child.lsgs
+                                                       if pre.qb64 == lead['pre'] for sig in sigers}))
+        finally:
+            rgy.close()
+            hby.close()
+    assert roots[0] == roots[2] and roots[0] is not None and roots[1] is None
+    assert len(queries) == 2 and len({raw for raw, _ in queries}) == 1
+    assert set.union(*(indices for _, indices in queries)) == {0, 1}
+    assert all(roots[0].encode() not in path.read_bytes() for path in (proposal, grantfile))
+
+
+def test_group_issuer_expired_consent_cannot_be_renewed(tmp_path, live_parties):
+    issuers, holder, coordinator, bodyfile = issuer_group(tmp_path, live_parties)
+    lead, _ = issuers
+    proposal = tmp_path / 'expired-proposal.cesr'
+    arguments = ['ipex', 'grant', *lead['args'], '--credential', str(bodyfile), '--recipient', holder['pre'],
+        '--input', str(holder['public']), '--issue', '--deliver', '--coordinator', coordinator,
+        '--custodian', lead['member']]
+    output = kli(tmp_path, *arguments, '--proposal-output', str(proposal), '--consent-lifetime', '1',
+                 '--timeout', '5', succeeds=False)
+    assert 'original native deadline' in output
+    selected = next(json.loads(line) for line in output.splitlines() if line.startswith('{'))
+    store = Baser(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
+    try:
+        original = store.epsd.get((selected['grant'],)).dts
+    finally:
+        store.close()
+    output = kli(tmp_path, *arguments, '--proposal', str(proposal), '--consent-lifetime', '300',
+                 '--timeout', '5', succeeds=False)
+    assert 'original native deadline' in output
+    store = Baser(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
+    keeper = Keeper(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
+    try:
+        assert store.epsd.get((selected['grant'],)).dts == original
+        assert store.exns.get((selected['grant'],)) is None and store.erpy.get((selected['grant'],)) is None
+        assert not list(keeper.rroots.getTopItemIter())
+    finally:
+        keeper.close()
+        store.close()
 
 
 def test_finite_grant_timeout_keeps_registry_unissued_and_has_no_restart_keys(tmp_path, live_parties):
