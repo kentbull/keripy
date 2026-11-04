@@ -961,6 +961,29 @@ def test_multisig_rpy_default_version_uses_v2_nested_substreams(mockHelpingNowUT
         assert results[0].nests[0].serder.said == innerSerder.said
 
 
+def test_multisig_exn_explicit_v1_preserves_legacy_embedded_exchange():
+    from keri.peer import cloneMessage
+    from keri.vc.protocoling import ipexApplyExn
+
+    with openMultiSig(prefix='legacy-exn') as ((hby, group), (_, other), (_, _)):
+        child, atc = ipexApplyExn(hab=group, recp=other.pre, message='legacy request',
+            schema=Diger(ser=b'schema').qb64, attrs={}, version=Vrsn_1_0, gvrsn=Vrsn_1_0)
+        wrapper, atc = grouping.multisigExn(group, child.raw + atc, version=Vrsn_1_0)
+        assert wrapper.pvrsn == Vrsn_1_0
+        assert wrapper.ked['a'] == dict(gid=group.pre)
+        assert wrapper.ked['e']['exn'] == child.ked
+        notifier = Notifier(hby=hby)
+        try:
+            mux = Multiplexor(hby=hby, notifier=notifier)
+            exc = Exchanger(hby=hby, handlers=[])
+            loadHandlers(exc=exc, mux=mux)
+            Parser(version=Vrsn_1_0, kvy=hby.kvy, exc=exc).parse(ims=bytearray(wrapper.raw + atc))
+            retained, paths = cloneMessage(hby, wrapper.said)
+            assert retained.raw == wrapper.raw and paths['exn']
+        finally:
+            notifier.noter.close()
+
+
 def test_multisig_registry_incept(mockHelpingNowUTC, mockCoringRandomNonce):
     with openMultiSig(prefix="test") as ((hby1, ghab1), (_, _), (_, _)):
         vcp = incept(ghab1.pre, version=Vrsn_1_0, kind=Kinds.json)
