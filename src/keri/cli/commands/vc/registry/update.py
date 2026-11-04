@@ -1,0 +1,149 @@
+"""Update one existing native issuer registry without replacing its root."""
+import argparse
+import json
+import math
+from pathlib import Path
+
+from hio.base import doing
+
+from ....common import Parsery, parseVersion, setupHby
+from ....common.nativeanchoring import anchor
+from ....common.witnessing import witnessAuths
+from ..... import Kinds, Vrsn_1_0, Vrsn_2_0
+from .....acdc import Regery, Registrar, regeventing
+from .....app import GroupHab, Keeper, MailboxDirector, SignifyHab, SignifyGroupHab
+from .....core import Blinder, Number, SealSource, SerderACDC, messagize
+from .....kering import ConfigurationError
+
+
+parser = argparse.ArgumentParser(description='Update the state of one existing native credential',
+                                 parents=[Parsery.keystore()])
+parser.set_defaults(handler=lambda args: [NativeStateUpdate(args)])
+parser.add_argument('--alias', '-a', required=True, help='accepted individual local issuer alias')
+parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0)
+parser.add_argument('--credential', required=True, help='exact self-verifying native credential body')
+parser.add_argument('--state', required=True, choices=('issued', 'revoked', 'vacuous'))
+parser.add_argument('--output', required=True, help='exclusive-create public KEL/TEL evidence file')
+parser.add_argument('--timeout', type=float, default=120.0, help='finite whole-operation deadline')
+parser.add_argument('--authenticate', '-z', action='store_true')
+parser.add_argument('--code', action='append', default=[], help='selected witness AID:code')
+parser.add_argument('--code-time', default=None, help='ISO8601 capture time of witness codes')
+
+
+class NativeStateUpdate(doing.DoDoer):
+    """Require existing authority and verified current binding before authoring."""
+    def __init__(self, args):
+        self.args = args
+        super().__init__(doers=[doing.doify(self.run)])
+
+    def check(self):
+        if self.tyme >= self.deadline:
+            raise TimeoutError('native state update did not complete before --timeout; staged work may remain')
+
+    def selected(self, body):
+        """Resolve the exact owned registry and its root without generating one."""
+        raw = Path(self.args.credential).read_bytes()
+        if (body.raw != raw or body.pvrsn != Vrsn_2_0 or not body.verify()
+                or body.ilk not in ('acm', 'act', 'acg') or body.israid != self.hab.pre
+                or body.regid not in self.rgy.regs):
+            raise ConfigurationError('credential must exactly match the local issuer and owned native registry')
+        registry = self.rgy.regs[body.regid]
+        root = self.hab.mgr.getRegistryRoot(self.hab.pre, registry.regk)
+        if root is None:
+            raise ConfigurationError('native state update requires the existing issuer-owned registry root')
+        head = self.rgy.store.headEvent(registry.regk)
+        if head is None or head.ilk != 'bup':
+            raise ConfigurationError('native state update requires an accepted existing BUP, not a RIP-only registry')
+        frontier = registry._effectiveFrontier()
+        if frontier is None or frontier.said != head.said:
+            raise ConfigurationError('native registry has an outstanding staged successor; refusing another update')
+        rip = self.rgy.store.seqEvent(registry.regk, 0)
+        if rip is None or rip.said != registry.regk or rip.israid != self.hab.pre:
+            raise ConfigurationError('native registry inception does not match its local issuer')
+        updates = [self.rgy.store.seqEvent(registry.regk, sn)
+                   for sn in range(1, Number(numh=head.sad['n']).num + 1)]
+        if any(event is None for event in updates):
+            raise ConfigurationError('native registry accepted history is incomplete')
+        proofs = []
+        for event in reversed(updates):
+            proof = self.rgy.store.opening(event.said)
+            if proof is None:
+                proof = Blinder.unblind(event.sad['b'], salt=root.qb64,
+                    sn=Number(numh=event.sad['n']).num, acdc=body.said,
+                    states=('issued', 'revoked', ''))
+            if proof is None:
+                raise ConfigurationError('current binding lacks a derivable ordinary or exact held opening')
+            proofs.append(proof)
+            if proof.acdc or proof.state:
+                break
+        regeventing.vetBinds(rip, updates, db=self.hby.db, blinders=proofs,
+                            target=body.said, controller=self.hab.pre, acdc=body)
+        return registry, root, head
+
+    def public(self, registry):
+        """Export only accepted public history and its ordinary anchor sources."""
+        raw = bytearray()
+        for support in self.hby.db.cloneDelegation(self.hab.kever, gvrsn=Vrsn_2_0):
+            raw.extend(support)
+        raw.extend(self.hab.replay(gvrsn=Vrsn_2_0))
+        for body in self.rgy.store.cloneTelIter(registry):
+            event = SerderACDC(raw=body)
+            sn, said = regeventing.vetAnchor(event, db=self.hby.db, issuer=self.hab.pre)
+            raw.extend(messagize(event, bonds=[SealSource(s=f'{sn:x}', d=said)], gvrsn=Vrsn_2_0))
+        return bytes(raw)
+
+    def run(self, tymth, tock=0.03125, **kwa):
+        self.wind(tymth)
+        self.tock = tock
+        yield tock
+        args = self.args
+        if args.version != Vrsn_2_0:
+            raise ConfigurationError('native state update requires --version 2.0')
+        if not math.isfinite(args.timeout) or args.timeout <= 0:
+            raise ConfigurationError('--timeout must be finite and positive')
+        self.deadline = self.tyme + args.timeout
+        if Path(args.output).exists():
+            raise ConfigurationError('output already exists')
+        keeper = Keeper(name=args.name, base=args.base, reopen=True)
+        try:
+            if not keeper.gbls.get('aeid'):
+                raise ConfigurationError('native state update requires an existing encrypted Keeper')
+        finally:
+            keeper.close()
+        self.hby = setupHby(name=args.name, base=args.base, bran=args.bran, version=Vrsn_2_0)
+        self.rgy, background, event = None, [], None
+        try:
+            self.hab = self.hby.habByName(args.alias)
+            if (self.hab is None or not self.hab.accepted
+                    or isinstance(self.hab, (GroupHab, SignifyHab, SignifyGroupHab))):
+                raise ConfigurationError('native state update requires an accepted individual local signer')
+            self.rgy = Regery(self.hby, name=args.name, base=args.base)
+            body = SerderACDC(raw=Path(args.credential).read_bytes())
+            registry, root, prior = self.selected(body)
+            auths = witnessAuths(self.hab.kever.wits, authenticate=args.authenticate,
+                                codes=args.code, codeTime=args.code_time)
+            self.check()
+            # Reserve the requested output before staging a BUP or signing KEL.
+            with Path(args.output).open('xb') as output:
+                registrar = Registrar(self.rgy)
+                _, event = (registrar.vacate(registry, salt=root.qb64) if args.state == 'vacuous'
+                            else registrar.issue(registry, body, state=args.state, salt=root.qb64))
+                result = dict(regid=registry.regk, priorHead=prior.said, head=event.said,
+                    sequence=Number(numh=event.sad['n']).num, state=args.state, output=args.output)
+                print(json.dumps(dict(result, accepted=False, phase='staged')), flush=True)
+                mailbox = MailboxDirector(hby=self.hby, topics=['/receipt', '/replay', '/delegate'],
+                    rgy=self.rgy, version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+                background.append(mailbox)
+                self.extend([mailbox])
+                try:
+                    yield from anchor(self, registry, event, auths, background)
+                except TimeoutError:
+                    print(json.dumps(dict(result, accepted=False, phase='incomplete')), flush=True)
+                    raise
+                output.write(self.public(registry.regk))
+            print(json.dumps(dict(result, accepted=True)), flush=True)
+        finally:
+            self.remove(background)
+            if self.rgy is not None:
+                self.rgy.close()
+            self.hby.close()

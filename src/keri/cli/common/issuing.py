@@ -5,19 +5,17 @@ from pathlib import Path
 
 from hio.base import doing
 
-from . import parseVersion, setupHby
-from . import evidencing
+from . import evidencing, nativeanchoring, parseVersion, setupHby
 from .credentialing import recipient
 from .negotiating import NativeNegotiation
 from .witnessing import witnessAuths
 from ... import Kinds, Vrsn_1_0, Vrsn_2_0
 from ...acdc import Regery, Registrar, ipexing, regeventing
 from ...acdc.dhking import Dhke
-from ...app import (Anchorer, GroupHab, Keeper, MailboxDirector, Notifier,
-                    Receiptor, SignifyHab, SignifyGroupHab, StreamPoster)
+from ...app import (GroupHab, Keeper, MailboxDirector, Notifier,
+                    SignifyHab, SignifyGroupHab, StreamPoster)
 from ...app.agenting import HTTPStreamMessenger
-from ...core import (Diger, Kevery, Kramer, Number, NumDex, Parser, SealSource,
-                     SerderACDC, SerderKERI, messagize)
+from ...core import Kevery, Kramer, Parser, SealSource, SerderACDC, messagize
 from ...kering import ConfigurationError
 from ...peer import Exchanger
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
@@ -208,32 +206,7 @@ class NativeIssuance(doing.DoDoer):
             if self.verb == 'grant':
                 _, event = Registrar(self.rgy).issue(registry, acdc=body,
                     salt=self.hab.mgr.getRegistryRoot(self.hab.pre, registry.regk).qb64)
-                seal = dict(i=registry.regk, s=event.sad['n'], d=event.said)
-                author = self.hab.rotate if self.hab.kever.estOnly else self.hab.interact
-                anchor = SerderKERI(raw=author(data=[seal], version=Vrsn_2_0,
-                                             gvrsn=Vrsn_2_0, kind=Kinds.json))
-                receipts = Receiptor(hby=self.hby)
-                background.append(receipts)
-                self.extend([receipts])
-                if anchor.ilk == 'drt':
-                    swain = Anchorer(hby=self.hby, version=Vrsn_2_0, kind=Kinds.json)
-                    background.append(swain)
-                    self.extend([swain])
-                    swain.delegation(pre=self.hab.pre, sn=anchor.sn, auths=auths)
-                    while not swain.complete(self.hab.kever.prefixer, Number(num=anchor.sn, code=NumDex.Huge)):
-                        self.check()
-                        yield tock
-                elif self.hab.kever.wits:
-                    for tick in receipts.receipt(self.hab.pre, sn=anchor.sn, auths=auths):
-                        self.check()
-                        yield tick
-                if not registry.anchorMsg(event.said, number=Number(num=anchor.sn),
-                                          diger=Diger(qb64=anchor.said)):
-                    raise ConfigurationError('native registry did not accept the exact witnessed BUP anchor')
-                self.rgy.processEscrows()
-                accepted = self.rgy.store.headEvent(registry.regk)
-                if accepted is None or accepted.said != event.said:
-                    raise ConfigurationError('native registry has not accepted the issued BUP')
+                yield from nativeanchoring.anchor(self, registry, event, auths, background)
                 self.finish(xid, message.said)
                 print(json.dumps(dict(grant=message.said, xid=xid, phase='registry_witnessed')),
                       flush=True)
