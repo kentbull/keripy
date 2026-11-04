@@ -10,12 +10,14 @@ from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, admit, chaining, grant, loadHandlers, regeventing
 from keri.acdc.dhking import Dhke
 from keri.acdc.salting import RegistrySalt
-from keri.app import Notifier, openCF, openHby
+from keri.app import Notifier, grouping, openCF, openHby
 from keri.core import (Blinder, Diger, Kevery, Kramer, Matter, MtrDex, Number, Parser, Salter,
-                       SealSource, SerderACDC, SerderKERI, Signer, interact, messagize, rotate)
+                       SealSource, SerderACDC, SerderKERI, Signer, exchange as exchangeMessage,
+                       interact, messagize, rotate)
 from keri.kering import ValidationError
 from keri.peer import Exchanger
-from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
+from keri.peer.exchanging import (loadParsedNestedSubstreams, serializeMessage,
+                                  serializeParsedSubstream, verify)
 
 
 def receive(side, wire, *, local=False):
@@ -450,3 +452,95 @@ def test_restarted_lead_cannot_accept_old_threshold_reply():
         assert not issuer.dh._operations and root(issuer, h) is None
         old.abandon(h.xid)
         issuee.dh.abandon(h.xid)
+
+
+def test_native_ipex_proposals_replay_only_after_local_approval_with_native_verification():
+    with groups() as h, ExitStack() as stack:
+        opening, event = h.registrar.issue(h.registry, h.credential, salt=Salter().qb64)
+        h.anchor(event)
+        message, atc = grant(hab=h.issuers[0].hab, recp=h.issuees[0].hab.pre,
+            message='exact group presentation', origin=h.credential)
+        missing = [serializeParsedSubstream(nest) for nest in parsed(message.raw + atc).nests]
+        retained = parsed(message.raw + atc)
+        retained.nests[0].bsqs.append(opening.data)
+        complete = [serializeParsedSubstream(nest) for nest in retained.nests]
+
+        def wrapper(side, body, nests=None):
+            return grouping.multisigExn(side.hab, side.hab.endorse(
+                body, last=False, framed=False, gvrsn=V2, nests=nests))
+
+        def coordinator(side):
+            notifier = Notifier(hby=side.hby)
+            stack.callback(notifier.noter.close)
+            mux = grouping.Multiplexor(hby=side.hby, notifier=notifier,
+                                      rgy=side.rgy, replay=side.psr)
+            exc = Exchanger(hby=side.hby, handlers=[])
+            grouping.loadHandlers(exc=exc, mux=mux)
+            return mux, Parser(version=V2, kvy=side.kvy, rvy=side.hby.rvy, exc=exc, rgy=side.rgy)
+
+        # Remote-first approval does not replay even an authentic member's exact child.
+        remote, ratc = wrapper(h.issuers[1], message, missing)
+        assert remote.pvrsn == V2
+        assert remote.ked['a'] == dict(gid=message.pre, exn=message.said)
+        local, latc = wrapper(h.issuers[0], message, missing)
+        mux, psr = coordinator(h.issuers[0])
+        child = parsed(remote.raw + ratc).nests[0]
+        replay, mux.replay = mux.replay, None
+        with pytest.raises(ValidationError, match='verification parser'):
+            mux.validate(remote, nests=[child])
+        psr.parse(ims=bytearray(remote.raw + ratc))
+        assert h.issuers[0].hby.db.exns.get((remote.said,)) is None
+        assert not list(h.issuers[0].hby.db.meids.get((message.said,)))
+        mux.replay = Parser(exc=mux.exc, kvy=h.issuers[0].kvy, rvy=h.issuers[0].hby.rvy,
+                            rgy=h.issuers[0].rgy, version=V2)
+        with pytest.raises(ValidationError, match='verification parser'):
+            mux.validate(remote, nests=[child])
+        mux.replay = replay
+        psr.parse(ims=bytearray(remote.raw + ratc))
+        assert h.issuers[0].hby.db.exns.get((message.said,)) is None
+        assert h.issuers[0].hby.db.epse.get((message.said,)) is None
+        psr.parse(ims=bytearray(local.raw + latc), local=True)
+        h.issuers[0].exc.processEscrow()
+        assert not h.issuers[0].exc.complete(message.said)  # threshold signatures cannot replace the BUP proof
+        remote, ratc = wrapper(h.issuers[1], message, complete)
+        psr.parse(ims=bytearray(remote.raw + ratc))
+        h.issuers[0].exc.processEscrow()
+        assert h.issuers[0].exc.complete(message.said)
+        accepted = loadParsedNestedSubstreams(h.issuers[0].hby, message.said)
+        assert accepted[0].serder.raw == h.credential.raw
+        assert serializeParsedSubstream(accepted[0]) == complete[0]
+        assert h.issuers[0].exc.reverifyGrant(message.said)[2].verdict == chaining.Verdicts.valid
+
+        # Every boundary still uses signed wrappers; none may enter proposal indexes.
+        bad = exchangeMessage(sender=h.issuers[1].member.pre, route='/multisig/exn',
+            attributes=dict(gid=message.pre, exn=h.grant.said), version=V2, gvrsn=V2)
+        psr.parse(ims=h.issuers[1].member.endorse(bad, last=False, framed=False, gvrsn=V2,
+                                               nests=[serializeParsedSubstream(child)]))
+        assert h.issuers[0].hby.db.exns.get((bad.said,)) is None
+        foreign = exchangeMessage(sender=h.issuees[0].member.pre, route='/multisig/exn',
+            attributes=dict(gid=message.pre, exn=message.said), version=V2, gvrsn=V2)
+        psr.parse(ims=h.issuees[0].member.endorse(foreign, last=False, framed=False, gvrsn=V2,
+                                                nests=[serializeParsedSubstream(child)]))
+        assert h.issuers[0].hby.db.exns.get((foreign.said,)) is None
+        with pytest.raises(ValidationError, match='authored by the group'):
+            grouping.multisigExn(h.issuees[0].hab,
+                h.issuers[0].hab.endorse(message, framed=False, gvrsn=V2, nests=complete))
+        for extra in (b'garbage', remote.raw + ratc):
+            with pytest.raises((ValidationError, ValueError)):
+                grouping.multisigExn(h.issuers[0].hab,
+                    h.issuers[0].hab.endorse(message, framed=False, gvrsn=V2, nests=complete) + extra)
+
+        # Transport the verified Grant, then coordinate its exact group Admit at the ordinary threshold.
+        for side in h.issuees:
+            side.psr.parse(ims=serializeMessage(h.issuers[0].hby, message.said))
+            assert side.exc.complete(message.said)
+        admission, _ = admit(hab=h.issuees[0].hab, message='accept exact Grant', grant=message)
+        mux, psr = coordinator(h.issuees[0])
+        for index in (0, 1):
+            proposal, atc = wrapper(h.issuees[index], admission)
+            assert parsed(proposal.raw + atc).nests[0].serder.raw == admission.raw
+            psr.parse(ims=bytearray(proposal.raw + atc), local=index == 0)
+            h.issuees[0].exc.processEscrow()
+            assert h.issuees[0].exc.complete(admission.said) == (index == 1)
+        assert h.issuees[0].hby.db.exns.get((admission.said,)).raw == admission.raw
+        assert not list(h.issuees[0].hby.ks.rroots.getTopItemIter())

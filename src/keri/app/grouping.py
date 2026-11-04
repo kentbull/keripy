@@ -854,13 +854,13 @@ def multisigRpyExn(ghab, rpy, version=None, gvrsn=None, kind=None):
 
 
 def multisigExn(ghab, exn, version=None, kind=None):
-    """ Create a peer to peer message to propose a credential issuance from a multisig group identifier
-
-    Either rot or ixn are required but not both
+    """Propose the exact signed exchange stream for ordinary group contribution.
 
     Parameters:
         ghab (GroupHab): identifier Hab for endorsing the message to send
         exn (bytes): CESR stream of serialized exchange message, with signatures
+        version (Versionage | None): wrapper version; V2 requires native IPEX
+        kind (str | None): wrapper serialization kind
 
     Returns:
         tuple: (Serder, bytes): Serder of exn message and CESR attachments
@@ -871,6 +871,23 @@ def multisigExn(ghab, exn, version=None, kind=None):
     )
     gvrsn = version if version is not None else Version
     kind = kind if kind is not None else Kinds.json
+
+    if gvrsn == Vrsn_2_0:
+        ims = bytearray(exn)
+        child = Parser(version=gvrsn).parseOneBare(ims=ims, framed=True, processive=False)
+        if ims:
+            raise ValidationError("multisig exchange requires exactly one framed child")
+        serder = child.serder
+        if (serder.pvrsn != Vrsn_2_0 or serder.ilk not in (Ilks.xip, Ilks.exn)
+                or serder.ked.get('r') not in (f'/ipex/{verb}' for verb in
+                                             ('apply', 'offer', 'agree', 'grant', 'admit', 'spurn'))
+                or serder.pre != ghab.pre):
+            raise ValidationError("multisig exchange requires a native IPEX child authored by the group")
+        wrapper = exchange(sender=ghab.mhab.pre, route='/multisig/exn',
+            attributes=dict(gid=ghab.pre, exn=serder.said), version=gvrsn, gvrsn=gvrsn, kind=kind)
+        child = serializeParsedSubstream(child, gvrsn=serder.gvrsn or serder.pvrsn)
+        stream = ghab.mhab.endorse(wrapper, last=False, framed=False, gvrsn=gvrsn, nests=[child])
+        return wrapper, bytearray(stream[wrapper.size:])
 
     wexn, end = specialExchange(sender=ghab.mhab.pre,
                                 route="/multisig/exn",
@@ -928,13 +945,17 @@ class Multiplexor:
 
     """
 
-    def __init__(self, hby, notifier, rgy=None):
+    def __init__(self, hby, notifier, rgy=None, replay=None):
         """ Create Multiplexor for local database and Habs
 
         Parameters:
             hby (habbing.Habery): database environment for local Habs
             notifier (notifying.Notifier): stores notices for human consumption
             rgy (acdc.Regery | None): native TEL owner for explicitly approved RIP/BUP replay
+            replay (Parser | None): caller-owned live parser for native IPEX only,
+                composed with this Habery's Kevery/KRAM, Revery and Regery, and
+                an Exchanger with native IpexHandler routes. Caller owns scheduling
+                and escrows; the legacy private processors never accept native IPEX.
 
         """
         self.hby = hby
@@ -946,6 +967,25 @@ class Multiplexor:
 
         self.notifier = notifier
         self.rgy = rgy
+        self.replay = replay
+
+    def _nativeReplay(self, child):
+        """Require the native verifier owners before retaining a group proposal."""
+        from ..acdc.ipexing import IpexHandler
+
+        parser = self.replay
+        handler = (parser.exc.routes.get(child.ked['r'])
+                   if parser is not None and parser.exc is not None else None)
+        if (not isinstance(handler, IpexHandler) or handler.resource != child.ked['r']
+                or handler.hby is not self.hby or parser.version != Vrsn_2_0
+                or self.rgy is None or handler.rgy is not self.rgy
+                or parser.exc.hby is not self.hby or parser.rgy is not self.rgy
+                or self.rgy.hby is not self.hby or parser.rvy is not self.hby.rvy
+                or parser.kvy is None or parser.kvy.db is not self.hby.db
+                or parser.kvy.rvy is not parser.rvy or parser.kvy.kramer is None
+                or parser.kvy.kramer.db is not self.hby.db):
+            raise ValidationError("native IPEX requires a caller-owned native verification parser")
+        return parser
 
     def _replayApproved(self, said):
         """Replays a stored wrapped child event after local approval exists"""
@@ -956,6 +996,13 @@ class Multiplexor:
             ims = bytearray()
             for nest in stored:
                 ims.extend(bytearray(nest.encode("utf-8") if isinstance(nest, str) else nest))
+
+            wrapper = self.hby.db.exns.get(keys=(said,))
+            if wrapper.ked['r'] == '/multisig/exn' and wrapper.pvrsn == Vrsn_2_0:
+                child = Parser(version=Vrsn_2_0).parseOneBare(
+                    ims=bytearray(ims), framed=True, processive=False)
+                self._nativeReplay(child.serder).parse(ims=ims, local=True)
+                return
 
             # Replay them through normal local event processing
             parser = Parser(framed=True, kvy=self.kvy, rvy=self.rvy,
@@ -1027,7 +1074,7 @@ class Multiplexor:
                 raise ValidationError(f"invalid multisig nested substreams count={len(nests)}, expected 1")
 
             # Allow only supported routes through v2 path
-            supported = ("/multisig/icp", "/multisig/rot", "/multisig/ixn", "/multisig/rpy")
+            supported = ("/multisig/icp", "/multisig/rot", "/multisig/ixn", "/multisig/rpy", "/multisig/exn")
             if route not in supported:
                 raise ValidationError(f"unsupported V2 multisig route {route}")
 
@@ -1047,6 +1094,7 @@ class Multiplexor:
                 "/multisig/rot": (Ilks.rot,),
                 "/multisig/ixn": (Ilks.ixn,),
                 "/multisig/rpy": (Ilks.rpy,),
+                "/multisig/exn": (Ilks.xip, Ilks.exn),
             }
             if nserder.ilk not in allowed[route]:
                 raise ValidationError(f"invalid multisig nested substream ilk {nserder.ilk} for route {route}")
@@ -1059,6 +1107,11 @@ class Multiplexor:
             # Validate the nested child digest against the route-specific signed child SAID
             if not nserder.verify() or not nserder.compare(signed):
                 raise ValidationError(f"invalid multisig nested substream digest for route {route}")
+
+            if route == '/multisig/exn':
+                if nserder.pvrsn != Vrsn_2_0 or nserder.pre != payload.get('gid'):
+                    raise ValidationError("native IPEX child must be authored by the selected group")
+                self._nativeReplay(nserder)
 
             # Use the signed child SAID as the V2 proposal identity
             esaid = signed
@@ -1088,8 +1141,10 @@ class Multiplexor:
                 gid = payload["gid"]
                 if gid not in self.hby.habs:
                     raise ValueError(f"invalid request to participate in group, not member of gid={gid}")
-                if route in ('/multisig/rip', '/multisig/bup') and sender not in self.hby.db.signingMembers(pre=gid):
-                    raise ValidationError("registry proposal sender is not a group signing member")
+                if (route in ('/multisig/rip', '/multisig/bup') or
+                        route == '/multisig/exn' and ovrsn == Vrsn_2_0):
+                    if sender not in self.hby.db.signingMembers(pre=gid):
+                        raise ValidationError("proposal sender is not a group signing member")
 
             case _:
                 raise ValueError(f"invalid route {route} for multiplexed exn={ked}")
@@ -1123,6 +1178,10 @@ class Multiplexor:
             return
 
         esaid, sender, route, exnSaid = result
+
+        # A local native proposal is its member's explicit contribution, not a rebuilt child.
+        if route == '/multisig/exn' and serder.pvrsn == Vrsn_2_0 and sender in self.hby.habs:
+            self._replayApproved(exnSaid)
 
         # Retrieve all EXN SAIDs for this child event
         digers = list(self.hby.db.meids.get(keys=(esaid,)))
