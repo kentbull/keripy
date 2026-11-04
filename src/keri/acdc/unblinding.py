@@ -14,6 +14,8 @@ from ..kering import (Ilks, Kinds, MissingOpeningError, MissingSignatureError, V
                        Vrsn_2_0)
 from ..peer.exchanging import (serializeParsedSubstream, verify,
                                verifyQueryAttachments)
+from . import chaining
+from ..recording import ExchangeRegistryStateRecord
 from .regeventing import (_verifyAnchorCouple, vet, vetBlind, vetBound)
 
 
@@ -396,7 +398,7 @@ class Unblind:
         db = self.hab.db
         retained = ([(bytes(key), bytes(raw)) for key, raw in db.getTopItemIter(
             db=db.enst.sdb, top=db.enst._tokey((op["grant"], "")))]
-            if db.exns.get((op["grant"],)) is not None else [])
+            if db.exns.get((op["grant"],)) is not None else None)
         message, nests, _ = self._live(op)
         if not op["received"]:
             raise ValidationError("unblind reply has not been authenticated and verified")
@@ -410,22 +412,31 @@ class Unblind:
                         and opening.said not in present):
                     (nest.bsss if opening.clan is BoundState else nest.bsqs).append(opening.data)
                     present.add(opening.said)
+        if retained is not None:
+            # Ordinary intake treats the accepted Agree -> Grant link as a
+            # second response. Check new proofs against that exact retained Grant.
+            _, _, verdict, records = self.exc.reverifyGrant(op["grant"], nests=nests)
+            if verdict is None or verdict.verdict != chaining.Verdicts.valid:
+                return False
+            self._retain(op, nests, retained, records)
+            return True
         tsgs, cigars = verify(self.exc.hby, message)
         seals = [(Prefixer(qb64=keys[1]), number, diger)
                  for keys, (number, diger) in db.ests.getTopItemIter(keys=(op["grant"], ""))]
-        accepted = self.exc.processEvent(serder=message, tsgs=tsgs, cigars=cigars, ssts=seals,
+        return self.exc.processEvent(serder=message, tsgs=tsgs, cigars=cigars, ssts=seals,
             nests=nests, ptds=db.epath.get((op["grant"],)), essrs=db.essrs.get((op["grant"],)))
-        if accepted and retained:
-            self._retain(op, nests, retained)
-        return accepted
 
-    def _retain(self, op, nests, retained):
-        """Atomically add approved proofs to this still-live accepted view only."""
+    def _retain(self, op, nests, retained, records):
+        """Atomically retain verified proofs and their current observations."""
         self._live(op)
         self._current(op)
         updates = [(key, old, bytes(serializeParsedSubstream(nest)))
                    for (key, old), nest in zip(retained, nests, strict=True)]
         db = self.hab.db
+        observations = [(db.exrs._tokey((op["grant"], said)), db.exrs._ser(
+            ExchangeRegistryStateRecord(regid=record.regid, said=record.said,
+                sn=record.sn, state=record.state, stamp=record.stamp)))
+            for said, record in records.items()]
         with db.env.begin(write=True) as txn:
             if (txn.get(db.exns._tokey(op["grant"]), db=db.exns.sdb) != op["raw"]
                     or txn.get(db.erpy._tokey(op["grant"]), db=db.erpy.sdb) is not None):
@@ -434,6 +445,8 @@ class Unblind:
                 if txn.get(key, db=db.enst.sdb) != old:
                     raise ValidationError("approved presentation evidence changed")
                 txn.put(key, new, db=db.enst.sdb)
+            for key, value in observations:
+                txn.put(key, value, db=db.exrs.sdb)
 
     def abandon(self, xid):
         """Discard live proofs and unsent replies; delivered bytes belong to the caller."""

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from keri import Vrsn_2_0 as V2
-from keri.acdc import Regery, Registrar, acdcmap, admit, blindate, chaining, grant, loadHandlers
+from keri.acdc import Regery, Registrar, acdcmap, admit, agree, blindate, chaining, grant, loadHandlers, offer
 from keri.acdc.unblinding import Unblind
 from keri.app import openCF, openHby
 from keri.core import (Blinder, BlindState, BoundState, Diger, Kevery, Kramer, Labeler, Number, Parser,
@@ -100,6 +100,22 @@ def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDir
             receive(side, admission.raw + atc)
             assert side.hby.db.exns.get((admission.said,)) is not None
         proofs, events, later_tel, later_kel = [first], [event], [], []
+        if accepted:
+            # Negotiate and accept at BUP1 before the issuer authors newer heads.
+            offered, atc = offer(holder.hab, 'offer presentation', origin=credential,
+                recp=verifier.hab.pre, modifiers={'dp': [[[credential.schema['$id'], '/', []]]]})
+            for side in (holder, verifier):
+                receive(side, offered.raw + atc)
+                assert side.exc.complete(offered.said)
+            agreed, atc = agree(verifier.hab, 'agree to presentation', offered)
+            for side in (holder, verifier):
+                receive(side, agreed.raw + atc)
+                assert side.exc.complete(agreed.said)
+            message, atc = grant(holder.hab, verifier.hab.pre, 'present',
+                                 origin=origin, agree=agreed)
+            for side in (holder, verifier):
+                receive(side, message.raw + atc)
+                assert side.exc.complete(message.said)
         for state in ('revoked', '', ''):
             proof, event = (registrar.issue(registry, credential, state=state, salt=root.qb64, **binding)
                             if state else registrar.vacate(registry, salt=root.qb64,
@@ -112,17 +128,16 @@ def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDir
             events.append(event)
             later_tel.append(tel)
             later_kel.append(kel)
-        disclosed = messagize(credential, bonds=[proofs[known - 1].data], gvrsn=V2)
-        message, atc = grant(hab=holder.hab, recp=verifier.hab.pre,
-                             message='present', origin=disclosed)
-        receive(holder, message.raw + atc)
-        receive(verifier, message.raw + atc)
-        assert holder.hby.db.exns.get((message.said,)) is not None
         if accepted:
-            assert verifier.hby.db.exns.get((message.said,)) is not None
             for kel, tel in zip(later_kel, later_tel):
                 receive(verifier, kel + tel)
         else:
+            disclosed = messagize(credential, bonds=[proofs[known - 1].data], gvrsn=V2)
+            message, atc = grant(hab=holder.hab, recp=verifier.hab.pre,
+                                 message='present', origin=disclosed)
+            receive(holder, message.raw + atc)
+            receive(verifier, message.raw + atc)
+            assert holder.hby.db.exns.get((message.said,)) is not None
             assert verifier.hby.db.epse.get((message.said,)) is not None
             assert verifier.hby.db.exns.get((message.said,)) is None
         for side in (holder, verifier):
@@ -169,8 +184,17 @@ def test_unblind_exact_minimum_suffix_repairs_same_grant(enabled):
 
 
 def test_accepted_live_grant_retains_unblind_proofs_without_changing_admitted_history(tmp_path):
-    with presentation(accepted=True, headDirPath=str(tmp_path)) as h:
+    with presentation(True, accepted=True, headDirPath=str(tmp_path)) as h:
         db = h.verifier.hby.db
+        prior = db.exns.get((h.grant.sad['p'],))
+        opener = db.exns.get((prior.sad['p'],))
+        assert prior.route == '/ipex/agree' and opener.route == '/ipex/offer'
+        assert h.grant.ilk == 'exn' and h.xid == opener.said != h.grant.said
+        responseLink = db.erpy.get((prior.said,)).qb64
+        assert responseLink == h.grant.said
+        cache = db.kramTMSC.get((h.grant.pre, h.xid, h.grant.said))
+        observed = db.exrs.get((h.grant.said, h.credential.said))
+        assert observed.state == 'issued'
         original = db.enst.get((h.grant.said,))
         historical = h.holder.hby.db.enst.get((h.issuance.said,))
         deadline = db.epsd.get((h.grant.said,)).dts
@@ -187,6 +211,12 @@ def test_accepted_live_grant_retains_unblind_proofs_without_changing_admitted_hi
         frame.nests[0].bsqs = [proof.data for proof in h.proofs]
         receive(h.verifier, signed(h.holder, frame))
         assert db.enst.get((h.grant.said,)) == original
+        # Candidate rechecks authenticate new proofs but cannot write them.
+        assert h.verifier.exc.reverifyGrant(h.grant.said, nests=frame.nests)[2].verdict == chaining.Verdicts.valid
+        with pytest.raises(ValidationError, match='exact retained Grant nodes'):
+            h.verifier.exc.reverifyGrant(h.grant.said, nests=[])
+        assert db.enst.get((h.grant.said,)) == original
+        assert db.exrs.get((h.grant.said, h.credential.said)) == observed
         assert h.verifier.route.finish(h.xid) is True
         body, nests, verdict, records = h.verifier.exc.reverifyGrant(h.grant.said)
         assert verdict.verdict == chaining.Verdicts.valid
@@ -194,6 +224,10 @@ def test_accepted_live_grant_retains_unblind_proofs_without_changing_admitted_hi
         assert body.raw == h.grant.raw and nests[0].serder.raw == h.credential.raw
         assert {data[0].qb64 for data in nests[0].bsqs} == {proof.said for proof in h.proofs}
         assert db.epsd.get((h.grant.said,)).dts == deadline
+        assert db.erpy.get((prior.said,)).qb64 == responseLink
+        assert db.kramTMSC.get((h.grant.pre, h.xid, h.grant.said)) == cache
+        current = db.exrs.get((h.grant.said, h.credential.said))
+        assert current.state == 'revoked' and current.said == h.events[-1].said
         retained = db.enst.get((h.grant.said,))
         assert retained != original
         # Ordinary replay cannot strip the explicitly retained proofs.
