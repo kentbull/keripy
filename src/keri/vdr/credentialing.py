@@ -839,8 +839,7 @@ class Registrar(doing.DoDoer):
             self.rgy.reger.tede.rem(keys=(regk, snq))
 
             tevt = bytearray()
-            # Preserve the caller-selected stream genus when publishing opaque TEL bytes.
-            for msg in self.rgy.reger.clonePreIter(pre=regk, fn=rnum.sn, gvrsn=self.hby.version):
+            for msg in self.rgy.reger.clonePreIter(pre=regk, fn=rnum.sn):
                 tevt.extend(msg)
 
             print(f"Sending TEL events to witnesses")

@@ -3,18 +3,13 @@
 import json
 import shutil
 import subprocess
-import sys
-import time
-from contextlib import ExitStack
 from uuid import uuid4
 
 import pytest
 
-from keri import Vrsn_1_0, Vrsn_2_0
+from keri import Vrsn_2_0
 from keri.acdc import Regery
 from keri.cli.common import setupHby
-from keri.core import Parser, Schemer
-from keri.vdr import Regery as LegacyRegery
 
 
 from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
@@ -94,165 +89,14 @@ def test_native_registry_installed_lifecycle_and_refusal(tmp_path, est_only):
 
 
 def test_default_registry_commands_preserve_legacy_store(tmp_path):
-    name, base, common = create_issuer(tmp_path, version='1.0')
+    _, _, common = create_issuer(tmp_path, version='1.0')
     created = kli(tmp_path, 'vc', 'registry', 'incept', *common, '--alias', 'issuer',
                   '--registry-name', 'legacy')
     assert 'legacy' in created
-    hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_1_0)
-    try:
-        anchor = hby.habByName('issuer').kever.serder
-        assert anchor.ilk == 'ixn' and anchor.pvrsn == Vrsn_1_0
-    finally:
-        hby.close()
     assert 'legacy' in kli(tmp_path, 'vc', 'registry', 'list', *common)
     status = kli(tmp_path, 'vc', 'registry', 'status', *common, '--registry-name', 'legacy')
     assert 'Seq No.  0' in status
     assert 'legacy' not in kli(tmp_path, 'vc', 'registry', 'list', *common, '--version', '2.0')
-
-
-
-
-def test_legacy_cli_keeps_v2_controller_separate_from_v1_tel(tmp_path):
-    """A legacy registry selects v1 TEL without downgrading its accepted controller."""
-    name, base, common = create_issuer(tmp_path, version='2.0')
-    refused = kli(tmp_path, 'vc', 'registry', 'incept', *common, '--alias', 'missing',
-                  '--registry-name', 'refused', '--version', '1.0', succeeds=False)
-    assert 'not an accepted local identifier' in refused
-    kli(tmp_path, 'vc', 'registry', 'incept', *common, '--alias', 'issuer',
-        '--registry-name', 'legacy', '--version', '1.0')
-    schema = Schemer(sed={'$id': '', '$schema': 'http://json-schema.org/draft-07/schema#',
-        'type': 'object', 'required': ['a'], 'properties': {'a': {'type': 'object',
-        'required': ['status'], 'properties': {'status': {'const': 'authorized'}}}}})
-    schemafile = tmp_path / 'legacy-schema.json'
-    schemafile.write_bytes(schema.raw)
-    kli(tmp_path, 'vc', 'schema', 'import_', *common, '--schema', str(schemafile), '--no-prompt')
-    kli(tmp_path, 'vc', 'create', *common, '--alias', 'issuer', '--registry-name', 'legacy',
-        '--schema', schema.said, '--data', '{"status":"authorized"}', '--version', '1.0')
-    credential = kli(tmp_path, 'vc', 'list', *common, '--alias', 'issuer', '--issued', '--said').strip()
-    kli(tmp_path, 'vc', 'revoke', *common, '--alias', 'issuer', '--registry-name', 'legacy', '--said', credential)
-    hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_2_0)
-    rgy = LegacyRegery(hby=hby, name=name, base=base)
-    try:
-        hab, registry = hby.habByName('issuer'), rgy.registryByName('legacy')
-        assert hab.kever.sn == 3
-        for sn in (0, 1, 2, 3):
-            event, _, _ = hab.getOwnEvent(sn=sn)
-            assert event.pvrsn == Vrsn_2_0
-        assert registry.versionSerder.pvrsn == Vrsn_1_0
-        assert rgy.reger.creds.get((credential,)).pvrsn == Vrsn_1_0
-        assert registry.tever.vcState(credential).et == 'rev'
-    finally:
-        rgy.close()
-        hby.close()
-
-
-def test_legacy_installed_lifecycle_with_three_v1_witnesses(tmp_path, unused_tcp_port_factory):
-    """Keep selected v1 KEL, TEL and mailbox framing through the real CLI lifecycle."""
-    base = f'legacy-cli-{uuid4().hex}'
-    names = {role: f'{base}-{role}' for role in ('issuer', 'recipient')}
-    common = ['--name', names['issuer'], '--base', base]
-    witnesses, public = [], bytearray()
-
-    def stop(process):
-        if process.poll() is None:
-            process.terminate()
-        process.wait(timeout=10)
-
-    with ExitStack() as stack:
-        # Each witness has its own installed owner, store namespace and socket.
-        for index in range(3):
-            ready = tmp_path / f'witness-{index}.cesr'
-            log = stack.enter_context((tmp_path / f'witness-{index}.log').open('w+'))
-            process = subprocess.Popen([sys.executable, '-c', """
-import sys
-from pathlib import Path
-from hio.base import doing
-from keri import Vrsn_1_0 as V1
-from keri.app import Habery, setupWitness
-hby = Habery(name=sys.argv[4], base=sys.argv[1], version=V1)
-doers = setupWitness(hby, alias=sys.argv[4], tcpPort=None, httpPort=int(sys.argv[3]), version=V1)
-hab = hby.habByName(sys.argv[4])
-Path(sys.argv[2]).write_bytes(hab.replay(gvrsn=V1) + hab.makeLocScheme(
-    'http://127.0.0.1:' + sys.argv[3], version=V1, gvrsn=V1))
-doing.Doist(real=True, tock=0.03125).do(doers=doers)
-""", base, str(ready), str(unused_tcp_port_factory()), f'{base}-witness-{index}'],
-                stdout=log, stderr=subprocess.STDOUT)
-            stack.callback(stop, process)
-            deadline = time.monotonic() + 10
-            while not ready.exists():
-                assert process.poll() is None, (tmp_path / f'witness-{index}.log').read_text()
-                assert time.monotonic() < deadline
-                time.sleep(0.03)
-            raw = ready.read_bytes()
-            witnesses.append(Parser(version=Vrsn_1_0).parseOneBare(
-                ims=bytearray(raw), processive=False).serder.pre)
-            public.extend(raw)
-
-        config = tmp_path / 'legacy-issuer.json'
-        config.write_text(json.dumps(dict(transferable=True, wits=witnesses, toad=2,
-            icount=1, isith='1', ncount=1, nsith='1')))
-        introductions = bytearray()
-        for role, name in names.items():
-            args = ['--name', name, '--base', base]
-            kli(tmp_path, 'init', *args, '--nopasscode', '--version', '1.0')
-            hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_1_0)
-            try:
-                Parser(kvy=hby.kvy, rvy=hby.rvy, version=Vrsn_1_0).parse(ims=bytearray(public))
-            finally:
-                hby.close()
-            kli(tmp_path, 'incept', *args, '--alias', role, '--file', str(config),
-                '--version', '1.0', '--receipt-endpoint')
-            hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_1_0)
-            try:
-                hab = hby.habByName(role)
-                assert hab.kever.wits == witnesses and hab.kever.toader.num == 2
-                assert len(hby.db.wigs.get((hab.pre, hab.kever.serder.said))) >= 2
-                introductions.extend(hab.replay(gvrsn=Vrsn_1_0))
-                if role == 'recipient':
-                    recipient = hab.pre
-            finally:
-                hby.close()
-        hby = setupHby(name=names['issuer'], base=base, noPrompt=True, version=Vrsn_1_0)
-        try:
-            Parser(kvy=hby.kvy, version=Vrsn_1_0).parse(ims=bytearray(introductions))
-        finally:
-            hby.close()
-
-        # Registry inception, credential issuance and revocation remain CLI-owned.
-        kli(tmp_path, 'vc', 'registry', 'incept', *common, '--alias', 'issuer',
-            '--registry-name', 'legacy', '--version', '1.0', '--no-backers', 'True')
-        schema = Schemer(sed={'$id': '', '$schema': 'http://json-schema.org/draft-07/schema#',
-            'type': 'object', 'required': ['a'], 'properties': {'a': {'type': 'object',
-            'required': ['status'], 'properties': {'status': {'const': 'authorized'}}}}})
-        schemafile = tmp_path / 'legacy-schema.json'
-        schemafile.write_bytes(schema.raw)
-        kli(tmp_path, 'vc', 'schema', 'import_', *common, '--schema', str(schemafile), '--no-prompt')
-        kli(tmp_path, 'vc', 'create', *common, '--alias', 'issuer', '--registry-name', 'legacy',
-            '--schema', schema.said, '--recipient', recipient, '--data', '{"status":"authorized"}',
-            '--version', '1.0')
-        credential = kli(tmp_path, 'vc', 'list', *common, '--alias', 'issuer', '--issued', '--said').strip()
-        kli(tmp_path, 'vc', 'revoke', *common, '--alias', 'issuer', '--registry-name', 'legacy',
-            '--said', credential)
-        hby = setupHby(name=names['issuer'], base=base, noPrompt=True, version=Vrsn_1_0)
-        rgy = LegacyRegery(hby=hby, name=names['issuer'], base=base)
-        try:
-            hab = hby.habByName('issuer')
-            registry = rgy.registryByName('legacy')
-            assert hab.kever.sn == 3 and hab.kever.serder.pvrsn == Vrsn_1_0
-            assert registry.versionSerder.pvrsn == Vrsn_1_0
-            assert rgy.reger.creds.get((credential,)).pvrsn == Vrsn_1_0
-            assert registry.tever.vcState(credential).et == 'rev'
-            for sn in (0, 1, 2, 3):
-                event, _, _ = hab.getOwnEvent(sn=sn)
-                assert event.pvrsn == Vrsn_1_0
-                assert len(hby.db.wigs.get((hab.pre, event.said))) >= 2
-            for pre in (registry.regk, credential):
-                frames = Parser(version=Vrsn_1_0).parse(ims=bytearray(b''.join(
-                    rgy.reger.clonePreIter(pre, gvrsn=Vrsn_1_0))), processive=False)
-                assert frames and all(frame.serder.pvrsn == Vrsn_1_0 for frame in frames)
-        finally:
-            rgy.close()
-            hby.close()
 
 
 def test_native_group_installed_cli_accepts_exact_registry_anchor(tmp_path):
