@@ -10,7 +10,7 @@ from collections import deque
 from ..core import (Blinder, BlindState, BoundState, Number, Parser,
                     Prefixer, SealSource, messagize, query, reply)
 from ..core.parsing import MsgParseDom
-from ..kering import (Ilks, Kinds, MissingSignatureError, ValidationError,
+from ..kering import (Ilks, Kinds, MissingOpeningError, MissingSignatureError, ValidationError,
                        Vrsn_2_0)
 from ..peer.exchanging import (serializeParsedSubstream, verify,
                                verifyQueryAttachments)
@@ -270,7 +270,7 @@ class Unblind:
                     if opening is not None:
                         break
         if opening is None:
-            raise ValidationError("required exact event opening is unavailable")
+            raise MissingOpeningError("required exact event opening is unavailable")
         self._checkOpening(op, event, opening, nests)
         return opening
 
@@ -377,6 +377,18 @@ class Unblind:
             raise ValidationError("reply is not the minimum current-state suffix")
         op["selected"] = {regid: list(saids) for regid, saids in selected.items()}
         op["received"] = True
+
+    def complete(self, xid):
+        """Report authenticated reply readiness within the original live request.
+
+        Partial signatures are not completion. This is readiness to retry Grant
+        verification, not a credential-state verdict or permission to Admit.
+        """
+        op = self._operation(xid)
+        self._live(op)
+        if op["requested"] is not None:
+            self._current(op)
+        return op["received"]
 
     def finish(self, xid):
         """Retry ordinary Grant verification with the authenticated minimal proofs."""

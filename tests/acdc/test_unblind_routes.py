@@ -12,7 +12,7 @@ from keri.acdc.unblinding import Unblind
 from keri.app import openCF, openHby
 from keri.core import (Blinder, BlindState, BoundState, Diger, Kevery, Kramer, Labeler, Number, Parser,
                        Salter, SealSource, SerderKERI, Signer, Texter, messagize)
-from keri.kering import ValidationError
+from keri.kering import MissingOpeningError, ValidationError
 from keri.peer import Exchanger
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream
 
@@ -209,17 +209,23 @@ def test_rootless_holder_replies_only_with_explicit_held_bound_proofs(enabled):
         assert h.holder.hab.mgr.getRegistryRoot(h.holder.hab.pre, h.registry.regk) is None
 
 
-def test_partial_reply_retains_verified_proofs_until_second_signature_without_proofs():
+def test_partial_reply_retains_verified_proofs_until_second_signature_without_proofs(fakeHelpingClock):
     with presentation(False) as h:
         receive(h.holder, h.verifier.route.start(h.grant.said))
         frame = parsed(h.holder.route.cues.popleft()['msg'])
         receive(h.verifier, signed(h.holder, frame, indices=[0]))
+        assert not h.verifier.route.complete(h.xid)
         with pytest.raises(ValidationError):
             h.verifier.route.finish(h.xid)
         frame.bsqs, frame.bsss = [], []
         receive(h.verifier, signed(h.holder, frame, indices=[1]))
+        assert h.verifier.route.complete(h.xid)
         assert h.verifier.route.finish(h.xid)
         assert h.verifier.hby.db.exrs.get((h.grant.said, h.credential.said)).state == 'revoked'
+        # Readiness never extends the original operation lifetime.
+        fakeHelpingClock.advance(seconds=301)
+        with pytest.raises(ValidationError):
+            h.verifier.route.complete(h.xid)
 
 
 def test_partial_kram_query_retains_nested_public_events():
@@ -440,6 +446,9 @@ def test_authenticated_request_retries_locally_when_exact_held_proofs_arrive(ena
         deadline = h.holder.hby.db.epsd.get((h.grant.said,)).dts
         receive(h.holder, request)
         assert not h.holder.route.cues
+        # Missing held evidence may arrive later; it is not an invalid proof.
+        with pytest.raises(MissingOpeningError):
+            h.holder.route.respond(h.xid)
         for event, proof in zip(h.events[1:], h.proofs[1:]):
             assert h.holder.rgy.store.putOpening(event.said, proof)
         response = h.holder.route.respond(h.xid)
