@@ -164,7 +164,8 @@ def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, liv
     issue(tmp_path, live_parties)
 
 
-def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
+def group_parties(tmp_path, live_parties, data='{"role":"group reader"}'):
+    """Build the same independent, encrypted two-member group and fresh witnessed registry."""
     issuer, first = live_parties
     witness_raw = (tmp_path / 'witness.cesr').read_bytes()
     witness_pre = Parser(version=V2).parseOneBare(ims=bytearray(witness_raw), processive=False).serder.pre
@@ -217,6 +218,12 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
     kli(tmp_path, 'vc', 'create', *issuer['args'], '--registry-name', 'group-fresh',
         '--recipient', group_pre, '--data', data, '--output', str(bodyfile))
     body = SerderACDC(raw=bodyfile.read_bytes())
+    return issuer, holders, body, bodyfile, grantfile, public, coordinator
+
+
+def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
+    issuer, holders, body, bodyfile, grantfile, public, coordinator = group_parties(tmp_path, live_parties, data)
+    group_pre = holders[0]['pre']
     logs = [tmp_path / name for name in ('group-issuer.log', 'group-lead.log', 'group-peer.log')]
     processes = []
     with ExitStack() as stack:
@@ -272,30 +279,7 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             doing.Doist(real=True, tock=0.03125, limit=5).do(doers=[delivery])
             assert delivery.done
             signing.close()
-            # Independent stores permit these negative selections concurrently within the same live query.
-            with ThreadPoolExecutor(max_workers=2) as pool:
-                refused = pool.submit(kli, tmp_path, 'ipex', 'admit', *holders[0]['args'], *common,
-                    '--coordinator', coordinator, '--custodian', holders[1]['member'], succeeds=False)
-                timedout = pool.submit(kli, tmp_path, 'ipex', 'admit', *holders[1]['args'], '--said', selected['grant'],
-                    '--input', str(grantfile), '--deliver', '--timeout', '0.2', '--coordinator', coordinator,
-                    '--custodian', holders[0]['member'], succeeds=False)
-                refused, timedout = refused.result(), timedout.result()
-            assert 'custodian' in refused
-            assert 'before --timeout' in timedout and '"admitted": true' not in timedout
-            store = Baser(name=holders[1]['name'], base=holders[1]['base'], readonly=True, reopen=True)
-            keeper = Keeper(name=holders[1]['name'], base=holders[1]['base'], readonly=True, reopen=True)
-            try:
-                assert store.exns.get((selected['grant'],)) is None
-                assert not list(keeper.rroots.getTopItemIter())
-                assert store.epse.get((selected['grant'],)).raw == frames[-1].serder.raw
-                assert store.exns.get((wrong.said,)) is None
-                original_deadline = store.epsd.get((selected['grant'],)).dts
-                cache = store.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
-                assert cache is not None and cache.rdt and cache.xl == 300000
-                assert fromIso8601(original_deadline) == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
-            finally:
-                keeper.close()
-                store.close()
+            # The original short-lag query is live: start members promptly; unrelated refusal startup is separate.
             start(['ipex', 'admit', *holders[0]['args'], *common, '--coordinator', coordinator,
                 '--custodian', holders[0]['member'], '--output', str(tmp_path / 'group-lead.cesr')], logs[1])
             phase(logs[1], 'group_dh_proposed')
@@ -305,11 +289,22 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             try:
                 assert store.exns.get((selected['grant'],)) is None
                 assert not list(keeper.rroots.getTopItemIter())
+                lead_deadline = store.epsd.get((selected['grant'],)).dts
             finally:
                 keeper.close()
                 store.close()
             start(['ipex', 'admit', *holders[1]['args'], *common, '--coordinator', coordinator,
                 '--custodian', holders[0]['member'], '--output', str(tmp_path / 'group-peer.cesr')], logs[2])
+            phase(logs[2], 'selected')
+            store = Baser(name=holders[1]['name'], base=holders[1]['base'], readonly=True, reopen=True)
+            try:
+                original_deadline = store.epsd.get((selected['grant'],)).dts
+                cache = store.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
+                assert original_deadline == lead_deadline
+                assert cache is not None and cache.rdt and cache.xl == 300000
+                assert fromIso8601(original_deadline) == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
+            finally:
+                store.close()
             for process in processes:
                 process.wait(timeout=40)
             assert all(p.returncode == 0 for p in processes), '\n'.join(p.read_text() for p in logs)
@@ -532,6 +527,77 @@ def test_group_issuer_expired_consent_cannot_be_renewed(tmp_path, live_parties):
     finally:
         keeper.close()
         store.close()
+
+
+def test_group_custodian_refusal_and_finite_timeout_leave_exact_pending_grant(tmp_path, live_parties):
+    """Cancellation preserves pending evidence, without claiming recovery of an aged DH query."""
+    issuer, holders, body, bodyfile, grantfile, public, coordinator = group_parties(tmp_path, live_parties)
+    issuerlog = tmp_path / 'group-negative-issuer.log'
+    with issuerlog.open('w') as output:
+        process = subprocess.Popen([shutil.which('kli'), 'ipex', 'grant', *issuer['args'],
+            '--credential', str(bodyfile), '--recipient', holders[0]['pre'], '--input', str(public),
+            '--issue', '--deliver', '--output', str(grantfile), '--timeout', '35'],
+            cwd=tmp_path, stdout=output, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 10
+            while True:
+                selections = [json.loads(line) for line in issuerlog.read_text().splitlines() if line.startswith('{')]
+                frames, stream = [], bytearray(grantfile.read_bytes()) if grantfile.exists() else bytearray()
+                try:
+                    while stream:
+                        frames.append(Parser(version=V2).parseOneBare(ims=stream, framed=True, processive=False))
+                except KeriError:
+                    frames = []
+                if selections and frames and frames[-1].serder.said == selections[0]['grant']:
+                    selected = selections[0]
+                    break
+                assert process.poll() is None, issuerlog.read_text()
+                assert time.monotonic() < deadline, issuerlog.read_text()
+                time.sleep(.03)
+            common = ['--said', selected['grant'], '--input', str(grantfile), '--deliver', '--timeout', '30']
+            # These independent-store failures consume startup time, not the success flow's live query window.
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                refused = pool.submit(kli, tmp_path, 'ipex', 'admit', *holders[0]['args'], *common,
+                    '--coordinator', coordinator, '--custodian', holders[1]['member'], succeeds=False)
+                timedout = pool.submit(kli, tmp_path, 'ipex', 'admit', *holders[1]['args'], '--said', selected['grant'],
+                    '--input', str(grantfile), '--deliver', '--timeout', '0.2', '--coordinator', coordinator,
+                    '--custodian', holders[0]['member'], succeeds=False)
+                refused, timedout = refused.result(), timedout.result()
+            assert 'custodian' in refused
+            assert 'before --timeout' in timedout and '"admitted": true' not in timedout
+            for side in holders:
+                store = Baser(name=side['name'], base=side['base'], readonly=True, reopen=True)
+                keeper = Keeper(name=side['name'], base=side['base'], readonly=True, reopen=True)
+                try:
+                    assert store.exns.get((selected['grant'],)) is None
+                    assert not list(keeper.rroots.getTopItemIter())
+                    assert store.epse.get((selected['grant'],)).raw == frames[-1].serder.raw
+                    original_deadline = store.epsd.get((selected['grant'],)).dts
+                    cache = store.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
+                    assert cache is not None and cache.rdt and cache.xl == 300000
+                    assert fromIso8601(original_deadline) == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
+                    store.close()
+                    store.reopen(readonly=True)
+                    assert store.epsd.get((selected['grant'],)).dts == original_deadline
+                    assert store.epse.get((selected['grant'],)).raw == frames[-1].serder.raw
+                finally:
+                    keeper.close()
+                    store.close()
+            assert process.poll() is None and '"admitted": true' not in issuerlog.read_text()
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+    # Stopping this failed attempt neither issues the RIP nor persists ephemeral restart keys.
+    hby = setupHby(name=issuer['name'], base=issuer['base'], bran=PASSCODE, noPrompt=True, version=V2)
+    rgy = Regery(hby=hby, name=issuer['name'], base=issuer['base'])
+    try:
+        assert rgy.store.headEvent(body.regid).ilk == 'rip'
+        assert hby.db.exns.get((selected['grant'],)) is None
+        assert not list(hby.ks.rroots.getTopItemIter())
+    finally:
+        rgy.close()
+        hby.close()
 
 
 def test_finite_grant_timeout_keeps_registry_unissued_and_has_no_restart_keys(tmp_path, live_parties):
