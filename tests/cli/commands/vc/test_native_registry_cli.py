@@ -12,6 +12,9 @@ from keri.acdc import Regery
 from keri.cli.common import setupHby
 
 
+pytestmark = pytest.mark.real_store_roots
+
+
 def kli(tmp_path, *args, succeeds=True):
     result = subprocess.run([shutil.which('kli'), *args], cwd=tmp_path,
                             capture_output=True, text=True, timeout=30)

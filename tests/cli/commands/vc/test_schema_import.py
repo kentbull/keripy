@@ -11,6 +11,9 @@ from keri.app import Keeper, openHby
 from keri.core import Schemer
 
 
+pytestmark = pytest.mark.real_store_roots
+
+
 PASSCODE = '0123456789abcdefghijk'  # Public test-only passcode.
 
 
