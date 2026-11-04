@@ -294,7 +294,7 @@ class NativeRegistryInceptor(doing.DoDoer):
             for member in self.hby.db.signingMembers(pre=self.hab.pre):
                 if member != self.hab.mhab.pre:
                     self.postman.send(src=self.hab.mhab.pre, dest=member, topic='multisig',
-                                      serder=proposal, attachment=attachments)
+                                      serder=proposal, attachment=attachments, stream=True)
         elif anchor.ilk == 'drt':
             self.swain.delegation(pre=self.hab.pre, sn=anchor.sn, auths=self.auths)
             while not self.swain.complete(self.hab.kever.prefixer,

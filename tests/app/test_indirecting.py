@@ -428,6 +428,33 @@ def test_receipt_end_returns_bytes_for_v1_receipt():
         assert len(parsed[0].cigars) == 1
         assert parsed[0].cigars[0].verfer.qb64 == wit.pre
         assert parsed[0].cigars[0].verfer.verify(parsed[0].cigars[0].raw, serder.raw)
+        fetched = client.simulate_get('/receipts', params=dict(pre=cam.pre, sn=0))
+        assert fetched.status_code == 200
+        frames = Parser(version=Vrsn_1_0).parse(ims=bytearray(fetched.content), processive=False)
+        assert len(frames) == 1 and frames[0].serder.pvrsn == Vrsn_1_0
+        camHby.psr.parseOne(ims=bytearray(fetched.content), local=True)
+        assert len(camHby.db.wigs.get((cam.pre, serder.said))) == 1
+
+
+def test_receipt_get_encapsulates_native_witness_signatures():
+    with openHby(name="get-wit", version=Vrsn_2_0) as whby, \
+            openHby(name="get-controller", version=Vrsn_2_0) as chby:
+        wit = whby.makeHab(name="wit", transferable=False, version=Vrsn_2_0)
+        controller = chby.makeHab(name="controller", wits=[wit.pre], toad=1, version=Vrsn_2_0)
+        event, _, _ = controller.getOwnEvent(sn=0)
+        endpoint = ReceiptEnd(hab=wit, version=Vrsn_2_0)
+        endpoint.psr.parseOne(ims=bytearray(controller.msgOwnInception(gvrsn=Vrsn_2_0)), local=True)
+        endpoint.psr.parseOne(ims=bytearray(wit.receipt(event, version=Vrsn_2_0, gvrsn=Vrsn_2_0)), local=True)
+        app = falcon.App()
+        app.add_route('/receipts', endpoint)
+        response = testing.TestClient(app).simulate_get('/receipts', params=dict(pre=controller.pre, sn=0))
+        assert response.status_code == 200
+        # HTTP success must carry a parseable native attachment envelope and verified receipt.
+        frames = Parser(version=Vrsn_2_0).parse(ims=bytearray(response.content), processive=False)
+        assert len(frames) == 1 and frames[0].serder.said == event.said
+        assert len(frames[0].wigers) == 1
+        chby.psr.parseOne(ims=bytearray(response.content), local=True)
+        assert len(chby.db.wigs.get((controller.pre, event.said))) == 1
 
 
 def test_mailbox_query_honors_explicit_v1_kwargs():

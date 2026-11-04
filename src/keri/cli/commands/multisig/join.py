@@ -269,7 +269,7 @@ class JoinDoer(doing.DoDoer):
             others.insert(0, proposer)
         for member in others:
             self.postman.send(src=group.mhab.pre, dest=member, topic='multisig',
-                              serder=proposal, attachment=attachments)
+                              serder=proposal, attachment=attachments, stream=True)
         while True:
             self.mux.kvy.processEscrows()
             self.counselor.processEscrows()

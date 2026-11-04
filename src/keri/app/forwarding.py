@@ -14,7 +14,7 @@ from hio.help import decking, ogler
 
 from ..kering import (Roles, Vrsn_1_0, Version, Kinds,
                       ConfigurationError, ValidationError)
-from .agenting import messengerFrom, streamMessengerFrom
+from .agenting import HTTPStreamMessenger, messengerFrom, streamMessengerFrom
 from ..core import (Bexter, Prefixer, Verfer, Texter, Diger,
                     Counter, SerderKERI, Parser, exchange,
                     MtrDex, Codens, NonTransDex)
@@ -33,7 +33,7 @@ class Poster(doing.DoDoer):
     to the intended receiver
 
     Forwarding bodies remain V1; attachment framing follows this poster's version.
-    Use StreamPoster for native V2 forwarding with nested payloads.
+    Select send(stream=True) for queued native V2 nested forwarding.
 
     """
 
@@ -80,6 +80,29 @@ class Poster(doing.DoDoer):
                 else:
                     hab = self.hby.habs[src]
 
+                if evt.get('stream'):
+                    # Keep queueing distinct from transport; native nested payloads
+                    # require StreamPoster's V2 forwarding envelope.
+                    poster = StreamPoster(hby=self.hby, hab=hab, recp=recp, topic=tpc,
+                                          version=self.version, kind=self.kind)
+                    poster.send(srdr, attachment=atc, gvrsn=self.version)
+                    children = poster.deliver()
+                    if not children:
+                        raise ConfigurationError('no finite native member transport was available')
+                    transport = doing.DoDoer(doers=children)
+                    self.extend([transport])
+                    try:
+                        while not transport.done:
+                            yield self.tock
+                        for child in children:
+                            if isinstance(child, HTTPStreamMessenger) and not 200 <= child.rep.status < 300:
+                                raise ConfigurationError(f'HTTP submission failed with status {child.rep.status}')
+                    finally:
+                        self.remove([transport])
+                    self.cues.append(dict(dest=recp, topic=tpc, said=srdr.said))
+                    yield self.tock
+                    continue
+
                 ends = hab.endsFor(recp)
                 try:
                     # If there is a controller, agent or mailbox in ends, send to all
@@ -118,7 +141,7 @@ class Poster(doing.DoDoer):
 
             yield self.tock
 
-    def send(self, dest, topic, serder, src=None, hab=None, attachment=None):
+    def send(self, dest, topic, serder, src=None, hab=None, attachment=None, *, stream=False):
         """
         Utility function to queue a msg on the Poster's buffer for
         enveloping and forwarding to a witness
@@ -130,11 +153,14 @@ class Poster(doing.DoDoer):
             topic (str): topic of message
             serder (Serder): KERI event message to envelope and forward
             attachment (bytes): attachment bytes
+            stream (bool): explicitly use finite stream forwarding after dequeueing
 
         """
         src = src if src is not None else hab.pre
 
         evt = dict(src=src, dest=dest, topic=topic, serder=serder)
+        if stream:
+            evt['stream'] = True
         if attachment is not None:
             evt["attachment"] = attachment
         if hab is not None:
