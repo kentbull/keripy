@@ -116,7 +116,10 @@ class RegistrySalt:
         return bytes(self.hab.endorse(message, gvrsn=Vrsn_2_0))
 
     def processReply(self, *, serder, diger, route, cigars=None, tsgs=None, attachments=None):
-        """Authenticate current authorization before decrypting and retaining a root."""
+        """Return True only after authenticated retention, including an identical root.
+
+        Incomplete reply authentication returns None without retaining a root.
+        """
         if (serder.ilk != Ilks.rpy or serder.pvrsn != Vrsn_2_0 or route != self.Route
                 or serder.sad.get('r') != self.Route or not serder.verify()):
             raise ValidationError("invalid registry transfer reply")
@@ -163,3 +166,4 @@ class RegistrySalt:
         if Blinder.makeUUID(salt=root.qb64, sn=Number(numh=event.sad['n']).num) != uuid:
             raise ValidationError("root does not reproduce the approved accepted opening")
         self.hab.mgr.putRegistryRoot(self.hab.pre, registry, root)
+        return True
