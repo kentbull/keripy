@@ -164,8 +164,8 @@ def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, liv
     issue(tmp_path, live_parties)
 
 
-def group_parties(tmp_path, live_parties, data='{"role":"group reader"}'):
-    """Build the same independent, encrypted two-member group and fresh witnessed registry."""
+def holder_group(tmp_path, live_parties):
+    """Establish the existing witnessed two-member holder group without issuing."""
     issuer, first = live_parties
     witness_raw = (tmp_path / 'witness.cesr').read_bytes()
     witness_pre = Parser(version=V2).parseOneBare(ims=bytearray(witness_raw), processive=False).serder.pre
@@ -213,6 +213,13 @@ def group_parties(tmp_path, live_parties, data='{"role":"group reader"}'):
                 pre=group_pre, alias='holder-group', args=['--name', side['name'], '--base', side['base'],
                     '--alias', 'holder-group', '--passcode', PASSCODE, '--version', '2.0']))
 
+    return issuer, holders, public, coordinator
+
+
+def group_parties(tmp_path, live_parties, data='{"role":"group reader"}'):
+    """Build the same independent, encrypted group and fresh witnessed registry."""
+    issuer, holders, public, coordinator = holder_group(tmp_path, live_parties)
+    group_pre = holders[0]['pre']
     kli(tmp_path, 'vc', 'registry', 'incept', *issuer['args'], '--registry-name', 'group-fresh')
     bodyfile, grantfile = tmp_path / 'group-body.cesr', tmp_path / 'group-grant.cesr'
     kli(tmp_path, 'vc', 'create', *issuer['args'], '--registry-name', 'group-fresh',
