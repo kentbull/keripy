@@ -555,7 +555,34 @@ class Unblind:
             db=db.enst.sdb, top=db.enst._tokey((op["grant"], "")))]
             if db.exns.get((op["grant"],)) is not None else None)
         message, nests, _ = self._live(op)
-        if not op["received"]:
+        if self.hab.pre == op['sender']:
+            # A sender may verify its own outgoing Grant from the exact completed
+            # reply, never from root custody or an unfinished group contribution.
+            if not op['requestedByPeer'] or op['reply'] is None:
+                raise ValidationError("responder finish requires an authenticated request and completed own reply")
+            frame = self._parse(op['reply'])
+            if (frame.serder.ilk != Ilks.rpy or any(value for key, value in vars(frame).items()
+                    if key not in ('serder', 'tsgs', 'cigars', 'bsqs', 'bsss'))):
+                raise ValidationError("responder finish requires its exact signed reply")
+            approved, selected, _ = self._preflight(frame.serder, 'a', 'sender', own=True)
+            if approved is not op:
+                raise ValidationError("responder reply differs from the selected operation")
+            groups, cigars, _, invalid, missing = verifyAttachments(self.exc.hby, frame.serder,
+                tsgs=frame.tsgs, cigars=frame.cigars)
+            if (invalid or missing or not (any(group[0].qb64 == op['sender'] for group in groups)
+                    or any(cigar.verfer.qb64 == op['sender'] for cigar in cigars))):
+                raise MissingSignatureError("responder reply lacks its full signature threshold")
+            self._current(op)
+            verified = self._replyOpenings(op, selected, nests, frame.bsqs, frame.bsss)
+            # An already verified frozen selection remains minimal for this same
+            # head, even after finish has retained its proofs on the outgoing Grant.
+            if op['selected'] != selected:
+                minimum, _ = self._minimum(op, op['requested'], nests,
+                    lambda event: self._opening(verified, event))
+                if selected != minimum:
+                    raise ValidationError("reply is not the minimum current-state suffix")
+            op['selected'], op['openings'] = selected, verified
+        elif not op["received"]:
             raise ValidationError("unblind reply has not been authenticated and verified")
         self._current(op)
         for nest in nests:

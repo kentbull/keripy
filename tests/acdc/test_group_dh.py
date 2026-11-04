@@ -332,8 +332,12 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelp
                 receive(side, proposal)
                 assert not side.unblind.complete(presentation.said)
                 assert not side.unblind.cues
+                with pytest.raises(ValidationError, match='completed own reply'):
+                    side.unblind.finish(presentation.said)
                 receive(side, contribution)
                 assert side.unblind.complete(presentation.said)
+                assert side.unblind.finish(presentation.said)
+                assert side.unblind.finish(presentation.said)
             assert not recipient.unblind.cues  # Provisioned nonlead authored; index zero transmits.
             response = issuee.unblind.cues.popleft()
             assert response['kin'] == 'reply' and response['dest'] == verifier.hab.pre

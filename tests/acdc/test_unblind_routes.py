@@ -213,10 +213,9 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         for side in (holder, verifier):
             assert side.hab.mgr.getRegistryRoot(side.hab.pre, registry.regk) is None
 
-        # The verifier learns BUP2; the discloser still presents the exact BUP1 child bytes.
+        # Both parties know BUP2 before preparation; held BUP1 bytes leave the new Grant pending.
         second, event2 = registrar.issue(registry, credential, state='issued', salt=root.qb64)
-        kel, _ = transfer(issuer, (verifier,), registry, event2)
-        receive(discloser, kel)
+        transfer(issuer, (discloser, verifier), registry, event2)
         message, atc = grant(discloser.hab, verifier.hab.pre, 'present', origin=disclosed)
         original = parsed(message.raw + atc)
         # Match native authoring: self-authored bytes use the protected Habery owner.
@@ -224,7 +223,8 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         local = Parser(version=V2, kvy=discloser.hby.kvy, exc=discloser.exc,
                        rvy=discloser.hby.rvy, rgy=discloser.rgy, local=True)
         local.parse(ims=bytearray(message.raw + atc), framed=False)
-        assert discloser.exc.complete(message.said)
+        assert not discloser.exc.complete(message.said)
+        assert discloser.hby.db.epse.get((message.said,)).raw == message.raw
         deadline = discloser.hby.db.epsd.get((message.said,)).dts
         with pytest.raises(ValidationError):
             discloser.route.approve(message.said)
@@ -244,8 +244,11 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         assert verifier.hby.db.exns.get((message.said,)) is None
         for side in (discloser, verifier):
             xid = side.route.approve(message.said)
-        assert discloser.rgy.store.headEvent(registry.regk).said == event1.said
+        assert discloser.rgy.store.headEvent(registry.regk).said == event2.said
         assert discloser.rgy.store.opening(event2.said) is None
+        with pytest.raises(ValidationError, match='completed own reply'):
+            discloser.route.finish(xid)
+        assert not discloser.exc.complete(message.said)
 
         # Unblind requests and returns BUP2 alone, deriving it without transferring the root.
         query = verifier.route.start(message.said)
@@ -257,6 +260,12 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         assert not reply.nests and not reply.bsss and len(reply.bsqs) == 1
         assert Blinder(data=BlindState(*reply.bsqs[0]), verify=False).qb64 == second.qb64
         assert root.qb64b not in response and first.qb64b not in response
+        # Explicit local completion repairs only this outgoing Grant before its peer can Admit it.
+        assert discloser.route.finish(xid) is True
+        assert discloser.exc.complete(message.said)
+        assert discloser.hby.db.epse.get((message.said,)) is None
+        assert discloser.route.finish(xid) is True  # The same frozen reply may be retried.
+        assert discloser.hby.db.epsd.get((message.said,)).dts == deadline
         receive(verifier, response)
         assert verifier.route.finish(xid) is True
         body, _, verdict, records = verifier.exc.reverifyGrant(message.said)
