@@ -5,20 +5,23 @@ import subprocess
 import sys
 import time
 from contextlib import ExitStack
+from datetime import timedelta
 from uuid import uuid4
 
 import pytest
 from hio.base import doing
 
-from keri import Vrsn_2_0 as V2
+from keri import Kinds, Vrsn_2_0 as V2
 from keri.acdc import Regery
-from keri.app import Habery, Receiptor
+from keri.app import Habery, Receiptor, StreamPoster
 from keri.cli.common import setupHby
-from keri.core import Parser, SerderACDC
+from keri.core import Parser, SerderACDC, exchange
+from keri.cli.common.groupadmitting import ProofRoute
 from keri.db import Baser
 from keri.app import Keeper
-from keri.peer.exchanging import verify
+from keri.peer.exchanging import serializeParsedSubstream, verify
 from keri.kering import KeriError
+from keri.help import fromIso8601
 
 from tests.cli.commands.test_native_negotiation_cli import kli
 
@@ -170,6 +173,16 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
         right = Habery(name=second['name'], base=second['base'], bran=PASSCODE, version=V2)
         stack.callback(left.close)
         stack.callback(right.close)
+        configured_issuer = setupHby(name=issuer['name'], base=issuer['base'], bran=PASSCODE,
+                                     noPrompt=True, version=V2)
+        stack.callback(configured_issuer.close)
+        # Use the native actors() conversation policy, not Exchanger's short no-KRAM fallback.
+        # Provenance: tests/acdc/test_unblind_routes.py; all actors are configured before the first Grant.
+        for environment in (configured_issuer, left, right):
+            config = environment.cf.get()
+            config['kram'] = dict(enabled=True, denials=[],
+                caches={'~': [1000, 5000, 60000, 300000, 5000, 60000, 300000]})
+            environment.cf.put(config)
         Parser(kvy=right.kvy, rvy=right.rvy, version=V2).parse(ims=bytearray(witness_raw))
         members = [left.habByName(first['alias']), right.makeHab(name='peer', wits=[witness_pre], toad=1)]
         witnessed(right, members[1])
@@ -223,6 +236,10 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
                 assert time.monotonic() < deadline, log.read_text()
                 time.sleep(0.03)
 
+        # Open the sole signing store before the live query; release it before either member command.
+        signing = setupHby(name=holders[0]['name'], base=holders[0]['base'], bran=PASSCODE,
+                           noPrompt=True, version=V2)
+        stack.callback(signing.close)
         try:
             start(['ipex', 'grant', *issuer['args'], '--credential', str(bodyfile), '--recipient', group_pre,
                 '--input', str(public), '--issue', '--deliver', '--output', str(grantfile), '--timeout', '35'], logs[0])
@@ -241,6 +258,19 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
                 assert time.monotonic() < deadline
                 time.sleep(0.03)
             common = ['--said', selected['grant'], '--input', str(grantfile), '--deliver', '--timeout', '30']
+            # A signed wrong-Grant envelope must not alter the selected pending disclosure or block its completion.
+            member = signing.habByName('holder-group').mhab
+            wrong = exchange(sender=member.pre, route=ProofRoute,
+                attributes=dict(gid=group_pre, grant=body.said), version=V2, gvrsn=V2, kind=Kinds.json)
+            raw = member.endorse(wrong, last=False, framed=False, gvrsn=V2,
+                nests=[serializeParsedSubstream(frames[-1])])
+            poster = StreamPoster(hby=signing, hab=member, recp=holders[1]['member'],
+                                  topic='multisig', version=V2)
+            poster.send(wrong, attachment=raw[wrong.size:], gvrsn=V2)
+            delivery = doing.DoDoer(doers=poster.deliver())
+            doing.Doist(real=True, tock=0.03125, limit=5).do(doers=[delivery])
+            assert delivery.done
+            signing.close()
             refused = kli(tmp_path, 'ipex', 'admit', *holders[0]['args'], *common,
                 '--coordinator', coordinator, '--custodian', holders[1]['member'], succeeds=False)
             assert 'custodian' in refused
@@ -253,7 +283,12 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             try:
                 assert hby.db.exns.get((selected['grant'],)) is None
                 assert not list(hby.ks.rroots.getTopItemIter())
+                assert hby.db.epse.get((selected['grant'],)).raw == frames[-1].serder.raw
+                assert hby.db.exns.get((wrong.said,)) is None
                 original_deadline = hby.db.epsd.get((selected['grant'],)).dts
+                cache = hby.db.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
+                assert cache is not None and cache.rdt and cache.xl == 300000
+                assert fromIso8601(original_deadline) == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
             finally:
                 hby.close()
             start(['ipex', 'admit', *holders[0]['args'], *common, '--coordinator', coordinator,
@@ -292,6 +327,8 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             for said in (selected['grant'], results[0]['admit']):
                 accepted = hby.db.exns.get((said,))
                 assert accepted is not None
+                if said == selected['grant']:
+                    assert accepted.raw == frames[-1].serder.raw
                 tsgs, _ = verify(hby, accepted)
                 if accepted.route == '/ipex/admit':
                     assert {sig.index for pre, _, _, sigers in tsgs if pre.qb64 == group_pre
@@ -299,6 +336,8 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             assert hby.db.exrs.get((selected['grant'], body.said)).state == 'issued'
             if side is holders[1]:
                 assert hby.db.epsd.get((selected['grant'],)).dts == original_deadline
+                assert hby.db.exns.get((wrong.said,)) is None
+                assert hby.db.kramMSGC.get((holders[0]['member'], wrong.said)) is not None
         finally:
             hby.close()
     assert roots[0] == roots[1] and roots[0] is not None and roots[2] is None
