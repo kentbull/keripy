@@ -986,7 +986,8 @@ class QryRpyMailboxIterable:
 
     def __next__(self):
         if self.iter is None:
-            if self.cues:
+            # Scan once so waiting streams cannot keep swapping each other's cues.
+            for _ in range(len(self.cues)):
                 cue = self.cues.pull()
                 serder = cue["serder"]
                 if serder.said == self.said:
@@ -994,6 +995,7 @@ class QryRpyMailboxIterable:
                     if kin == "stream":
                         self.iter = iter(MailboxIterable(mbx=self.mbx, pre=cue["pre"], topics=cue["topics"],
                                                          retry=self.retry))
+                    break
                 else:
                     self.cues.append(cue)
 

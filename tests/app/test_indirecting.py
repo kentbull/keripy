@@ -221,17 +221,29 @@ def test_qrymailbox_iter_v2():
         assert val == b''
         assert len(cues) == 1
         assert mb.iter is None
-        cues.popleft()
+        unrelated = cues.popleft()
 
         cues.append(dict(kin="stream", pre=hab.pre, serder=srdr, topics=topics))
+        otherTopics = {"/receipt": 1}
+        otherQry = hab.query(pre=hab.pre, src=hab.pre, route="mbx",
+                             query={"topics": otherTopics}, kind=Kinds.json)
+        otherSrdr = SerderKERI(raw=otherQry)
+        other = QryRpyMailboxIterable(mbx=mbx, cues=cues, said=otherSrdr.said, retry=1000)
+        cues.append(dict(kin="stream", pre=hab.pre, serder=otherSrdr, topics=otherTopics))
+        cues.append(unrelated)
+
+        # Reverse scheduling must not keep swapping the two query cues.
+        assert next(other) == b''
+        assert other.iter is not None
         val = next(mbi)
         assert val == b''
-        assert len(cues) == 0
+        assert list(cues) == [unrelated]
         assert mb.iter is not None
 
         # And now it behaves just like a standard MailboxIterable
         val = next(mbi)
         assert val == b'retry: 1000\n\n'
+        assert next(other) == b'retry: 1000\n\n'
 
         # Store a message for the iter
         msg = dict(i=hab.pre, t="rct")
@@ -240,6 +252,12 @@ def test_qrymailbox_iter_v2():
         assert val == (b'id: 0\nevent: /receipt\nretry: 1000\ndata: '
                        b'{"i": "EChqfw9-5A5qMrZ8_YgOAJm8iKMbTAUvfDVVI6KNGL3M", '
                        b'"t": "rct"}\n\n')
+        assert next(other) == b''
+        mbx.storeMsg(topic=f"{hab.pre}/receipt", msg=json.dumps(msg).encode("utf-8"))
+        assert next(other) == (b'id: 1\nevent: /receipt\nretry: 1000\ndata: '
+                               b'{"i": "EChqfw9-5A5qMrZ8_YgOAJm8iKMbTAUvfDVVI6KNGL3M", '
+                               b'"t": "rct"}\n\n')
+        assert list(cues) == [unrelated]
 
         mb.iter.TimeoutMBX = 0  # Force the iter to timeout
         with pytest.raises(StopIteration):
