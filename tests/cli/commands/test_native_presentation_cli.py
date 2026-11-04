@@ -11,15 +11,16 @@ from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, regeventing
 from keri.app import Habery, Receiptor, multisigExn
 from keri.cli.common import setupHby
-from keri.core import Parser, SealSource, SerderACDC, SerderKERI, messagize
+from keri.core import BlindState, Blinder, Kevery, Kramer, Parser, SealSource, SerderACDC, SerderKERI, messagize
 from keri.db import Baser
+from keri.help import fromIso8601, nowUTC
 from keri.peer import Exchanger
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from keri.acdc.ipexing import loadHandlers
 from types import SimpleNamespace
 
 from tests.cli.commands.test_native_issuance_cli import PASSCODE, issue, live_parties, witnessed
-from tests.cli.commands.test_native_registry_root_cli import group_copy, last_result
+from tests.cli.commands.test_native_registry_root_cli import group_copy, last_result, retained
 from tests.cli.commands.test_native_negotiation_cli import kli
 
 import pytest
@@ -63,13 +64,15 @@ def update(side, credential, output, *, value='', bound=False):
         hby.close()
 
 
-def intake(side, raw, *, proof=None, event=None):
+def intake(side, raw, *, proof=None, event=None, kram=False):
     hby = state(side)
     rgy = Regery(hby, name=side['name'], base=side['base'])
     try:
         exc = Exchanger(hby, handlers=[])
         loadHandlers(hby, exc, SimpleNamespace(add=lambda **_: None), rgy=rgy)
-        Parser(kvy=hby.kvy, rvy=hby.rvy, rgy=rgy, exc=exc, version=V2).parse(ims=bytearray(raw))
+        kvy = (Kevery(db=hby.db, rvy=hby.rvy, exc=exc, local=False, direct=False, lax=True,
+                      kramer=Kramer(db=hby.db, cf=hby.cf)) if kram else hby.kvy)
+        Parser(kvy=kvy, rvy=hby.rvy, rgy=rgy, exc=exc, version=V2).parse(ims=bytearray(raw))
         if proof:
             assert rgy.store.putOpening(event.said, proof)
     finally:
@@ -77,7 +80,7 @@ def intake(side, raw, *, proof=None, event=None):
         hby.close()
 
 
-def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True, admit_options=()):
+def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True, admit_options=(), kram=False):
     evidence, log = tmp_path / (filename + '.cesr'), tmp_path / (filename + '.log')
     with log.open('w') as output:
         process = subprocess.Popen([shutil.which('kli'), 'ipex', 'present', *sender['args'],
@@ -91,7 +94,7 @@ def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True,
                 assert time.monotonic() < deadline, log.read_text()
                 time.sleep(0.03)
             selected = next(json.loads(line) for line in log.read_text().splitlines() if line.startswith('{'))
-            intake(receiver, evidence.read_bytes())
+            intake(receiver, evidence.read_bytes(), kram=kram)
             before = inspect(tmp_path, receiver, selected['grant'])
             admitted = kli(tmp_path, 'ipex', 'admit', *receiver['args'], '--unblind', '--said', selected['grant'],
                 '--deliver', '--timeout', '10', *admit_options, succeeds=succeeds)
@@ -170,6 +173,139 @@ def test_selected_admitted_view_unblind_refresh_and_read_only_inspection(tmp_pat
     assert inspect(tmp_path, issuer, presented, current=True)['current']['verdict']['verdict'] == 'unknown'
     assert snapshot(issuer) == state_before
     assert inspect(tmp_path, holder, selected['grant']) == old
+
+
+def test_independent_issuer_endorses_prepared_discloser_grant_before_live_resume(tmp_path, live_parties):
+    issuer, holder = live_parties
+    issued, body = issue(tmp_path, live_parties)
+    extra = []
+    for alias in ('discloser', 'verifier'):
+        hby = Habery(name=f'{alias}-{uuid4().hex}', base=issuer['base'], bran=PASSCODE, version=V2)
+        try:
+            witness = (tmp_path / 'witness.cesr').read_bytes()
+            Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(witness))
+            wit = Parser(version=V2).parseOneBare(ims=bytearray(witness), processive=False).serder.pre
+            hab = hby.makeHab(name=alias, wits=[wit], toad=1)
+            witnessed(hby, hab)
+            public = tmp_path / f'{alias}-public.cesr'
+            public.write_bytes(bytes(hab.replay(gvrsn=V2)))
+            extra.append(dict(name=hby.name, base=issuer['base'], alias=alias, pre=hab.pre, public=public,
+                args=['--name', hby.name, '--base', issuer['base'], '--alias', alias,
+                      '--passcode', PASSCODE, '--version', '2.0']))
+        finally:
+            hby.close()
+    discloser, verifier = extra
+    for side in (issuer, holder, discloser, verifier):
+        hby = state(side)
+        try:
+            config = hby.cf.get()
+            config['kram'] = dict(enabled=True, denials=[],
+                caches={'~': [1000, 5000, 60000, 300000, 5000, 60000, 300000]})
+            hby.cf.put(config)
+        finally:
+            hby.close()
+    for side in extra:
+        intake(side, (tmp_path / 'grant.cesr').read_bytes())
+    forwarded, _, _ = present(tmp_path, holder, discloser, issued['grant'], 's4-admitted', kram=True)
+    old = [inspect(tmp_path, side, said) for side, said in ((holder, issued['grant']), (discloser, forwarded))]
+
+    # Complete real encrypted custody and public support before the original preparation window starts.
+    for side in (issuer, discloser):
+        for peer in extra:
+            intake(side, peer['public'].read_bytes())
+    hby = state(discloser)
+    rgy = Regery(hby, name=discloser['name'], base=discloser['base'])
+    try:
+        event1 = rgy.store.headEvent(body.regid)
+        held = tmp_path / 's4-held-opening.cesr'
+        held.write_bytes(Blinder(data=BlindState(*loadParsedNestedSubstreams(hby, forwarded)[0].bsqs[0])).qb64b)
+    finally:
+        rgy.close()
+        hby.close()
+    copied = tmp_path / 's4-encrypted-root.cesr'
+    kli(tmp_path, 'vc', 'registry', 'provision', *issuer['args'], '--registry', body.regid,
+        '--recipient', discloser['pre'], '--output', str(copied))
+    assert retained(discloser, body)[0] is None
+    received = last_result(kli(tmp_path, 'vc', 'registry', 'receive', *discloser['args'],
+        '--registry', body.regid, '--sender', issuer['pre'], '--event', event1.said,
+        '--opening', str(held), '--message', str(copied)))
+    assert received['received'] and retained(discloser, body)[0] == retained(issuer, body)[0]
+    assert retained(verifier, body)[0] is None
+    later = tmp_path / 's4-issued2.cesr'
+    update(issuer, body, later, value='issued')
+    for side in extra:
+        intake(side, later.read_bytes())
+
+    common = ['--from-grant', forwarded, '--recipient', verifier['pre']]
+    prepared_file, endorsed_file = tmp_path / 's4-prepared.cesr', tmp_path / 's4-endorsed.cesr'
+    started = time.monotonic()
+    prepared = last_result(kli(tmp_path, 'ipex', 'present', *discloser['args'], *common,
+        '--prepare', '--output', str(prepared_file)))
+    phases = dict(prepared=time.monotonic() - started)
+    before = inspect(tmp_path, discloser, prepared['grant'])
+    assert prepared['prepared'] and not prepared['transmitted'] and before['terminal'] is None
+    refused = kli(tmp_path, 'ipex', 'present', *discloser['args'], *common,
+        '--resume', prepared['grant'], '--input', str(prepared_file), '--respond-unblind', '--deliver', succeeds=False)
+    assert 'issuer endorsement' in refused
+    phases['missing_endorsement_refused'] = time.monotonic() - started
+    endorsed = last_result(kli(tmp_path, 'ipex', 'endorse', *issuer['args'], '--said', prepared['grant'],
+        '--grant', str(prepared_file), '--sender', discloser['pre'], '--recipient', verifier['pre'],
+        '--output', str(endorsed_file)))
+    assert endorsed['endorsed'] and not endorsed['transmitted']
+    phases['endorsed'] = time.monotonic() - started
+    original = Parser(version=V2).parseOneBare(ims=bytearray(prepared_file.read_bytes()), processive=False)
+    authorized = Parser(version=V2).parseOneBare(ims=bytearray(endorsed_file.read_bytes()), processive=False)
+    assert authorized.serder.raw == original.serder.raw
+    assert [serializeParsedSubstream(node) for node in authorized.nests] == [
+        serializeParsedSubstream(node) for node in original.nests]
+    evidence, log = tmp_path / 's4-resumed.cesr', tmp_path / 's4-resumed.log'
+    with log.open('w') as output:
+        process = subprocess.Popen([shutil.which('kli'), 'ipex', 'present', *discloser['args'], *common,
+            '--resume', prepared['grant'], '--input', str(endorsed_file), '--respond-unblind', '--deliver',
+            '--output', str(evidence), '--timeout', '15'], cwd=tmp_path, stdout=output, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 10
+            while not evidence.exists():
+                assert process.poll() is None, log.read_text()
+                assert time.monotonic() < deadline, log.read_text()
+                time.sleep(.03)
+            phases['resumed'] = time.monotonic() - started
+            result = last_result(kli(tmp_path, 'ipex', 'admit', *verifier['args'], '--unblind',
+                '--said', prepared['grant'], '--input', str(evidence), '--deliver', '--timeout', '10'))
+            assert result['admitted']
+            phases['verifier_admitted'] = time.monotonic() - started
+            process.wait(timeout=15)
+            assert process.returncode == 0, log.read_text()
+            assert last_result(log.read_text()) == result
+        finally:
+            (tmp_path / 's4-phase-timings.json').write_text(json.dumps(phases, indent=2))
+            if process.poll() is None:
+                process.terminate()
+                process.wait(timeout=5)
+    after = inspect(tmp_path, discloser, prepared['grant'])
+    assert after['deadline'] == before['deadline'] and after['grant'] == before['grant']
+    assert inspect(tmp_path, holder, issued['grant']) == old[0]
+    assert inspect(tmp_path, discloser, forwarded) == old[1]
+    assert retained(verifier, body)[0] is None
+
+    # A closed preparation has no revived authority: the real original clock expires before input import.
+    expired_file = tmp_path / 's4-expiring.cesr'
+    expiring = last_result(kli(tmp_path, 'ipex', 'present', *discloser['args'], *common,
+        '--prepare', '--output', str(expired_file)))
+    expires = fromIso8601(expiring['deadline'])
+    assert 0 < (expires - nowUTC()).total_seconds() <= 10
+    waiting = time.monotonic()
+    while nowUTC() < expires:
+        time.sleep(.03)
+    refused = kli(tmp_path, 'ipex', 'present', *discloser['args'], *common,
+        '--resume', expiring['grant'], '--input', str(expired_file), '--respond-unblind', '--deliver', succeeds=False)
+    assert 'original native deadline' in refused
+    phases['expiry_wait_seconds'] = time.monotonic() - waiting
+    (tmp_path / 's4-expiry-refusal.log').write_text(refused)
+    (tmp_path / 's4-phase-timings.json').write_text(json.dumps(phases, indent=2))
+    saved = inspect(tmp_path, discloser, expiring['grant'])
+    assert saved['deadline'] == expiring['deadline'] and saved['terminal'] is None
+    assert inspect(tmp_path, discloser, forwarded) == old[1]
 
 
 def test_provisioned_nonlead_presents_exact_group_view_at_native_threshold(tmp_path, live_parties):

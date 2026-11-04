@@ -19,6 +19,9 @@ parser.add_argument('--derive', action='store_true', help='authorize ordinary pr
 parser.add_argument('--message', '-m', default='')
 parser.add_argument('--proposal-output', help='exclusive-create the exact native group Grant proposal for member approval')
 parser.add_argument('--proposal', help='explicitly contribute to this exact group proposal from the selected admitted view')
+stages = parser.add_mutually_exclusive_group()
+stages.add_argument('--prepare', action='store_true', help='retain one exact held-proof Grant for independent issuer endorsement; no delivery')
+stages.add_argument('--resume', metavar='GRANT', help='resume an existing local preparation with authentication additions only')
 
 
 def handler(args):

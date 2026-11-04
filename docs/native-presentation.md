@@ -37,6 +37,40 @@ root. Ordinary issued/revoked/vacuous proofs are supported. Exact bound proofs
 work when supplied; bound derivation requires a later explicit-coordinate
 interface. Refresh does not alter the source Grant's retained disclosure.
 
+An individual separate discloser can retain a held-proof presentation, obtain
+independent consent from its registry issuer, then resume the same Grant:
+
+```sh
+kli ipex present --name discloser --alias discloser --version 2.0 \
+  --from-grant "$ADMITTED_GRANT" --recipient "$AUDITOR_AID" \
+  --prepare --output prepared.cesr
+# In the independent issuer store, sign the exact reported Grant SAID:
+kli ipex endorse --name issuer --alias issuer --version 2.0 \
+  --said "$PREPARED_GRANT" --grant prepared.cesr \
+  --sender "$DISCLOSER_AID" --recipient "$AUDITOR_AID" --output endorsed.cesr
+kli ipex present --name discloser --alias discloser --version 2.0 \
+  --from-grant "$ADMITTED_GRANT" --recipient "$AUDITOR_AID" \
+  --resume "$PREPARED_GRANT" --input endorsed.cesr --respond-unblind --deliver
+```
+
+Complete public KEL/TEL/schema acquisition and explicit encrypted root
+provisioning before preparation. Preparation exports exactly one public Grant
+frame, approves no Unblind operation and sends nothing. Its original native
+fallback lifetime is **10 seconds**; endorsement, resume and live verification
+must complete within that window. `--timeout` cannot extend it. This bounded path does not
+provide time for leisurely human or multi-person approval.
+
+Use the same recipient, message, disclosure paths and plan at prepare and
+resume. Every selected registry-backed node must belong to the independent
+issuer; mixed-issuer endorsement is explicitly refused. Endorsement changes
+authentication only, preserving the Grant body, timestamp and nested evidence.
+The first staged profile rejects `--refresh`, `--derive` and `--opening`.
+Preparation may retain retryable unknown current state when newer evidence is
+known; that does not claim acceptance. Resume requires the original local
+preparation and unchanged live deadline before importing the endorsed frame.
+It never reconstructs a missing preparation or revives an expired Grant.
+The auditor still independently verifies current issued state before Admit.
+
 A holder group uses two finite member processes and explicit proposal consent.
 A provisioned nonlead may create the new presentation from its encrypted group
 root; DH custody does not select the presentation proposer:
