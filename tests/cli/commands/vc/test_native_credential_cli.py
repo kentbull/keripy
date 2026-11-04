@@ -13,6 +13,9 @@ from keri.core import Diger, Schemer, SerderACDC
 from keri.vc.proving import credential as legacy_credential
 from tests.cli.commands.vc.test_native_registry_cli import kli
 
+
+pytestmark = pytest.mark.real_store_roots
+
 PASSCODE = '0123456789abcdefghijk'  # Public fixture secret.
 
 
