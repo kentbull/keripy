@@ -35,7 +35,7 @@ def legacy(args):
             or any(getattr(args, field, None) for field in
                    ('credential', 'prior', 'issue', 'authenticate', 'code', 'code_time', 'unblind',
                     'evidence_url', 'evidence_ca', 'evidence_hostname', 'coordinator', 'custodian',
-                    'unblind_proposer'))):
+                    'unblind_proposer', 'proposal', 'proposal_output', 'consent_lifetime'))):
         raise ConfigurationError('native issuance options require --version 2.0')
 
 
@@ -132,14 +132,14 @@ class NativeIssuance(doing.DoDoer):
             self.hab = self.hby.habByName(args.alias)
             if (self.hab is None or not self.hab.accepted
                     or isinstance(self.hab, (SignifyHab, SignifyGroupHab))
-                    or isinstance(self.hab, GroupHab) and self.verb != 'admit'):
-                raise ConfigurationError('live native issuance requires an accepted individual local signer')
+                    or isinstance(self.hab, GroupHab) and self.hab.mhab is None):
+                raise ConfigurationError('live native issuance requires an accepted local signer')
             group = isinstance(self.hab, GroupHab)
             coordinator, custodian = getattr(args, 'coordinator', None), getattr(args, 'custodian', None)
             if group:
                 event = self.hby.db.evts.get((self.hab.pre, coordinator)) if coordinator else None
                 if event is None or not custodian:
-                    raise ConfigurationError('group Admit requires --coordinator accepted event SAID and --custodian member AID')
+                    raise ConfigurationError('group issuance requires --coordinator accepted event SAID and --custodian member AID')
                 coordinator = (event.sn, event.said)
                 if evidenceSource is not None:
                     raise ConfigurationError('group signed observer queries are outside this issuance profile')
@@ -148,6 +148,15 @@ class NativeIssuance(doing.DoDoer):
             self.rgy = Regery(hby=self.hby, name=args.name, base=args.base)
             notifier = Notifier(self.hby)
             self.exc = Exchanger(hby=self.hby, handlers=[])
+            consent = getattr(args, 'consent_lifetime', None)
+            if group and self.verb == 'grant':
+                if consent is None or not math.isfinite(consent) or consent <= 0:
+                    raise ConfigurationError('group Grant requires finite positive --consent-lifetime seconds')
+                # Explicit command policy precedes the first partial Grant intake.
+                # Native put-only epsd and configured KRAM remain authoritative.
+                self.exc.TimeoutPSE = consent
+            elif consent is not None or any(getattr(args, field, None) for field in ('proposal', 'proposal_output')):
+                raise ConfigurationError('proposal and consent lifetime options require a group Grant')
             ipexing.loadHandlers(self.hby, self.exc, notifier, rgy=self.rgy)
             self.dh = Dhke(self.hab, self.exc)
             self.hby.rtr.addRoute(Dhke.Route, self.dh)
@@ -161,6 +170,16 @@ class NativeIssuance(doing.DoDoer):
             for filename in args.input:
                 self.intake(Path(filename).read_bytes())
             background.append(mbx)
+            if group and self.verb == 'grant':
+                from .groupissuing import GroupIssuance
+                self.extend(background)
+                operation = GroupIssuance(self, notifier, coordinator, custodian)
+                try:
+                    yield from operation.run(background)
+                finally:
+                    if operation.xid is not None:
+                        self.dh.abandon(operation.xid)
+                return
             if self.verb == 'grant':
                 bodyraw = Path(args.credential).read_bytes()
                 body = SerderACDC(raw=bodyraw)

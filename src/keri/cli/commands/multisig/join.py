@@ -89,8 +89,13 @@ class JoinDoer(doing.DoDoer):
         self.org = Organizer(hby=self.hby)
         self.notifier = Notifier(hby=self.hby)
         self.exc = Exchanger(hby=self.hby, handlers=[])
+        if self.rgyV2 is not None:
+            # Opening this store must preserve native validation for retained
+            # pending Grants while the member approves its registry anchor.
+            from ....acdc import ipexing
+            ipexing.loadHandlers(self.hby, self.exc, self.notifier, rgy=self.rgyV2)
         self.verifier = Verifier(hby=self.hby, reger=self.rgy.reger)
-        self.rvy = Revery(db=self.hby.db,  lax=True)
+        self.rvy = self.hby.rvy if self.rgyV2 is not None else Revery(db=self.hby.db, lax=True)
         self.hby.kvy.registerReplyRoutes(self.rvy.rtr)
         parser_kwa = dict()
         if self.version is not None:
@@ -110,9 +115,16 @@ class JoinDoer(doing.DoDoer):
                                          verifier=self.verifier)
 
         kwa = dict(version=self.version, gvrsn=self.version, kind=Kinds.json) if self.version is not None else {}
+        if self.rgyV2 is not None:
+            from ....core import Kevery, Kramer
+            kwa.update(rvy=self.rvy, kvy=Kevery(db=self.hby.db, rvy=self.rvy, exc=self.exc,
+                lax=True, local=False, direct=False, kramer=Kramer(db=self.hby.db, cf=self.hby.cf)))
         self.mbx = MailboxDirector(hby=self.hby, exc=self.exc, topics=['/receipt', '/multisig', '/replay',
                                                                        '/delegate'],
                                    rgy=self.rgyV2, **kwa)
+        if self.rgyV2 is not None:
+            self.psr = self.mbx.parser
+            self.mux.replay = self.psr
         self.postman = Poster(hby=self.hby, version=self.version, kind=Kinds.json)
 
         doers = [self.hbyDoer, self.witq,  self.mbx, self.counselor, self.registrar, self.credentialer, self.postman]

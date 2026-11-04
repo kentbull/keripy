@@ -35,3 +35,43 @@ def anchor(owner, registry, event, auths, background):
     if accepted is None or accepted.said != event.said:
         raise ConfigurationError('native registry has not accepted the selected BUP')
     return signed
+
+
+def groupAnchor(owner, registry, event, mux, background, *, grant):
+    """Propose one BUP; existing join, Multiplexor and Counselor own approval."""
+    from ...app import Counselor, multisigBupExn
+    from ...core import SealSource, messagize
+    seal = dict(i=registry.regk, s=event.sad['n'], d=event.said)
+    author = owner.hab.rotate if owner.hab.kever.estOnly else owner.hab.interact
+    kwa = {}
+    if owner.hab.kever.estOnly:
+        kwa = dict(verfers=[owner.hby.kevers[mid].verfers[0] for mid in owner.hab.smids],
+                   digers=[owner.hby.kevers[mid].ndigers[0] for mid in owner.hab.rmids])
+    signed = author(data=[seal], version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json, **kwa)
+    anchor = SerderKERI(raw=signed)
+    number, diger = Number(num=anchor.sn), Diger(qb64=anchor.said)
+    tel = messagize(event, bonds=[SealSource(s=anchor.snh, d=anchor.said)], gvrsn=Vrsn_2_0)
+    proposal, atc = multisigBupExn(owner.hab, tel, signed, rgy=owner.rgy)
+    owner.psr.parse(ims=bytearray(proposal.raw + atc), local=True)
+    counselor = Counselor(hby=owner.hby, version=Vrsn_2_0, kind=Kinds.json)
+    background.append(counselor)
+    owner.extend([counselor])
+    counselor.start(owner.hab, owner.hab.kever.prefixer, number, diger)
+    for member in owner.hby.db.signingMembers(pre=owner.hab.pre):
+        if member != owner.hab.mhab.pre:
+            yield from owner.send(proposal.raw + atc, member, topic='multisig')
+    import json
+    print(json.dumps(dict(grant=grant, phase='group_bup_proposed',
+                          registry=registry.regk, bup=event.said, anchor=anchor.said)), flush=True)
+    while True:
+        owner.check()
+        mux.kvy.processEscrows()
+        owner.rgy.processEscrows()
+        accepted = owner.rgy.store.headEvent(registry.regk)
+        if (accepted is not None and accepted.said == event.said
+                and counselor.complete(owner.hab.kever.prefixer, number, diger)):
+            break
+        yield owner.tock
+    from ...acdc import regeventing
+    regeventing.vetAnchor(accepted, db=owner.hby.db, issuer=owner.hab.pre)
+    return anchor
