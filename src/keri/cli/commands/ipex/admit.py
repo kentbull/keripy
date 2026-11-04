@@ -10,7 +10,7 @@ from hio.base import doing
 from ...common import existing, Parsery
 from ...common import evidencing, issuing, presenting
 
-from ....kering import Vrsn_1_0, Vrsn_2_0
+from ....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0
 from ....app import (Notifier, Organizer, GroupHab,
                      Multiplexor, MailboxDirector,
                      WitnessInquisitor, StreamPoster,
@@ -38,11 +38,15 @@ parser.add_argument("--time", help="timestamp", required=False, default=None)
 issuing.options(parser)
 evidencing.options(parser)
 parser.add_argument('--unblind', action='store_true', help='select native presentation admission with live current-state verification')
+parser.add_argument('--coordinator', help='exact accepted group KEL event SAID fixing this issuance election')
+parser.add_argument('--custodian', help='elected member AID; this finite invocation approves its exact DH and Admit contributions')
 
 
 def handler(args):
     if args.version == Vrsn_2_0:
         if args.unblind:
+            if args.coordinator or args.custodian:
+                raise ConfigurationError('group custody selection is only supported for issuance Admit')
             return [presenting.NativePresentation(args, 'admit')]
         return [issuing.NativeIssuance(args, 'admit')]
     issuing.legacy(args)

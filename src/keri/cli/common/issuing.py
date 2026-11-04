@@ -17,6 +17,7 @@ from ...app import (GroupHab, Keeper, MailboxDirector, Notifier,
 from ...app.agenting import HTTPStreamMessenger
 from ...core import Kevery, Kramer, Parser, SealSource, SerderACDC, messagize
 from ...kering import ConfigurationError
+from ...help import nowUTC
 from ...peer import Exchanger
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 
@@ -33,7 +34,7 @@ def legacy(args):
     if (args.input or args.output or args.deliver or args.timeout != 120.0
             or any(getattr(args, field, None) for field in
                    ('credential', 'prior', 'issue', 'authenticate', 'code', 'code_time', 'unblind',
-                    'evidence_url', 'evidence_ca', 'evidence_hostname'))):
+                    'evidence_url', 'evidence_ca', 'evidence_hostname', 'coordinator', 'custodian'))):
         raise ConfigurationError('native issuance options require --version 2.0')
 
 
@@ -50,6 +51,8 @@ class NativeIssuance(doing.DoDoer):
     def check(self):
         if self.tyme >= self.deadline:
             raise TimeoutError('native issuance did not complete before --timeout')
+        if getattr(self, 'nativeDeadline', None) is not None and nowUTC() >= self.nativeDeadline:
+            raise TimeoutError('selected group issuance reached its original native deadline')
 
     def intake(self, raw, *, local=False):
         NativeNegotiation.intake(self.psr, self.exc, raw, local=local, issuance=True)
@@ -58,8 +61,8 @@ class NativeIssuance(doing.DoDoer):
         if not self.dh.finish(xid) or not self.exc.complete(grant):
             raise ConfigurationError('native verification has not accepted the selected Grant')
 
-    def evidence(self, event):
-        sn, said = regeventing.vetAnchor(event, db=self.hby.db, issuer=self.hab.pre)
+    def evidence(self, event, *, issuer=None):
+        sn, said = regeventing.vetAnchor(event, db=self.hby.db, issuer=issuer or self.hab.pre)
         return messagize(event, bonds=[SealSource(s=f'{sn:x}', d=said)], gvrsn=Vrsn_2_0)
 
     def public(self, registry):
@@ -71,9 +74,10 @@ class NativeIssuance(doing.DoDoer):
             with Path(self.args.output).open('xb' if initial else 'ab') as output:
                 output.write(raw)
 
-    def send(self, raw, dest):
+    def send(self, raw, dest, *, topic='credential'):
         """One existing finite StreamPoster owns every actual HTTP connection."""
-        poster = StreamPoster(hby=self.hby, hab=self.hab, recp=dest, topic='credential',
+        sender = self.hab.mhab if isinstance(self.hab, GroupHab) else self.hab
+        poster = StreamPoster(hby=self.hby, hab=sender, recp=dest, topic=topic,
                               version=Vrsn_2_0, kind=Kinds.json)
         stream = bytearray(raw)
         while stream:
@@ -90,6 +94,7 @@ class NativeIssuance(doing.DoDoer):
             while not transport.done:
                 self.check()
                 yield self.tock
+            self.check()
             for child in children:
                 if isinstance(child, HTTPStreamMessenger) and not 200 <= child.rep.status < 300:
                     raise ConfigurationError(f'HTTP submission failed with status {child.rep.status}')
@@ -125,8 +130,20 @@ class NativeIssuance(doing.DoDoer):
         try:
             self.hab = self.hby.habByName(args.alias)
             if (self.hab is None or not self.hab.accepted
-                    or isinstance(self.hab, (GroupHab, SignifyHab, SignifyGroupHab))):
+                    or isinstance(self.hab, (SignifyHab, SignifyGroupHab))
+                    or isinstance(self.hab, GroupHab) and self.verb != 'admit'):
                 raise ConfigurationError('live native issuance requires an accepted individual local signer')
+            group = isinstance(self.hab, GroupHab)
+            coordinator, custodian = getattr(args, 'coordinator', None), getattr(args, 'custodian', None)
+            if group:
+                event = self.hby.db.evts.get((self.hab.pre, coordinator)) if coordinator else None
+                if event is None or not custodian:
+                    raise ConfigurationError('group Admit requires --coordinator accepted event SAID and --custodian member AID')
+                coordinator = (event.sn, event.said)
+                if evidenceSource is not None:
+                    raise ConfigurationError('group signed observer queries are outside this issuance profile')
+            elif coordinator or custodian:
+                raise ConfigurationError('--coordinator and --custodian require a group issuance recipient')
             self.rgy = Regery(hby=self.hby, name=args.name, base=args.base)
             notifier = Notifier(self.hby)
             self.exc = Exchanger(hby=self.hby, handlers=[])
@@ -136,7 +153,7 @@ class NativeIssuance(doing.DoDoer):
             kvy = Kevery(db=self.hby.db, rvy=self.hby.rvy, exc=self.exc, qvy=self.dh,
                          lax=True, local=False, direct=False,
                          kramer=Kramer(db=self.hby.db, cf=self.hby.cf))
-            mbx = MailboxDirector(hby=self.hby, topics=['/receipt', '/replay', '/credential', '/delegate'],
+            mbx = MailboxDirector(hby=self.hby, topics=['/receipt', '/replay', '/credential', '/delegate', '/multisig'],
                 exc=self.exc, kvy=kvy, rvy=self.hby.rvy, rgy=self.rgy,
                 version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
             self.psr = mbx.parser
@@ -180,7 +197,11 @@ class NativeIssuance(doing.DoDoer):
                 raise ConfigurationError('anchored Grant is outside live individual issuance')
             if len(nests) != 1:
                 raise ConfigurationError('live issuance supports exactly one disclosed registry node')
-            xid = self.dh.approve(message.said)
+            xid = self.dh.approve(message.said, coordinator=coordinator, custodian=custodian)
+            admission = None
+            if group:
+                from .groupadmitting import GroupAdmission
+                admission = GroupAdmission(self, message, xid, notifier)
             print(json.dumps(dict(grant=message.said, xid=xid, recipient=message.sad['ri'],
                                   phase='selected', registry_issued=False)), flush=True)
             self.extend(background)
@@ -194,6 +215,12 @@ class NativeIssuance(doing.DoDoer):
                 self.record(messagize(message, tsgs=tsgs or None, cigars=cigars or None,
                     nests=[bytearray(serializeParsedSubstream(nest)) for nest in nests],
                     gvrsn=Vrsn_2_0), initial=True)
+            if admission is not None:
+                response = yield from admission.run()
+                print(json.dumps(dict(grant=message.said, xid=xid, admit=response.said,
+                    registry_issued=True, admitted=True, transmitted=admission.transmitted,
+                    contributed=True)), flush=True)
+                return
             while True:
                 self.check()
                 while self.dh.cues:

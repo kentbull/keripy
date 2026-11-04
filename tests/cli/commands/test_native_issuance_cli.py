@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from uuid import uuid4
 
 import pytest
@@ -14,13 +15,27 @@ from keri.acdc import Regery
 from keri.app import Habery, Receiptor
 from keri.cli.common import setupHby
 from keri.core import Parser, SerderACDC
+from keri.db import Baser
+from keri.app import Keeper
 from keri.peer.exchanging import verify
+from keri.kering import KeriError
 
 from tests.cli.commands.test_native_negotiation_cli import kli
 
 
 pytestmark = pytest.mark.real_store_roots
 PASSCODE = '0123456789abcdefghijk'
+
+
+def witnessed(hby, hab):
+    receipts = Receiptor(hby=hby)
+    def receipt(tymth, tock=0.03125, **kwa):
+        yield tock
+        yield from receipts.receipt(hab.pre, sn=0)
+        owner.remove([receipts])
+    owner = doing.DoDoer(doers=[receipts, doing.doify(receipt)])
+    doing.Doist(real=True, tock=0.03125, limit=10).do(doers=[owner])
+    assert owner.done
 
 
 @pytest.fixture
@@ -56,14 +71,7 @@ doing.Doist(real=True, tock=0.03125).do(doers=doers)
             try:
                 Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(witness_raw))
                 hab = hby.makeHab(name=alias, wits=[witness_pre], toad=1)
-                receipts = Receiptor(hby=hby)
-                def receipt(tymth, tock=0.03125, **kwa):
-                    yield tock
-                    yield from receipts.receipt(hab.pre, sn=0)
-                    owner.remove([receipts])
-                owner = doing.DoDoer(doers=[receipts, doing.doify(receipt)])
-                doing.Doist(real=True, tock=0.03125, limit=10).do(doers=[owner])
-                assert owner.done
+                witnessed(hby, hab)
                 public = tmp_path / f'{alias}.cesr'
                 public.write_bytes(bytes(hab.replay(gvrsn=V2)))
                 sides.append(dict(name=name, base=base, alias=alias, pre=hab.pre, public=public,
@@ -86,9 +94,9 @@ def issue(tmp_path, live_parties, data='{"role":"reader"}', *, admit_options=(),
     application = tmp_path / 'apply.cesr'
     # Preserve the Apply opener XID through the entire live issuance.
     body = SerderACDC(raw=bodyfile.read_bytes())
-    applied = json.loads(kli(tmp_path, 'ipex', 'apply', *holder['args'],
+    applied = next(json.loads(line) for line in kli(tmp_path, 'ipex', 'apply', *holder['args'],
         '--recipient', issuer['pre'], '--plan', json.dumps([[[body.schema['$id'], '/', []]]]),
-        '--output', str(application)).splitlines()[-1])
+        '--output', str(application)).splitlines() if line.startswith('{'))
     grantfile, issuerlog = tmp_path / 'grant.cesr', tmp_path / 'issuer.log'
     with issuerlog.open('w+') as output:
         process = subprocess.Popen([shutil.which('kli'), 'ipex', 'grant', *issuer['args'],
@@ -117,9 +125,10 @@ def issue(tmp_path, live_parties, data='{"role":"reader"}', *, admit_options=(),
                 return selected, body, admitted
             process.wait(timeout=25)
             assert process.returncode == 0 and 'ERR:' not in issuerlog.read_text(), issuerlog.read_text()
-            result = json.loads(admitted.splitlines()[-1])
+            result = next(json.loads(line) for line in reversed(admitted.splitlines()) if line.startswith('{'))
             assert result['admitted'] and result['registry_issued']
-            assert result == json.loads(issuerlog.read_text().splitlines()[-1])
+            assert result == next(json.loads(line) for line in reversed(issuerlog.read_text().splitlines())
+                                  if line.startswith('{'))
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -149,6 +158,152 @@ def issue(tmp_path, live_parties, data='{"role":"reader"}', *, admit_options=(),
 
 def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, live_parties):
     issue(tmp_path, live_parties)
+
+
+def test_installed_group_holder_contributes_to_live_dh_and_one_exact_admit(tmp_path, live_parties):
+    issuer, first = live_parties
+    witness_raw = (tmp_path / 'witness.cesr').read_bytes()
+    witness_pre = Parser(version=V2).parseOneBare(ims=bytearray(witness_raw), processive=False).serder.pre
+    second = dict(name=f'holder-peer-{uuid4().hex}', base=first['base'])
+    with ExitStack() as stack:
+        left = setupHby(name=first['name'], base=first['base'], bran=PASSCODE, noPrompt=True, version=V2)
+        right = Habery(name=second['name'], base=second['base'], bran=PASSCODE, version=V2)
+        stack.callback(left.close)
+        stack.callback(right.close)
+        Parser(kvy=right.kvy, rvy=right.rvy, version=V2).parse(ims=bytearray(witness_raw))
+        members = [left.habByName(first['alias']), right.makeHab(name='peer', wits=[witness_pre], toad=1)]
+        witnessed(right, members[1])
+        for hby, other in ((left, members[1]), (right, members[0])):
+            Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=other.replay(gvrsn=V2))
+        mids = [member.pre for member in members]
+        groups = [hby.makeGroupHab(group='holder-group', mhab=member, smids=mids,
+            isith='2', nsith='2', wits=[witness_pre], toad=1, version=V2)
+            for hby, member in zip((left, right), members)]
+        partials = [group.msgOwnInception(allowPartiallySigned=True, framed=False, gvrsn=V2)
+                    for group in groups]
+        for hby in (left, right):
+            for raw in partials:
+                Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(raw), local=True)
+            hby.kvy.processEscrows()
+        witnessed(left, groups[0])
+        Parser(kvy=right.kvy, rvy=right.rvy, version=V2).parse(ims=groups[0].replay(gvrsn=V2), local=True)
+        coordinator = groups[0].kever.serder.said
+        group_pre = groups[0].pre
+        public = tmp_path / 'holder-group.cesr'
+        public.write_bytes(b''.join(bytes(member.replay(gvrsn=V2)) for member in members)
+                           + bytes(groups[0].replay(gvrsn=V2)))
+        holders = []
+        for side, member in zip((first, second), members):
+            holders.append(dict(name=side['name'], base=side['base'], member=member.pre,
+                pre=group_pre, alias='holder-group', args=['--name', side['name'], '--base', side['base'],
+                    '--alias', 'holder-group', '--passcode', PASSCODE, '--version', '2.0']))
+
+    kli(tmp_path, 'vc', 'registry', 'incept', *issuer['args'], '--registry-name', 'group-fresh')
+    bodyfile, grantfile = tmp_path / 'group-body.cesr', tmp_path / 'group-grant.cesr'
+    kli(tmp_path, 'vc', 'create', *issuer['args'], '--registry-name', 'group-fresh',
+        '--recipient', group_pre, '--data', '{"role":"group reader"}', '--output', str(bodyfile))
+    body = SerderACDC(raw=bodyfile.read_bytes())
+    logs = [tmp_path / name for name in ('group-issuer.log', 'group-lead.log', 'group-peer.log')]
+    processes = []
+    with ExitStack() as stack:
+        def start(arguments, log):
+            output = stack.enter_context(log.open('w'))
+            process = subprocess.Popen([shutil.which('kli'), *arguments], cwd=tmp_path,
+                stdout=output, stderr=subprocess.STDOUT)
+            processes.append(process)
+            return process
+
+        def phase(log, name):
+            deadline = time.monotonic() + 12
+            while True:
+                for line in log.read_text().splitlines():
+                    if line.startswith('{') and json.loads(line).get('phase') == name:
+                        return json.loads(line)
+                assert all(p.poll() is None for p in processes), log.read_text()
+                assert time.monotonic() < deadline, log.read_text()
+                time.sleep(0.03)
+
+        try:
+            start(['ipex', 'grant', *issuer['args'], '--credential', str(bodyfile), '--recipient', group_pre,
+                '--input', str(public), '--issue', '--deliver', '--output', str(grantfile), '--timeout', '35'], logs[0])
+            selected = phase(logs[0], 'selected')
+            deadline = time.monotonic() + 5
+            while True:
+                stream = bytearray(grantfile.read_bytes()) if grantfile.exists() else bytearray()
+                frames = []
+                try:
+                    while stream:
+                        frames.append(Parser(version=V2).parseOneBare(ims=stream, framed=True, processive=False))
+                except KeriError:
+                    frames = []
+                if frames and frames[-1].serder.said == selected['grant']:
+                    break
+                assert time.monotonic() < deadline
+                time.sleep(0.03)
+            common = ['--said', selected['grant'], '--input', str(grantfile), '--deliver', '--timeout', '30']
+            refused = kli(tmp_path, 'ipex', 'admit', *holders[0]['args'], *common,
+                '--coordinator', coordinator, '--custodian', holders[1]['member'], succeeds=False)
+            assert 'custodian' in refused
+            timedout = kli(tmp_path, 'ipex', 'admit', *holders[1]['args'], '--said', selected['grant'],
+                '--input', str(grantfile), '--deliver', '--timeout', '0.2', '--coordinator', coordinator,
+                '--custodian', holders[0]['member'], succeeds=False)
+            assert 'before --timeout' in timedout and '"admitted": true' not in timedout
+            hby = setupHby(name=holders[1]['name'], base=holders[1]['base'], bran=PASSCODE,
+                          noPrompt=True, version=V2)
+            try:
+                assert hby.db.exns.get((selected['grant'],)) is None
+                assert not list(hby.ks.rroots.getTopItemIter())
+                original_deadline = hby.db.epsd.get((selected['grant'],)).dts
+            finally:
+                hby.close()
+            start(['ipex', 'admit', *holders[0]['args'], *common, '--coordinator', coordinator,
+                '--custodian', holders[0]['member'], '--output', str(tmp_path / 'group-lead.cesr')], logs[1])
+            phase(logs[1], 'group_dh_proposed')
+            # A lone lead proposal cannot retain a root or accept the pending issuer Grant.
+            store = Baser(name=holders[0]['name'], base=holders[0]['base'], readonly=True, reopen=True)
+            keeper = Keeper(name=holders[0]['name'], base=holders[0]['base'], readonly=True, reopen=True)
+            try:
+                assert store.exns.get((selected['grant'],)) is None
+                assert not list(keeper.rroots.getTopItemIter())
+            finally:
+                keeper.close()
+                store.close()
+            start(['ipex', 'admit', *holders[1]['args'], *common, '--coordinator', coordinator,
+                '--custodian', holders[0]['member'], '--output', str(tmp_path / 'group-peer.cesr')], logs[2])
+            for process in processes:
+                process.wait(timeout=40)
+            assert all(p.returncode == 0 for p in processes), '\n'.join(p.read_text() for p in logs)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
+    results = [next(json.loads(line) for line in reversed(log.read_text().splitlines())
+                    if line.startswith('{')) for log in logs]
+    assert len({result['admit'] for result in results}) == 1
+    assert results[1]['transmitted'] and not results[2]['transmitted']
+    roots = []
+    for side in (issuer, *holders):
+        hby = setupHby(name=side['name'], base=side['base'], bran=PASSCODE, noPrompt=True, version=V2)
+        try:
+            hab = hby.habByName(side['alias'])
+            root = hab.mgr.getRegistryRoot(hab.pre, body.regid)
+            roots.append(root.qb64 if root else None)
+            for said in (selected['grant'], results[0]['admit']):
+                accepted = hby.db.exns.get((said,))
+                assert accepted is not None
+                tsgs, _ = verify(hby, accepted)
+                if accepted.route == '/ipex/admit':
+                    assert {sig.index for pre, _, _, sigers in tsgs if pre.qb64 == group_pre
+                            for sig in sigers} == {0, 1}
+            assert hby.db.exrs.get((selected['grant'], body.said)).state == 'issued'
+            if side is holders[1]:
+                assert hby.db.epsd.get((selected['grant'],)).dts == original_deadline
+        finally:
+            hby.close()
+    assert roots[0] == roots[1] and roots[0] is not None and roots[2] is None
+    assert all(roots[0].encode() not in file.read_bytes() for file in
+               (grantfile, tmp_path / 'group-lead.cesr', tmp_path / 'group-peer.cesr'))
 
 
 def test_finite_grant_timeout_keeps_registry_unissued_and_has_no_restart_keys(tmp_path, live_parties):

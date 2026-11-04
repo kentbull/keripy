@@ -690,6 +690,15 @@ class JoinDoer(doing.DoDoer):
         said = attrs["d"]
         exn, pathed = cloneMessage(self.hby, said=said)
 
+        # Endpoint consent cannot authorize a live DH operation or recover its private keys.
+        if exn.pvrsn == Vrsn_2_0:
+            children = loadParsedNestedSubstreams(self.hby, said)
+            replyRoute = children[0].serder.route if len(children) == 1 else None
+        else:
+            replyRoute = exn.ked['e']['rpy']['r']
+        if replyRoute == '/ipex/dhke':
+            raise ConfigurationError('DH contributions require a live selected ipex admit --coordinator --custodian invocation')
+
         sender = exn.ked['i']
         payload = exn.ked['a']
         gid = payload["gid"]
