@@ -803,10 +803,12 @@ class Exchanger:
             self.hby.db.epse.rem(dig)
             self._removeEscrowDeadline(serder, self.hby.db.epsd)
 
-    def reverifyGrant(self, said):
+    def reverifyGrant(self, said, *, nests=None):
         """Recheck an accepted V2 Grant against current evidence without writes.
 
-        Return (Grant, exact retained nests, native verdict, observed states).
+        Return (Grant, checked nests, native verdict, observed states).
+        Optional proof-augmented nests must preserve every exact retained node
+        body, count and order. Candidate checks retain no proofs or observations.
         Saved completion and old exrs are not verification. The ordinary IPEX
         path rechecks stored authentication, disclosure and current issuer TEL;
         presentation source cutoffs remain the original KRAM acceptance time.
@@ -825,7 +827,13 @@ class Exchanger:
         seals = [(Prefixer(qb64=keys[1]), number, diger)
                  for keys, (number, diger) in self.hby.db.ests.getTopItemIter(
                      keys=(said, ""))]
-        nests = loadParsedNestedSubstreams(self.hby, said)
+        retained = loadParsedNestedSubstreams(self.hby, said)
+        if nests is None:
+            nests = retained
+        else:
+            nests = list(nests)
+            if tuple(nest.serder.raw for nest in nests) != tuple(nest.serder.raw for nest in retained):
+                raise ValidationError("candidate proof view differs from the exact retained Grant nodes")
         verdict, records = handler._verifyResult(
             serder, nests=nests, retained=True,
             sscs=[(number, diger) for pre, number, diger in seals if pre.qb64 == serder.pre],
