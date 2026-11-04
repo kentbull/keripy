@@ -7,9 +7,9 @@ import argparse
 
 from hio.base import doing
 
-from ...common import Parsery, setupHby, controllerVersion
+from ...common import Parsery, setupHby
 
-from ....kering import ValidationError, Ilks, Vrsn_1_0, Kinds
+from ....kering import ValidationError, Ilks, Vrsn_1_0
 from ....app import (MailboxDirector, HaberyDoer, Counselor,
                      Multiplexor, Poster, Organizer, Notifier,
                      GroupHab, multisigRevokeExn)
@@ -49,24 +49,22 @@ class RevokeDoer(doing.DoDoer):
         self.send = send
         self.timestamp = timestamp
         self.registryName = registryName
-        self.version = controllerVersion(name, base, alias)
-        self.hby = setupHby(name=name, base=base, bran=bran, version=self.version)
+        self.hby = setupHby(name=name, base=base, bran=bran)
         self.hab = self.hby.habByName(alias)
         self.org = Organizer(hby=self.hby)
         self.rgy = Regery(hby=self.hby, name=name, base=base)
         self.hbyDoer = HaberyDoer(habery=self.hby)  # setup doer
-        self.counselor = Counselor(hby=self.hby, version=self.version, kind=Kinds.json)
+        self.counselor = Counselor(hby=self.hby)
         self.registrar = Registrar(hby=self.hby, rgy=self.rgy, counselor=self.counselor)
         self.verifier = Verifier(hby=self.hby, reger=self.rgy.reger)
-        self.postman = Poster(hby=self.hby, version=self.version, kind=Kinds.json)
+        self.postman = Poster(hby=self.hby)
         notifier = Notifier(self.hby)
         mux = Multiplexor(self.hby, notifier=notifier)
         exc = Exchanger(hby=self.hby, handlers=[])
         loadHandlers(exc, mux)
 
         mbx = MailboxDirector(hby=self.hby, topics=["/receipt", "/multisig", "/credential"],
-                              verifier=self.verifier, exc=exc,
-                              version=self.version, gvrsn=self.version, kind=Kinds.json)
+                              verifier=self.verifier, exc=exc)
 
         doers = [self.hbyDoer, mbx, self.counselor, self.registrar, self.postman]
         self.toRemove = list(doers)
@@ -117,11 +115,9 @@ class RevokeDoer(doing.DoDoer):
             rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
 
             if registry.estOnly:
-                anc = hab.rotate(data=[rseal], framed=True, version=self.version,
-                                 gvrsn=self.version, kind=Kinds.json)
+                anc = hab.rotate(data=[rseal], framed=True)
             else:
-                anc = hab.interact(data=[rseal], framed=True, version=self.version,
-                                   gvrsn=self.version, kind=Kinds.json)
+                anc = hab.interact(data=[rseal], framed=True)
 
             aserder = SerderKERI(raw=bytes(anc))
             self.registrar.revoke(creder, rserder, aserder)
@@ -153,11 +149,11 @@ class RevokeDoer(doing.DoDoer):
 
             if len(recps) > 0:
                 msgs = []
-                for msg in self.hby.db.clonePreIter(pre=creder.israid, gvrsn=self.version):
+                for msg in self.hby.db.clonePreIter(pre=creder.israid):
                     serder = SerderKERI(raw=msg)
                     atc = msg[serder.size:]
                     msgs.append((serder, atc))
-                for msg in self.rgy.reger.clonePreIter(pre=creder.said, gvrsn=self.version):
+                for msg in self.rgy.reger.clonePreIter(pre=creder.said):
                     serder = SerderKERI(raw=msg)
                     atc = msg[serder.size:]
                     msgs.append((serder, atc))

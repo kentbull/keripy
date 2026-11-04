@@ -3,7 +3,7 @@ import argparse
 from hio.base import doing
 from hio.help import ogler
 
-from ....common import Parsery, setupHby, parseVersion, controllerVersion
+from ....common import Parsery, setupHby, parseVersion
 from ....common.witnessing import witnessAuths
 
 from .....app import (GroupHab, SignifyGroupHab, Receiptor, Anchorer, Notifier, MailboxDirector,
@@ -118,20 +118,18 @@ class RegistryInceptor(doing.DoDoer):
         self.usage = usage
         self.toad = toad
         self.vcp = vcp
-        self.version = controllerVersion(name, base, alias)
-        self.hby = setupHby(name=name, base=base, bran=bran, version=self.version)
+        self.hby = setupHby(name=name, base=base, bran=bran)
         self.rgy = Regery(hby=self.hby, name=name, base=base)
         self.hbyDoer = HaberyDoer(habery=self.hby)  # setup doer
-        counselor = Counselor(hby=self.hby, version=self.version, kind=Kinds.json)
-        self.postman = Poster(hby=self.hby, version=self.version, kind=Kinds.json)
+        counselor = Counselor(hby=self.hby)
+        self.postman = Poster(hby=self.hby)
 
         notifier = Notifier(self.hby)
         mux = Multiplexor(self.hby, notifier=notifier)
         exc = Exchanger(hby=self.hby, handlers=[])
         loadHandlers(exc, mux)
 
-        mbx = MailboxDirector(hby=self.hby, topics=["/receipt", "/multisig", "/replay"], exc=exc,
-                              version=self.version, gvrsn=self.version, kind=Kinds.json)
+        mbx = MailboxDirector(hby=self.hby, topics=["/receipt", "/multisig", "/replay"], exc=exc)
         self.registrar = Registrar(hby=self.hby, rgy=self.rgy, counselor=counselor)
         doers = [self.hbyDoer, counselor, self.registrar, self.postman, mbx]
         self.toRemove = list(doers)
@@ -165,20 +163,16 @@ class RegistryInceptor(doing.DoDoer):
             'baks': self.baks,
             'estOnly': self.estOnly,
             'toad': self.toad,
-            'vcp': self.vcp,
-            'version': Vrsn_1_0,
-            'kind': Kinds.json
+            'vcp': self.vcp
         }
         registry = self.rgy.makeRegistry(name=self.registryName, prefix=hab.pre, **registry_kwa)
 
         rseal = SealEvent(registry.regk, "0", registry.regd)
         rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
         if self.estOnly:
-            anc = hab.rotate(data=[rseal], framed=True, version=self.version,
-                             gvrsn=self.version, kind=Kinds.json)
+            anc = hab.rotate(data=[rseal], framed=True)
         else:
-            anc = hab.interact(data=[rseal], framed=True, version=self.version,
-                               gvrsn=self.version, kind=Kinds.json)
+            anc = hab.interact(data=[rseal], framed=True)
 
         aserder = SerderKERI(raw=bytes(anc))
         self.registrar.incept(iserder=registry.vcp, anc=aserder)
