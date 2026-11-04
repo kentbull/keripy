@@ -125,34 +125,22 @@ def seeder():
     return DbSeed
 
 
-@pytest.fixture(scope="session", autouse=True)
-def isolate_keri_store_roots(tmp_path_factory):
-    """Give each pytest-xdist worker its own on-disk root for non-temp stores.
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers", "real_store_roots: use normal store paths shared with real CLI subprocesses")
 
-    CI runs ``pytest -n auto``. Several tests open persistent (``temp=False``)
-    stores with a fixed name/base (e.g. ``name="test"``), which all resolve to
-    the same on-disk path under the store classes' ``HeadDirPath`` -- or
-    ``AltHeadDirPath`` when the head dir is not writable, as on CI. Under
-    parallel workers those paths collide, so one worker can observe another's
-    half-migrated database ("DB version None; migrations must be run") or a
-    half-written KEL ("Attempt to replay nonexistent pre=..."). Point each
-    worker's store root at its own per-worker temp directory so the paths can
-    never overlap.
 
-    Only active under xdist (where ``PYTEST_XDIST_WORKER`` is set); serial runs
-    are unchanged. ``temp=True`` stores are unaffected -- they already use
-    isolated ``/tmp`` directories. ``LMDBer`` is the base of the db (``Baser``),
-    keystore (``Keeper``) and registry (``Reger``) stores, so patching it covers
-    all three; ``Configer`` covers the config store.
+@pytest.fixture(autouse=True)
+def isolate_keri_store_roots(request, tmp_path_factory):
+    """Isolate fixed-name in-process stores per xdist worker.
 
-    Console-script subprocesses need the same roots as their worker. A private
-    ``sitecustomize`` bootstrap propagates only these class settings through
-    inherited ``PYTHONPATH``. This is CI harness configuration, not an installed
-    CLI qualification without ``PYTHONPATH``; the actual console entrypoint is
-    still exercised. The bootstrap and environment override live only for this
-    worker fixture, and existing ``PYTHONPATH`` entries are retained.
+    Real CLI tests use unique names and normal store paths in both processes.
+    Other parallel tests share a worker root, restored after each test so a
+    later CLI test can inspect the same stores as its unmodified subprocess.
+    Serial runs and temporary stores keep their existing paths.
     """
-    if not os.environ.get("PYTEST_XDIST_WORKER"):
+    if (not os.environ.get("PYTEST_XDIST_WORKER")
+            or request.node.get_closest_marker("real_store_roots")):
         yield
         return
 
@@ -162,31 +150,15 @@ def isolate_keri_store_roots(tmp_path_factory):
     root = str(tmp_path_factory.getbasetemp())  # unique per xdist worker
     saved = [(cls, cls.HeadDirPath, cls.AltHeadDirPath)
              for cls in (LMDBer, Configer)]
-    bootstrap = tmp_path_factory.mktemp("keri-subprocess-bootstrap")
-    (bootstrap / "sitecustomize.py").write_text(
-        "from keri.db.dbing import LMDBer\n"
-        "from keri.app.configing import Configer\n"
-        "for cls in (LMDBer, Configer):\n"
-        f"    cls.HeadDirPath = cls.AltHeadDirPath = {root!r}\n",
-        encoding="utf-8",
-    )
-    pythonpath = os.environ.get("PYTHONPATH")
-    os.environ["PYTHONPATH"] = str(bootstrap) + (
-        os.pathsep + pythonpath if pythonpath is not None else "")
     for cls in (LMDBer, Configer):
         cls.HeadDirPath = root
         cls.AltHeadDirPath = root
     try:
         yield
     finally:
-        if pythonpath is None:
-            os.environ.pop("PYTHONPATH", None)
-        else:
-            os.environ["PYTHONPATH"] = pythonpath
         for cls, head, alt in saved:
             cls.HeadDirPath = head
             cls.AltHeadDirPath = alt
-        shutil.rmtree(bootstrap)
 
 
 @pytest.fixture(scope="session")
