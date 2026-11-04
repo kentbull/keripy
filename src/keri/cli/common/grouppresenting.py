@@ -15,7 +15,11 @@ from .presenting import admitted, currentIssued, refresh, selected
 
 
 class GroupPresentation:
-    """Borrow the live native parser; old wrapper rows never authorize a contribution."""
+    """Borrow the live parser; freshly selected wrappers authorize local child intake.
+
+    Protected local intake retains native partial-auth escrow and its deadline;
+    ordinary KRAM still aggregates signatures before threshold acceptance.
+    """
     resource = '/multisig/exn'
 
     def __init__(self, owner, notifier):
@@ -91,6 +95,11 @@ class GroupPresentation:
         self.owner.psr.parse(ims=bytearray(raw), local=local)
         if self.handled != frame.serder.said:
             raise ConfigurationError('proposal did not pass current authentication and selected admitted-view scope')
+        if not self.owner.exc.complete(self.grant.said):
+            # Fresh command consent permits escrow of this exact scoped child, never partial acceptance.
+            protected = Parser(version=Vrsn_2_0, kvy=self.owner.hby.kvy,
+                exc=self.owner.exc, rvy=self.owner.hby.rvy, rgy=self.owner.rgy, local=True)
+            protected.parse(ims=serializeParsedSubstream(self.child), local=True)
         return self.child
 
     def freezeDeadline(self):
@@ -113,8 +122,6 @@ class GroupPresentation:
             if owner.hby.db.epsd.get((self.grant.said,)) is not None:
                 self.freezeDeadline()
             child = self.accept(raw)
-            # Explicit selection permits native intake, never acceptance without its ordinary threshold.
-            owner.psr.parse(ims=serializeParsedSubstream(child))
             self.freezeDeadline()
             signed = owner.hab.endorse(child.serder, last=False, framed=False,
                 gvrsn=Vrsn_2_0, nests=self.proofs)

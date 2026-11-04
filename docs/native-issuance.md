@@ -57,6 +57,12 @@ root. Ordinary group threshold verification precedes final transmission by the
 native exchange's elected transmitter. Other members report `transmitted: false`
 and `contributed: true`; DH custody does not select the Admit transmitter.
 `group_dh_proposed` marks the custodian's partial reply awaiting contributions.
+The CLI coordination extension `/multisig/ipex-proof` carries that exact original
+Grant and its completed public opening from the selected custodian. It preserves
+the issuer authentication, disclosed bodies, existing evidence and original
+deadline; the nonlead independently verifies accepted witnessed registry evidence
+before retrying native Grant acceptance. It does not authorize disclosure changes
+or enrich an already admitted Grant.
 The standalone `multisig join` endpoint-role approval cannot approve DH replies.
 Timeout/cancellation abandons this process's operation; a restart requires fresh
 explicit selection and cannot recover lost ephemeral keys. Signed observer

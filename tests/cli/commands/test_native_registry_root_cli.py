@@ -13,6 +13,7 @@ from keri.acdc.salting import RegistrySalt
 from keri.app import Keeper, Receiptor
 from keri.cli.common import setupHby
 from keri.core import BlindState, Blinder, Encrypter, Parser, Salter, SealSource, Siger, messagize, reply
+from keri.db import Baser
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream
 from tests.cli.commands.test_native_issuance_cli import PASSCODE, group_issue
 from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
@@ -198,16 +199,26 @@ def group_copy(tmp_path, live_parties, data='{"role":"group reader"}'):
     receive = ['vc', 'registry', 'receive', *target['args'], '--registry', body.regid,
                '--sender', lead['pre'], '--event', event.said, '--opening', str(held)]
     log = tmp_path / 'group-copy-partial.log'
-    # Observe actual native incomplete authentication before timeout releases this member's store.
+    # KRAM retains incomplete group authentication before the live RegistrySalt route can run.
     with log.open('w') as output:
         process = subprocess.Popen([shutil.which('kli'), *receive, '--listen', '--timeout', '5'],
             cwd=tmp_path, stdout=output, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + 8
-            while '"phase": "awaiting_signatures"' not in log.read_text():
-                assert process.poll() is None, log.read_text()
-                assert time.monotonic() < deadline, log.read_text()
-                time.sleep(.03)
+            store = Baser(name=target['name'], base=target['base'], readonly=True, reopen=True)
+            try:
+                key = (lead['pre'], prepared['reply'])
+                while store.kramPMKM.get(key) is None:
+                    assert process.poll() is None, log.read_text()
+                    assert time.monotonic() < deadline, log.read_text()
+                    time.sleep(.03)
+                original = Parser(version=V2).parseOneBare(
+                    ims=bytearray(partial.read_bytes()), processive=False).serder
+                assert store.kramPMKM.get(key).raw == original.raw
+                assert {siger.index for siger in store.kramPMKS.get(key)} == {0}
+                assert store.kramPMSK.get(key) is not None
+            finally:
+                store.close()
             keeper = Keeper(name=target['name'], base=target['base'], readonly=True, reopen=True)
             try:
                 assert not list(keeper.rroots.getTopItemIter())
