@@ -69,6 +69,18 @@ Group `--respond-unblind` and group presentation admission are rejected; an
 individual recipient can admit complete current proofs using the command below
 without requesting auxiliary openings.
 
+The native `Unblind` owner separately supports group responders. Each member
+explicitly approves the same live Grant and receives the authenticated requester
+query. A provisioned member calls `respond(xid)` to prepare a frozen reply and a
+`sign` cue; another member calls `contribute(xid, proposal)` after independently
+verifying its exact minimal openings. Contribution does not read or copy a root.
+The caller feeds these ordinary reply signatures through each member's live
+Parser/Revery. Only threshold completion produces a `reply` cue, on the member
+with the lowest verified contributing index. Root custody does not elect it.
+`complete(xid)` reports threshold readiness and the original Grant deadline still
+applies. Group requester approval is explicitly refused. Member transport/CLI
+coordination is a subsequent unit; the CLI restrictions above remain in force.
+
 `--respond-unblind` approves this exact outgoing Grant before delivery and
 keeps its process alive for native Unblind replies and the selected Admit.
 The recipient explicitly selects presentation admission:
