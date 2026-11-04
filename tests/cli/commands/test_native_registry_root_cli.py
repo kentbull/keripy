@@ -10,10 +10,11 @@ from hio.base import doing
 from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, regeventing
 from keri.acdc.salting import RegistrySalt
-from keri.app import Receiptor
+from keri.app import Keeper, Receiptor
 from keri.cli.common import setupHby
-from keri.core import Blinder, Encrypter, Parser, Salter, SealSource, messagize, reply
-from tests.cli.commands.test_native_issuance_cli import PASSCODE
+from keri.core import BlindState, Blinder, Encrypter, Parser, Salter, SealSource, Siger, messagize, reply
+from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream
+from tests.cli.commands.test_native_issuance_cli import PASSCODE, group_issue
 from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
 from tests.cli.commands.test_native_negotiation_cli import kli
 
@@ -165,3 +166,101 @@ def test_live_receive_timeout_needs_fresh_approval_then_real_mailbox_delivery(tm
                 process.terminate()
                 process.communicate(timeout=5)
     assert retained(receiver, body)[0] == root
+
+
+def test_group_copy_requires_exact_contribution_then_native_retention(tmp_path, live_parties):
+    # Continue the qualified real2of2 issuance; the nonlead has public proofs but no root.
+    _, holders, body, selected = group_issue(tmp_path, live_parties)
+    lead, target = holders
+    before = retained(lead, body)
+    assert before[0] is not None and retained(target, body)[0] is None
+    hby = setupHby(name=target['name'], base=target['base'], bran=PASSCODE, noPrompt=True, version=V2)
+    rgy = Regery(hby, name=target['name'], base=target['base'])
+    try:
+        coordinator = hby.habByName(target['alias']).kever.serder.said
+        event = rgy.store.headEvent(body.regid)
+        held_before = tuple(hby.db.enst.get((selected['grant'],)))
+        proof = Blinder(data=BlindState(*loadParsedNestedSubstreams(hby, selected['grant'])[0].bsqs[0]))
+        held = tmp_path / 'group-held-opening.cesr'
+        held.write_bytes(proof.qb64b)
+    finally:
+        rgy.close()
+        hby.close()
+    scope = ['--registry', body.regid, '--recipient', lead['pre'], '--target', target['member'],
+             '--coordinator', coordinator]
+    partial, proposal = tmp_path / 'group-partial.cesr', tmp_path / 'group-proposal.cesr'
+    refused = kli(tmp_path, 'vc', 'registry', 'provision', *target['args'], *scope,
+        '--output', str(partial), '--proposal-output', str(proposal), succeeds=False)
+    assert 'elected group coordinator' in refused and not partial.exists() and not proposal.exists()
+    prepared = last_result(kli(tmp_path, 'vc', 'registry', 'provision', *lead['args'], *scope,
+        '--output', str(partial), '--proposal-output', str(proposal), '--deliver', '--timeout', '15'))
+    assert prepared['prepared'] and not prepared['contributed'] and prepared['transmitted']
+    receive = ['vc', 'registry', 'receive', *target['args'], '--registry', body.regid,
+               '--sender', lead['pre'], '--event', event.said, '--opening', str(held)]
+    log = tmp_path / 'group-copy-partial.log'
+    # Observe actual native incomplete authentication before timeout releases this member's store.
+    with log.open('w') as output:
+        process = subprocess.Popen([shutil.which('kli'), *receive, '--listen', '--timeout', '5'],
+            cwd=tmp_path, stdout=output, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 8
+            while '"phase": "awaiting_signatures"' not in log.read_text():
+                assert process.poll() is None, log.read_text()
+                assert time.monotonic() < deadline, log.read_text()
+                time.sleep(.03)
+            keeper = Keeper(name=target['name'], base=target['base'], readonly=True, reopen=True)
+            try:
+                assert not list(keeper.rroots.getTopItemIter())
+            finally:
+                keeper.close()
+            process.wait(timeout=8)
+            assert process.returncode != 0 and 'before --timeout' in log.read_text()
+            assert '"received": true' not in log.read_text()
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                process.communicate(timeout=5)
+    contribution = tmp_path / 'group-contribution.cesr'
+    wrong = kli(tmp_path, 'vc', 'registry', 'provision', *target['args'], '--registry', body.regid,
+        '--recipient', lead['pre'], '--target', lead['member'], '--coordinator', coordinator,
+        '--proposal', str(proposal), '--output', str(contribution), succeeds=False)
+    assert 'scope authentication' in wrong and not contribution.exists()
+    contributed = last_result(kli(tmp_path, 'vc', 'registry', 'provision', *target['args'], *scope,
+        '--proposal', str(proposal), '--output', str(contribution)))
+    assert contributed['contributed'] and contributed['reply'] == prepared['reply']
+    assert 'received' not in contributed and 'authenticated' not in contributed
+    # An accepted proposal row cannot substitute for current scope or signature verification.
+    fresh = tmp_path / 'group-fresh-contribution.cesr'
+    wrong = kli(tmp_path, 'vc', 'registry', 'provision', *target['args'], '--registry', body.regid,
+        '--recipient', lead['pre'], '--target', lead['member'], '--coordinator', coordinator,
+        '--proposal', str(proposal), '--output', str(fresh), succeeds=False)
+    assert 'scope authentication' in wrong and not fresh.exists()
+    outer = Parser(version=V2).parseOneBare(ims=bytearray(proposal.read_bytes()), processive=False)
+    pre, number, diger, sigers = outer.tsgs[0]
+    corrupted = tmp_path / 'group-corrupted-proposal.cesr'
+    corrupted.write_bytes(messagize(outer.serder,
+        tsgs=[(pre, number, diger, [Siger(raw=bytes(64), index=sigers[0].index)])],
+        nests=[serializeParsedSubstream(nest) for nest in outer.nests], gvrsn=V2))
+    refused = kli(tmp_path, 'vc', 'registry', 'provision', *target['args'], *scope,
+        '--proposal', str(corrupted), '--output', str(fresh), succeeds=False)
+    assert 'scope authentication' in refused and not fresh.exists()
+    repeated = last_result(kli(tmp_path, 'vc', 'registry', 'provision', *target['args'], *scope,
+        '--proposal', str(proposal), '--output', str(fresh)))
+    assert repeated['contributed'] and fresh.read_bytes() == contribution.read_bytes()
+    original = Parser(version=V2).parseOneBare(ims=bytearray(partial.read_bytes()), processive=False)
+    aggregate = Parser(version=V2).parseOneBare(ims=bytearray(contribution.read_bytes()), processive=False)
+    assert aggregate.serder.raw == original.serder.raw
+    assert {sig.index for pre, _, _, sigers in aggregate.tsgs if pre.qb64 == lead['pre']
+            for sig in sigers} == {0, 1}
+    assert retained(target, body)[0] is None  # Contributing authenticators grants no receive approval.
+    result = last_result(kli(tmp_path, *receive, '--message', str(partial), '--message', str(contribution)))
+    assert result['received'] and result['reply'] == prepared['reply']
+    saved = retained(target, body)
+    assert saved[0] == before[0] and saved[1] != before[0] and saved[2] == before[2]
+    assert retained(target, body) == saved and retained(lead, body) == before
+    hby = setupHby(name=target['name'], base=target['base'], bran=PASSCODE, noPrompt=True, version=V2)
+    try:
+        assert tuple(hby.db.enst.get((selected['grant'],))) == held_before
+    finally:
+        hby.close()
+    assert all(before[0].encode() not in path.read_bytes() for path in (partial, proposal, contribution, held))

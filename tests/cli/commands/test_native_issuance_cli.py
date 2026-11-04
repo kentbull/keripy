@@ -160,7 +160,7 @@ def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, liv
     issue(tmp_path, live_parties)
 
 
-def test_installed_group_holder_contributes_to_live_dh_and_one_exact_admit(tmp_path, live_parties):
+def group_issue(tmp_path, live_parties):
     issuer, first = live_parties
     witness_raw = (tmp_path / 'witness.cesr').read_bytes()
     witness_pre = Parser(version=V2).parseOneBare(ims=bytearray(witness_raw), processive=False).serder.pre
@@ -304,6 +304,11 @@ def test_installed_group_holder_contributes_to_live_dh_and_one_exact_admit(tmp_p
     assert roots[0] == roots[1] and roots[0] is not None and roots[2] is None
     assert all(roots[0].encode() not in file.read_bytes() for file in
                (grantfile, tmp_path / 'group-lead.cesr', tmp_path / 'group-peer.cesr'))
+    return issuer, holders, body, selected
+
+
+def test_installed_group_holder_contributes_to_live_dh_and_one_exact_admit(tmp_path, live_parties):
+    group_issue(tmp_path, live_parties)
 
 
 def test_finite_grant_timeout_keeps_registry_unissued_and_has_no_restart_keys(tmp_path, live_parties):
