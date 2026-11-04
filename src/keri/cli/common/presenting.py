@@ -22,6 +22,7 @@ from ...acdc.unblinding import Unblind
 from ...app import GroupHab, MailboxDirector, Notifier, SignifyHab, SignifyGroupHab
 from ...core import Blinder, BlindState, BoundState, Kevery, Kramer, Number, Parser, SerderACDC, messagize
 from ...db import Baser
+from ...help import nowUTC
 from ...kering import ConfigurationError, KeriError
 from ...peer import Exchanger
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
@@ -142,11 +143,13 @@ class NativePresentation(NativeIssuance):
     def check(self):
         if self.tyme >= self.deadline:
             raise TimeoutError('native presentation did not complete before --timeout')
+        if getattr(self, 'nativeDeadline', None) is not None and nowUTC() >= self.nativeDeadline:
+            raise TimeoutError('group presentation reached its original native Grant deadline')
 
     def intake(self, raw, *, local=False):
         NativeNegotiation.intake(self.psr, self.exc, raw, local=local, presentation=True)
 
-    def send(self, raw, dest):
+    def send(self, raw, dest, *, topic='credential'):
         # Unblind returns a nested stream; StreamPoster accepts body + attachments.
         stream = bytearray(raw)
         parsed = Parser(version=Vrsn_2_0).parseOneBare(ims=stream, processive=False)
@@ -159,7 +162,7 @@ class NativePresentation(NativeIssuance):
                        *(BoundState(*data) for data in parsed.bsss)] or None,
                 nests=[serializeParsedSubstream(nest) for nest in parsed.nests] or None,
                 gvrsn=Vrsn_2_0)
-        yield from super().send(raw, dest)
+        yield from super().send(raw, dest, topic=topic)
 
     def run(self, tymth, tock=0.03125, **kwa):
         self.wind(tymth)
@@ -183,22 +186,35 @@ class NativePresentation(NativeIssuance):
         try:
             self.hab = self.hby.habByName(args.alias)
             if (self.hab is None or not self.hab.accepted
-                    or isinstance(self.hab, (GroupHab, SignifyHab, SignifyGroupHab))):
-                raise ConfigurationError('presentation requires an accepted individual local signer')
+                    or isinstance(self.hab, (SignifyHab, SignifyGroupHab))):
+                raise ConfigurationError('presentation requires an accepted local signer')
+            group = isinstance(self.hab, GroupHab)
+            if group and (self.verb != 'present' or args.respond_unblind):
+                raise ConfigurationError('group Unblind and group presentation admission are not supported')
+            if not group and (getattr(args, 'proposal', None) or getattr(args, 'proposal_output', None)):
+                raise ConfigurationError('presentation proposal options require a local group signer')
             self.rgy = Regery(hby=self.hby, name=args.name, base=args.base)
             notifier = Notifier(self.hby)
             self.exc = Exchanger(hby=self.hby, handlers=[])
             ipexing.loadHandlers(self.hby, self.exc, notifier, rgy=self.rgy)
-            self.unblind = Unblind(self.hab, self.exc, self.rgy, states=('issued', 'revoked', ''))
-            self.hby.rtr.addRoute(Unblind.Route, self.unblind, blinders=True, attachments=True)
+            self.unblind = None if group else Unblind(self.hab, self.exc, self.rgy, states=('issued', 'revoked', ''))
+            if self.unblind is not None:
+                self.hby.rtr.addRoute(Unblind.Route, self.unblind, blinders=True, attachments=True)
             kvy = Kevery(db=self.hby.db, rvy=self.hby.rvy, exc=self.exc, qvy=self.unblind,
                 lax=True, local=False, direct=False, kramer=Kramer(db=self.hby.db, cf=self.hby.cf))
-            mbx = MailboxDirector(hby=self.hby, topics=['/receipt', '/replay', '/credential'],
+            mbx = MailboxDirector(hby=self.hby, topics=['/receipt', '/replay', '/credential', '/multisig'],
                 exc=self.exc, kvy=kvy, rvy=self.hby.rvy, rgy=self.rgy,
                 version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
             self.psr = mbx.parser
             for filename in args.input:
                 self.intake(Path(filename).read_bytes())
+            if group:
+                from .grouppresenting import GroupPresentation
+                presentation = GroupPresentation(self, notifier)
+                background.append(mbx)
+                self.extend(background)
+                yield from presentation.run()
+                return
             if self.verb == 'present':
                 source, nests = admitted(self.hby, self.hab, args.from_grant)
                 if args.refresh:

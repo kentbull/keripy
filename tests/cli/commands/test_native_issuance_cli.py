@@ -160,7 +160,7 @@ def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, liv
     issue(tmp_path, live_parties)
 
 
-def group_issue(tmp_path, live_parties):
+def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
     issuer, first = live_parties
     witness_raw = (tmp_path / 'witness.cesr').read_bytes()
     witness_pre = Parser(version=V2).parseOneBare(ims=bytearray(witness_raw), processive=False).serder.pre
@@ -201,7 +201,7 @@ def group_issue(tmp_path, live_parties):
     kli(tmp_path, 'vc', 'registry', 'incept', *issuer['args'], '--registry-name', 'group-fresh')
     bodyfile, grantfile = tmp_path / 'group-body.cesr', tmp_path / 'group-grant.cesr'
     kli(tmp_path, 'vc', 'create', *issuer['args'], '--registry-name', 'group-fresh',
-        '--recipient', group_pre, '--data', '{"role":"group reader"}', '--output', str(bodyfile))
+        '--recipient', group_pre, '--data', data, '--output', str(bodyfile))
     body = SerderACDC(raw=bodyfile.read_bytes())
     logs = [tmp_path / name for name in ('group-issuer.log', 'group-lead.log', 'group-peer.log')]
     processes = []

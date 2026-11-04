@@ -168,9 +168,9 @@ def test_live_receive_timeout_needs_fresh_approval_then_real_mailbox_delivery(tm
     assert retained(receiver, body)[0] == root
 
 
-def test_group_copy_requires_exact_contribution_then_native_retention(tmp_path, live_parties):
+def group_copy(tmp_path, live_parties, data='{"role":"group reader"}'):
     # Continue the qualified real2of2 issuance; the nonlead has public proofs but no root.
-    _, holders, body, selected = group_issue(tmp_path, live_parties)
+    issuer, holders, body, selected = group_issue(tmp_path, live_parties, data=data)
     lead, target = holders
     before = retained(lead, body)
     assert before[0] is not None and retained(target, body)[0] is None
@@ -264,3 +264,8 @@ def test_group_copy_requires_exact_contribution_then_native_retention(tmp_path, 
     finally:
         hby.close()
     assert all(before[0].encode() not in path.read_bytes() for path in (partial, proposal, contribution, held))
+    return issuer, holders, body, selected
+
+
+def test_group_copy_requires_exact_contribution_then_native_retention(tmp_path, live_parties):
+    group_copy(tmp_path, live_parties)

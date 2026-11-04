@@ -37,6 +37,38 @@ root. Ordinary issued/revoked/vacuous proofs are supported. Exact bound proofs
 work when supplied; bound derivation requires a later explicit-coordinate
 interface. Refresh does not alter the source Grant's retained disclosure.
 
+A holder group uses two finite member processes and explicit proposal consent.
+A provisioned nonlead may create the new presentation from its encrypted group
+root; DH custody does not select the presentation proposer:
+
+```sh
+kli ipex present --name provisioned-member --alias holder-group --version 2.0 \
+  --from-grant "$ADMITTED_GRANT" --recipient "$AUDITOR_AID" --disclose a/name/ \
+  --refresh --derive --proposal-output presentation-proposal.cesr \
+  --output presentation.cesr --deliver --timeout 120
+# Keep it running. In the other member's independent store:
+kli ipex present --name other-member --alias holder-group --version 2.0 \
+  --from-grant "$ADMITTED_GRANT" --recipient "$AUDITOR_AID" --disclose a/name/ \
+  --refresh --proposal presentation-proposal.cesr --deliver --timeout 120
+```
+
+The contributor selects its exact accepted Grant/local Admit and the same
+recipient, message and disclosure plan. It signs the retained Grant bytes,
+timestamp and proofs. Without `--refresh`, proofs must match the admitted view;
+with it, native accepted history and `vetBinds` verify carried current proofs on
+a copy. Contributor `--derive`/`--opening` are rejected because they would replace
+the packet. Fuller same-SAID holdings cannot widen the selected view.
+
+`group_proposed` reports the new Grant before threshold completion. Both finite
+processes exchange signatures through member mailboxes. Only native threshold
+and current-issued acceptance permit output and delivery; each member evaluates
+native `Exchanger.lead` independently of who proposed or derived the proof. JSON
+reports local acceptance and actual transmission, without claiming a later
+Admit. Provision the auditor's public KEL/TEL/schema dependencies explicitly.
+Group `--respond-unblind` and group presentation admission are rejected; an
+individual recipient can admit complete current proofs using the command below
+without requesting auxiliary openings.
+
 `--respond-unblind` approves this exact outgoing Grant before delivery and
 keeps its process alive for native Unblind replies and the selected Admit.
 The recipient explicitly selects presentation admission:
@@ -72,5 +104,5 @@ kli ipex inspect --name holder --version 2.0 --said "$ADMITTED_GRANT" --current
 Default JSON reports exact retained bodies/evidence as base64, deadline,
 accepted/terminal state and historical observations. `--current` adds only
 `reverifyGrant`'s current verdict and observations, or its missing-context error.
-Historical observations remain unchanged. Group and anchored presentation
-profiles are unsupported. Existing default v1 commands remain unchanged.
+Historical observations remain unchanged. Group Unblind and anchored
+presentation profiles remain unsupported. Existing default v1 commands remain unchanged.

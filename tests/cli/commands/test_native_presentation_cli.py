@@ -3,20 +3,23 @@ import json
 import shutil
 import subprocess
 import time
+from uuid import uuid4
 
 from hio.base import doing
 
 from keri import Vrsn_2_0 as V2
-from keri.acdc import Regery, Registrar
-from keri.app import Receiptor
+from keri.acdc import Regery, Registrar, regeventing
+from keri.app import Habery, Receiptor, multisigExn
 from keri.cli.common import setupHby
-from keri.core import Parser, SealSource, SerderKERI, messagize
+from keri.core import Parser, SealSource, SerderACDC, SerderKERI, messagize
+from keri.db import Baser
 from keri.peer import Exchanger
-from keri.peer.exchanging import serializeParsedSubstream
+from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from keri.acdc.ipexing import loadHandlers
 from types import SimpleNamespace
 
-from tests.cli.commands.test_native_issuance_cli import PASSCODE, issue, live_parties
+from tests.cli.commands.test_native_issuance_cli import PASSCODE, issue, live_parties, witnessed
+from tests.cli.commands.test_native_registry_root_cli import group_copy, last_result
 from tests.cli.commands.test_native_negotiation_cli import kli
 
 import pytest
@@ -95,8 +98,8 @@ def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True,
             if succeeds:
                 process.wait(timeout=15)
                 assert process.returncode == 0 and 'ERR:' not in log.read_text(), log.read_text()
-                result = json.loads(admitted.splitlines()[-1])
-                assert result == json.loads(log.read_text().splitlines()[-1])
+                result = last_result(admitted)
+                assert result == last_result(log.read_text())
                 return selected['grant'], before, inspect(tmp_path, receiver, selected['grant'])
             assert 'current verified issued state' in admitted, admitted
             return selected['grant'], before, inspect(tmp_path, receiver, selected['grant'])
@@ -108,7 +111,7 @@ def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True,
 
 def inspect(tmp_path, side, said, *, current=False):
     args = ['--name', side['name'], '--base', side['base'], '--version', '2.0', '--said', said]
-    return json.loads(kli(tmp_path, 'ipex', 'inspect', *args, *(['--current'] if current else [])).splitlines()[-1])
+    return last_result(kli(tmp_path, 'ipex', 'inspect', *args, *(['--current'] if current else [])))
 
 
 def snapshot(side):
@@ -147,6 +150,7 @@ def test_selected_admitted_view_unblind_refresh_and_read_only_inspection(tmp_pat
     assert received['disclosure'][0]['body']['a']['shown']['name'] == 'Ada'
     assert isinstance(received['disclosure'][0]['body']['a']['secret'], str)
     assert inspect(tmp_path, holder, selected['grant']) == old
+
     # The issuer also holds the full same-SAID body, but must use its admitted partial.
     update(issuer, body, later, value='issued')
     intake(holder, later.read_bytes())
@@ -166,6 +170,130 @@ def test_selected_admitted_view_unblind_refresh_and_read_only_inspection(tmp_pat
     assert inspect(tmp_path, issuer, presented, current=True)['current']['verdict']['verdict'] == 'unknown'
     assert snapshot(issuer) == state_before
     assert inspect(tmp_path, holder, selected['grant']) == old
+
+
+def test_provisioned_nonlead_presents_exact_group_view_at_native_threshold(tmp_path, live_parties):
+    issuer, holders, body, selected = group_copy(tmp_path, live_parties,
+        data='{"d":"","shown":{"d":"","name":"Ada"},"secret":{"d":"","name":"hidden"}}')
+    before = [inspect(tmp_path, side, selected['grant']) for side in holders]
+    later = tmp_path / 'group-issued2.cesr'
+    update(issuer, body, later, value='issued')
+    for side in holders:
+        intake(side, later.read_bytes())
+    # The verifier has independent keys and public history, never a registry root.
+    name, base = f'group-verifier-{uuid4().hex}', issuer['base']
+    hby = Habery(name=name, base=base, bran=PASSCODE, version=V2)
+    try:
+        witness = (tmp_path / 'witness.cesr').read_bytes()
+        Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(witness))
+        wit = Parser(version=V2).parseOneBare(ims=bytearray(witness), processive=False).serder.pre
+        hab = hby.makeHab(name='verifier', wits=[wit], toad=1)
+        witnessed(hby, hab)
+        public = tmp_path / 'group-verifier.cesr'
+        public.write_bytes(bytes(hab.replay(gvrsn=V2)))
+        verifier = dict(name=name, base=base, alias='verifier', pre=hab.pre, public=public,
+            args=['--name', name, '--base', base, '--alias', 'verifier', '--passcode', PASSCODE, '--version', '2.0'])
+    finally:
+        hby.close()
+    hby = state(issuer)
+    rgy = Regery(hby, name=issuer['name'], base=issuer['base'])
+    try:
+        evidence = bytes(hby.habByName(issuer['alias']).replay(gvrsn=V2))
+        for raw in rgy.store.cloneTelIter(body.regid):
+            event = SerderACDC(raw=raw)
+            sn, said = regeventing.vetAnchor(event, db=hby.db, issuer=issuer['pre'])
+            evidence += messagize(event, bonds=[SealSource(s=f'{sn:x}', d=said)], gvrsn=V2)
+        history = tmp_path / 'group-history.cesr'
+        history.write_bytes(evidence)
+    finally:
+        rgy.close()
+        hby.close()
+    common = ['--from-grant', selected['grant'], '--recipient', verifier['pre'],
+              '--input', str(public), '--disclose', 'a/shown/', '--deliver', '--timeout', '20']
+    proposal = tmp_path / 'group-present-proposal.cesr'
+    refused = kli(tmp_path, 'ipex', 'present', *holders[1]['args'], *common,
+        '--proposal-output', str(proposal), succeeds=False)
+    assert 'current verified issued state' in refused and not proposal.exists()
+    logs = [tmp_path / 'group-present-creator.log', tmp_path / 'group-present-contributor.log']
+    outputs = [tmp_path / 'group-present-creator.cesr', tmp_path / 'group-present-contributor.cesr']
+    processes = []
+    with logs[0].open('w') as first, logs[1].open('w') as second:
+        try:
+            processes.append(subprocess.Popen([shutil.which('kli'), 'ipex', 'present', *holders[1]['args'],
+                *common, '--refresh', '--derive', '--proposal-output', str(proposal), '--output', str(outputs[0])],
+                cwd=tmp_path, stdout=first, stderr=subprocess.STDOUT))
+            deadline = time.monotonic() + 10
+            while '"phase": "group_proposed"' not in logs[0].read_text():
+                assert processes[0].poll() is None, logs[0].read_text()
+                assert time.monotonic() < deadline, logs[0].read_text()
+                time.sleep(.03)
+            proposed = next(json.loads(line) for line in logs[0].read_text().splitlines() if line.startswith('{'))
+            assert not proposed['locally_accepted'] and not outputs[0].exists()
+            db = Baser(name=holders[1]['name'], base=base, readonly=True, reopen=True)
+            try:
+                assert db.exns.get((proposed['grant'],)) is None
+                original_deadline = db.epsd.get((proposed['grant'],)).dts
+            finally:
+                db.close()
+            processes.append(subprocess.Popen([shutil.which('kli'), 'ipex', 'present', *holders[0]['args'],
+                *common, '--refresh', '--proposal', str(proposal), '--output', str(outputs[1])],
+                cwd=tmp_path, stdout=second, stderr=subprocess.STDOUT))
+            for process in processes:
+                process.wait(timeout=25)
+            assert all(p.returncode == 0 for p in processes), '\n'.join(log.read_text() for log in logs)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
+    results = [next(json.loads(line) for line in reversed(log.read_text().splitlines()) if line.startswith('{'))
+               for log in logs]
+    assert not results[0]['transmitted'] and results[1]['transmitted']
+    assert all(result['grant'] == proposed['grant'] and result['locally_accepted'] for result in results)
+    # A retained authenticated proposal cannot authorize a different recipient in another invocation.
+    invalid = tmp_path / 'group-wrong-recipient.cesr'
+    rejected = kli(tmp_path, 'ipex', 'present', *holders[0]['args'], '--from-grant', selected['grant'],
+        '--recipient', issuer['pre'], '--disclose', 'a/shown/', '--refresh', '--proposal', str(proposal),
+        '--output', str(invalid), '--deliver', succeeds=False)
+    assert 'selected admitted-view scope' in rejected and not invalid.exists()
+    admitted_result = kli(tmp_path, 'ipex', 'admit', *verifier['args'], '--unblind', '--said', proposed['grant'],
+        '--input', str(history), '--input', str(outputs[1]), '--deliver', '--timeout', '15')
+    result = next(json.loads(line) for line in reversed(admitted_result.splitlines()) if line.startswith('{'))
+    assert result['admitted'] and result['grant'] == proposed['grant']
+    received = inspect(tmp_path, verifier, proposed['grant'])
+    assert isinstance(received['disclosure'][0]['body']['a']['secret'], str)
+    assert received['disclosure'][0]['body']['a']['shown']['name'] == 'Ada'
+    for side in holders:
+        assert inspect(tmp_path, side, selected['grant']) == before[holders.index(side)]
+    hby = state(holders[1])
+    try:
+        assert hby.db.epsd.get((proposed['grant'],)).dts == original_deadline
+        # Authenticate a fuller disclosure of the SAME SAID; selected a/shown/ must still cap approval.
+        packet = Parser(version=V2).parseOneBare(ims=bytearray(proposal.read_bytes()), processive=False)
+        child = packet.nests[0]
+        partial = child.nests[0].serder
+        full = loadParsedNestedSubstreams(hby, selected['grant'])[0].serder
+        assert partial.said == full.said and partial.raw != full.raw
+        child.nests[0].serder = full
+        hab = hby.habByName(holders[1]['alias'])
+        wrapper, atc = multisigExn(hab, hab.endorse(child.serder, framed=False, gvrsn=V2,
+            nests=[serializeParsedSubstream(node) for node in child.nests]), version=V2)
+        fuller = tmp_path / 'group-fuller-same-said.cesr'
+        fuller.write_bytes(wrapper.raw + atc)
+    finally:
+        hby.close()
+    rejected = kli(tmp_path, 'ipex', 'present', *holders[0]['args'], *common,
+        '--refresh', '--proposal', str(fuller), '--output', str(invalid), succeeds=False)
+    assert 'selected admitted-view scope' in rejected and not invalid.exists()
+    hby = state(verifier)
+    try:
+        accepted = hby.db.exns.get((proposed['grant'],))
+        tsgs, _ = verify(hby, accepted)
+        assert {sig.index for pre, _, _, sigers in tsgs if pre.qb64 == holders[0]['pre']
+                for sig in sigers} == {0, 1}
+        assert not list(hby.ks.rroots.getTopItemIter())
+    finally:
+        hby.close()
 
 
 def test_held_bound_refresh_and_invalid_revoked_refusal(tmp_path, live_parties):
