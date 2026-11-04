@@ -124,7 +124,7 @@ class NativeNegotiation(doing.DoDoer):
         return prior
 
     @staticmethod
-    def intake(psr, exc, raw, *, local=False, issuance=False):
+    def intake(psr, exc, raw, *, local=False, issuance=False, presentation=False):
         """Consume complete signed public streams with ordinary accepted-state owners."""
         stream = bytearray(raw)
         if not stream:
@@ -132,7 +132,7 @@ class NativeNegotiation(doing.DoDoer):
         while stream:
             message = psr.parseOneBare(ims=stream, processive=False, local=local, version=Vrsn_2_0)
             routes = ('/ipex/apply', '/ipex/offer', '/ipex/agree')
-            if issuance:
+            if issuance or presentation:
                 routes += ('/ipex/grant', '/ipex/admit', '/ipex/spurn')
             if message.serder.ilk in ('xip', 'exn') and message.serder.route not in routes:
                 raise ConfigurationError('input exchange is outside native negotiation')
@@ -140,6 +140,11 @@ class NativeNegotiation(doing.DoDoer):
             if message.serder.ilk in ('xip', 'exn') and not exc.complete(message.serder.said):
                 if (issuance and message.serder.route == '/ipex/grant'
                         and exc.pendingGrant(message.serder.said,
+                            xid=message.serder.said if message.serder.ilk == 'xip' else message.serder.sad['x'],
+                            sender=message.serder.pre, recipient=message.serder.sad['ri']) is not None):
+                    continue
+                if (presentation and message.serder.route == '/ipex/grant'
+                        and exc.presentationContext(message.serder.said,
                             xid=message.serder.said if message.serder.ilk == 'xip' else message.serder.sad['x'],
                             sender=message.serder.pre, recipient=message.serder.sad['ri']) is not None):
                     continue

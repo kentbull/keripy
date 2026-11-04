@@ -33,7 +33,7 @@ def options(parser):
 def legacy(args):
     if (args.input or args.output or args.deliver or args.timeout != 120.0
             or any(getattr(args, field, None) for field in
-                   ('credential', 'prior', 'issue', 'authenticate', 'code', 'code_time'))):
+                   ('credential', 'prior', 'issue', 'authenticate', 'code', 'code_time', 'unblind'))):
         raise ConfigurationError('native issuance options require --version 2.0')
 
 
