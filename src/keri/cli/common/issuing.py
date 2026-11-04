@@ -6,6 +6,7 @@ from pathlib import Path
 from hio.base import doing
 
 from . import parseVersion, setupHby
+from . import evidencing
 from .credentialing import recipient
 from .negotiating import NativeNegotiation
 from .witnessing import witnessAuths
@@ -33,7 +34,8 @@ def options(parser):
 def legacy(args):
     if (args.input or args.output or args.deliver or args.timeout != 120.0
             or any(getattr(args, field, None) for field in
-                   ('credential', 'prior', 'issue', 'authenticate', 'code', 'code_time', 'unblind'))):
+                   ('credential', 'prior', 'issue', 'authenticate', 'code', 'code_time', 'unblind',
+                    'evidence_url', 'evidence_ca', 'evidence_hostname'))):
         raise ConfigurationError('native issuance options require --version 2.0')
 
 
@@ -101,6 +103,7 @@ class NativeIssuance(doing.DoDoer):
         self.tock = tock
         yield tock
         args = self.args
+        evidenceSource = evidencing.settings(args)
         if not args.deliver:
             raise ConfigurationError('live native issuance requires explicit --deliver')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -248,6 +251,7 @@ class NativeIssuance(doing.DoDoer):
                 while self.rgy.store.headEvent(registry).ilk == 'rip':
                     self.check()
                     yield tock
+                yield from evidencing.acquire(self, [registry], self.dh, xid, evidenceSource)
                 self.finish(xid, message.said)
                 response, atc = ipexing.admit(self.hab, message=args.message, grant=message,
                                              kind=Kinds.json, gvrsn=Vrsn_2_0)

@@ -74,7 +74,7 @@ def intake(side, raw, *, proof=None, event=None):
         hby.close()
 
 
-def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True):
+def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True, admit_options=()):
     evidence, log = tmp_path / (filename + '.cesr'), tmp_path / (filename + '.log')
     with log.open('w') as output:
         process = subprocess.Popen([shutil.which('kli'), 'ipex', 'present', *sender['args'],
@@ -91,7 +91,7 @@ def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True)
             intake(receiver, evidence.read_bytes())
             before = inspect(tmp_path, receiver, selected['grant'])
             admitted = kli(tmp_path, 'ipex', 'admit', *receiver['args'], '--unblind', '--said', selected['grant'],
-                '--deliver', '--timeout', '10', succeeds=succeeds)
+                '--deliver', '--timeout', '10', *admit_options, succeeds=succeeds)
             if succeeds:
                 process.wait(timeout=15)
                 assert process.returncode == 0 and 'ERR:' not in log.read_text(), log.read_text()

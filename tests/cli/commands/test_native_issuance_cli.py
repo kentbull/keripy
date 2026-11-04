@@ -76,7 +76,8 @@ doing.Doist(real=True, tock=0.03125).do(doers=doers)
         witness.communicate(timeout=10)
 
 
-def issue(tmp_path, live_parties, data='{"role":"reader"}'):
+def issue(tmp_path, live_parties, data='{"role":"reader"}', *, admit_options=(), succeeds=True,
+          issuer_process=None):
     issuer, holder = live_parties
     kli(tmp_path, 'vc', 'registry', 'incept', *issuer['args'], '--registry-name', 'fresh')
     bodyfile = tmp_path / 'body.cesr'
@@ -95,6 +96,8 @@ def issue(tmp_path, live_parties, data='{"role":"reader"}'):
             '--input', str(holder['public']), '--input', str(application),
             '--issue', '--deliver', '--output', str(grantfile), '--timeout', '20'],
             cwd=tmp_path, stdout=output, stderr=subprocess.STDOUT)
+        if issuer_process is not None:
+            issuer_process.append(process)
         try:
             deadline = time.monotonic() + 10
             while not grantfile.exists():
@@ -109,7 +112,9 @@ def issue(tmp_path, live_parties, data='{"role":"reader"}'):
             assert 'exact pending native Grant' in refused
             holderfile = tmp_path / 'holder-evidence.cesr'
             admitted = kli(tmp_path, 'ipex', 'admit', *holder['args'], '--said', selected['grant'],
-                '--output', str(holderfile), '--deliver', '--timeout', '20')
+                '--output', str(holderfile), '--deliver', '--timeout', '20', *admit_options, succeeds=succeeds)
+            if not succeeds:
+                return selected, body, admitted
             process.wait(timeout=25)
             assert process.returncode == 0 and 'ERR:' not in issuerlog.read_text(), issuerlog.read_text()
             result = json.loads(admitted.splitlines()[-1])
