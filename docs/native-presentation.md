@@ -80,6 +80,16 @@ with the lowest verified contributing index. Root custody does not elect it.
 `complete(xid)` reports reply threshold readiness and the original Grant deadline
 still applies.
 
+A responder explicitly calls `finish(xid)` on its completed own reply before
+peer delivery when its outgoing Grant still needs those current proofs. This
+requires the real authenticated request, the full reply signature threshold,
+and the exact minimal verified openings. Ordinary native verification accepts
+only that same outgoing Grant; the source admitted proof and original deadline
+remain unchanged. A root or a partial group reply cannot authorize completion.
+Completion verifies evidence, not permission to use the credential: callers must
+still deliver authenticated revoked or vacuous replies without an issued-state
+gate. Final application admission remains a separate decision.
+
 A native group requester instead calls `start(grant)` to freeze a query proposal
 and its exact accepted public events. Each other member explicitly approves the
 same Grant, then `contribute(xid, proposal)` checks that event selection before
