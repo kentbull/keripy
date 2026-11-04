@@ -8,8 +8,9 @@ import argparse
 from hio.base import doing
 
 from ...common import existing, Parsery
+from ...common import issuing
 
-from ....kering import Vrsn_1_0
+from ....kering import Vrsn_1_0, Vrsn_2_0
 from ....app import (Notifier, Organizer, GroupHab,
                      Multiplexor, MailboxDirector,
                      WitnessInquisitor, StreamPoster,
@@ -34,9 +35,13 @@ parser.add_argument("--said", "-s", help="SAID of the exn grant message to admit
 parser.add_argument("--message", "-m", help="optional human readable message to "
                                             "send to recipient", required=False, default="")
 parser.add_argument("--time", help="timestamp", required=False, default=None)
+issuing.options(parser)
 
 
 def handler(args):
+    if args.version == Vrsn_2_0:
+        return [issuing.NativeIssuance(args, 'admit')]
+    issuing.legacy(args)
     ed = AdmitDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,

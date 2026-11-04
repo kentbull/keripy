@@ -8,8 +8,9 @@ import argparse
 from hio.base import doing
 
 from ...common import Parsery, setupHby
+from ...common import issuing
 
-from ....kering import Vrsn_1_0
+from ....kering import Vrsn_1_0, Vrsn_2_0, ConfigurationError
 from ....app import (Notifier, StreamPoster, Organizer,
                      GroupHab, Multiplexor, MailboxDirector,
                      serialize, multisigExn)
@@ -33,13 +34,25 @@ parser.add_argument('--alias', '-a', help='human readable alias for the identifi
 
 parser.add_argument("--recipient", "-r", help="alias or qb64 identifier prefix of the self.recp of "
                                               "the credential", required=True)
-parser.add_argument("--said", "-s", help="SAID of the credential to grant", required=True)
+parser.add_argument("--said", "-s", help="SAID of the legacy credential to grant")
 parser.add_argument("--message", "-m", help="optional human readable message to "
                                             "send to recipient", required=False, default="")
 parser.add_argument("--time", help="timestamp for the revocation", required=False, default=None)
+issuing.options(parser)
+parser.add_argument('--credential', help='native public raw CESR body file produced by vc create')
+parser.add_argument('--prior', help='exact accepted native Apply or Agree SAID')
+parser.add_argument('--issue', action='store_true', help='authorize live DH and fresh native registry issuance')
+parser.add_argument('--authenticate', '-z', action='store_true')
+parser.add_argument('--code', default=[], action='append', help='selected witness AID:code')
+parser.add_argument('--code-time')
 
 
 def handler(args):
+    if args.version == Vrsn_2_0:
+        return [issuing.NativeIssuance(args, 'grant')]
+    if not args.said:
+        raise ConfigurationError('legacy Grant requires --said')
+    issuing.legacy(args)
     ed = GrantDoer(name=args.name,
                    alias=args.alias,
                    base=args.base,
