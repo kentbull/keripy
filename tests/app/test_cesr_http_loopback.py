@@ -8,7 +8,7 @@ from hio.core import http
 
 from keri import kering
 from keri.app import httping, indirecting
-from keri.core import eventing, parsing, signing
+from keri.core import counting, eventing, parsing, signing
 from keri.db import basing
 
 
@@ -55,3 +55,54 @@ def test_cesr_http_loopback_preserves_detached_attachments(version, content_type
         if valid:
             assert kvy.kevers[serder.pre].serder.raw == serder.raw
             assert [sig.qb64 for sig in db.sigs.get(keys=(serder.pre, serder.said))] == [signature.qb64]
+
+
+def test_cesr_http_loopback_restores_advertised_genus(unused_tcp_port):
+    """One shared V2 parser authenticates declared contexts independently of body version."""
+    endpoint = indirecting.HttpEnd()
+    app = falcon.App()
+    app.add_route("/", endpoint)
+    events = []
+    expected = bytearray()
+    with http.openServer(host="127.0.0.1", port=unused_tcp_port, app=app) as server:
+        def deliver(event, message, genus):
+            # HttpEnd closes each response connection; each delivery owns a fresh real client.
+            with http.openClient(hostname="127.0.0.1", port=server.servant.ha[1]) as client:
+                httping.createCESRRequest(bytearray(message), client, dest=event.pre)
+                request = client.requests[-1]
+                assert request["body"] == event.raw
+                assert bytes(request["headers"][httping.CESR_ATTACHMENT_HEADER]) == message[event.size:]
+                request["headers"]["CESR-Genus"] = genus
+                deadline = time.monotonic() + 2.0
+                while not client.responses and time.monotonic() < deadline:
+                    client.service()
+                    server.service()
+                    time.sleep(0.001)
+                assert client.responses, "loopback HTTP response timed out"
+                return client.responses.popleft()["status"]
+
+        for secret, genus in ((b'a' * 32, kering.Vrsn_1_0), (b'b' * 32, kering.Vrsn_2_0)):
+            signer = signing.Signer(raw=secret)
+            # Both bodies are V1: the second proof still requires the advertised V2 context.
+            event = eventing.incept(keys=[signer.verfer.qb64], version=kering.Vrsn_1_0,
+                                   kind=kering.Kinds.json)
+            signature = signer.sign(ser=event.raw, index=0)
+            message = eventing.messagize(event, sigers=[signature], gvrsn=genus)
+            assert deliver(event, message, str(genus.major)) == 204
+            expected.extend(counting.Counter.makeGVC(genus) + message)
+            events.append((event, signature))
+        assert bytes(endpoint.rxbs) == expected
+
+        # Unsupported and malformed explicit contexts refuse before adding parser input.
+        for genus in ("3", "2.0"):
+            assert deliver(event, message, genus) == 400
+            assert bytes(endpoint.rxbs) == expected
+
+    with basing.openDB(name="mixed-genus-http-receiver") as db:
+        kvy = eventing.Kevery(db=db)
+        assert all(event.pre not in kvy.kevers for event, _ in events)
+        parsing.Parser(version=kering.Vrsn_2_0).parse(ims=endpoint.rxbs, kvy=kvy)
+        assert not endpoint.rxbs
+        for event, signature in events:
+            assert kvy.kevers[event.pre].serder.raw == event.raw
+            assert [sig.qb64 for sig in db.sigs.get(keys=(event.pre, event.said))] == [signature.qb64]

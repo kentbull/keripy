@@ -14,8 +14,8 @@ from hio.core import http
 from hio.help import Hict, ogler
 
 from ..kering import (ShortageError, ExtractionError,
-                      ColdStartError, sniff, Colds)
-from ..core import SerderKERI
+                      ColdStartError, sniff, Colds, Versionage, Vrsn_1_0, Vrsn_2_0)
+from ..core import Counter, SerderKERI
 from ..end import designature
 from ..help import nowUTC
 
@@ -24,6 +24,7 @@ logger = ogler.getLogger()
 
 CESR_CONTENT_TYPE = "application/cesr"
 CESR_ATTACHMENT_HEADER = "CESR-ATTACHMENT"
+CESR_GENUS_HEADER = "CESR-GENUS"
 CESR_DESTINATION_HEADER = "CESR-DESTINATION"
 
 
@@ -73,14 +74,24 @@ class SignatureValidationComponent(object):
 
 @dataclass
 class CesrRequest:
+    """Detached HTTP data with its original body and optional counter context."""
     payload: dict
     attachments: str
+    body: bytes
+    genus: Versionage | None
+
+    @property
+    def stream(self):
+        """Restore only advertised GVC framing; leave signed body and proof bytes unchanged."""
+        prefix = Counter.makeGVC(self.genus) if self.genus is not None else b''
+        return prefix + self.body + self.attachments.encode("utf-8")
 
 
 def parseCesrHttpRequest(req):
     """
-    Parse Falcon HTTP request and create a CESR message from the body of the request and the two
-    CESR HTTP headers (Date, Attachment).
+    Parse a Falcon HTTP body, detached attachments and optional CESR genus.
+    An explicit genus selects proof counters independently
+    of the signed body version; an absent genus preserves the unprefixed wire.
 
     Parameters
         req (falcon.Request) http request object in CESR format:
@@ -92,8 +103,14 @@ def parseCesrHttpRequest(req):
                                title="Content type error",
                                description="Unacceptable content type.")
 
+    genus = req.headers.get(CESR_GENUS_HEADER)
+    if genus is not None and genus not in ("1", "2"):
+        raise falcon.HTTPBadRequest(description="CESR-Genus must be 1 or 2")
+    version = {"1": Vrsn_1_0, "2": Vrsn_2_0}.get(genus)
+
+    body = req.bounded_stream.read()
     try:
-        data = json.load(req.bounded_stream)
+        data = json.loads(body)
     except ValueError:
         raise falcon.HTTPError(falcon.HTTP_400,
                                title="Malformed JSON",
@@ -108,7 +125,9 @@ def parseCesrHttpRequest(req):
 
     cr = CesrRequest(
         payload=data,
-        attachments=attachment)
+        attachments=attachment,
+        body=body,
+        genus=version)
 
     return cr
 

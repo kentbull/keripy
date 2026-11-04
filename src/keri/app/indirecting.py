@@ -909,11 +909,8 @@ class HttpEnd:
         rep.set_header('connection', "close")
 
         cr = parseCesrHttpRequest(req=req)
-        serder = serdering.SerderKERI(sad=cr.payload, verify=False)
-        msg = bytearray(serder.raw)
-        msg.extend(cr.attachments.encode("utf-8"))
-
-        self.rxbs.extend(msg)
+        serder = serdering.SerderKERI(raw=cr.body, verify=False)
+        self.rxbs.extend(cr.stream)
 
         if serder.proto in ("ACDC",):
             rep.set_header('Content-Type', "application/json")
@@ -1078,7 +1075,7 @@ class ReceiptEnd(doing.DoDoer):
         rep.set_header('connection', "close")
 
         cr = parseCesrHttpRequest(req=req)
-        serder = serdering.SerderKERI(sad=cr.payload, kind=Kinds.json)
+        serder = serdering.SerderKERI(raw=cr.body)
 
         pre = serder.ked["i"]
         if self.aids is not None and pre not in self.aids:
@@ -1088,10 +1085,7 @@ class ReceiptEnd(doing.DoDoer):
         if ilk not in (Ilks.icp, Ilks.rot, Ilks.ixn, Ilks.dip, Ilks.drt):
             raise falcon.HTTPBadRequest(description=f"invalid event type ({ilk})for receipting")
 
-        msg = bytearray(serder.raw)
-        msg.extend(cr.attachments.encode("utf-8"))
-
-        self.psr.parseOne(ims=msg, local=True)
+        self.psr.parseOne(ims=bytearray(cr.stream), local=True, version=self.version)
 
         if pre in self.hab.kevers:
             kever = self.hab.kevers[pre]
@@ -1105,7 +1099,7 @@ class ReceiptEnd(doing.DoDoer):
                                    version=self.version, kind=serder.kind,
                                    gvrsn=self.version)
 
-            self.psr.parseOne(bytes(rct))
+            self.psr.parseOne(bytes(rct), version=self.version)
 
             rep.set_header('Content-Type', CESR_CONTENT_TYPE)
             rep.status = falcon.HTTP_200
