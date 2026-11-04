@@ -3,20 +3,21 @@ import json
 import shutil
 import subprocess
 import time
+from contextlib import ExitStack, closing
 from uuid import uuid4
 
 from hio.base import doing
 
 from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, regeventing
-from keri.app import Habery, Receiptor, multisigExn
+from keri.app import Habery, Receiptor, StreamPoster, multisigExn
 from keri.cli.common import setupHby
 from keri.core import BlindState, Blinder, Kevery, Kramer, Parser, SealSource, SerderACDC, SerderKERI, messagize
 from keri.db import Baser
 from keri.help import fromIso8601, nowUTC
 from keri.peer import Exchanger
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
-from keri.acdc.ipexing import loadHandlers
+from keri.acdc.ipexing import admit as native_admit, loadHandlers
 from types import SimpleNamespace
 
 from tests.cli.commands.test_native_issuance_cli import PASSCODE, issue, live_parties, witnessed
@@ -430,6 +431,179 @@ def test_provisioned_nonlead_presents_exact_group_view_at_native_threshold(tmp_p
         assert not list(hby.ks.rroots.getTopItemIter())
     finally:
         hby.close()
+
+
+def test_group_unblind_uses_live_member_thresholds_before_exact_admit(tmp_path, live_parties):
+    issuer, holders, body, selected = group_copy(tmp_path, live_parties)
+    history_before = [inspect(tmp_path, side, selected['grant']) for side in holders]
+    witness = (tmp_path / 'witness.cesr').read_bytes()
+    wit = Parser(version=V2).parseOneBare(ims=bytearray(witness), processive=False).serder.pre
+
+    # Form an independent rootless verifier group, with real witnessed member and group KELs.
+    with ExitStack() as stack:
+        environments = [Habery(name=f'verifier-{uuid4().hex}', base=issuer['base'], bran=PASSCODE,
+                               version=V2) for _ in range(2)]
+        for hby in environments:
+            stack.callback(hby.close)
+            config = hby.cf.get()
+            config['kram'] = dict(enabled=True, denials=[],
+                caches={'~': [1000, 5000, 60000, 300000, 5000, 60000, 300000]})
+            hby.cf.put(config)
+            Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(witness))
+        members = [hby.makeHab(name='member', wits=[wit], toad=1) for hby in environments]
+        for hby, member in zip(environments, members):
+            witnessed(hby, member)
+        for hby in environments:
+            for member in members:
+                Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=member.replay(gvrsn=V2))
+        groups = [hby.makeGroupHab(group='verifiers', mhab=member, smids=[m.pre for m in members],
+            isith='2', nsith='2', wits=[wit], toad=1, version=V2) for hby, member in zip(environments, members)]
+        partials = [g.msgOwnInception(allowPartiallySigned=True, framed=False, gvrsn=V2) for g in groups]
+        for hby in environments:
+            for raw in partials:
+                Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(raw), local=True)
+            hby.kvy.processEscrows()
+        witnessed(environments[0], groups[0])
+        Parser(kvy=environments[1].kvy, rvy=environments[1].rvy, version=V2).parse(
+            ims=groups[0].replay(gvrsn=V2), local=True)
+        public = tmp_path / 'verifier-group-public.cesr'
+        public.write_bytes(b''.join(bytes(m.replay(gvrsn=V2)) for m in members) + bytes(groups[0].replay(gvrsn=V2)))
+        verifiers = [dict(name=hby.name, base=issuer['base'], alias='verifiers', pre=group.pre,
+            member=member.pre, args=['--name', hby.name, '--base', issuer['base'], '--alias', 'verifiers',
+                                    '--passcode', PASSCODE, '--version', '2.0'])
+                     for hby, group, member in zip(environments, groups, members)]
+
+    # Publish only public dependencies; the new verifiers never receive RegistrySalt or private keys.
+    history = tmp_path / 'unblind-public-history.cesr'
+    evidence = bytearray()
+    for side in (issuer, holders[0]):
+        with closing(state(side)) as hby:
+            hab = hby.habByName(side['alias'])
+            if side is holders[0]:
+                for member in hby.db.signingMembers(pre=hab.pre):
+                    evidence.extend(b''.join(hby.db.clonePreIter(member, gvrsn=V2)))
+            evidence.extend(hab.replay(gvrsn=V2))
+            if side is issuer:
+                rgy = Regery(hby, name=side['name'], base=side['base'])
+                try:
+                    for raw in rgy.store.cloneTelIter(body.regid):
+                        event = SerderACDC(raw=raw)
+                        sn, said = regeventing.vetAnchor(event, db=hby.db, issuer=issuer['pre'])
+                        evidence.extend(messagize(event, bonds=[SealSource(s=f'{sn:x}', d=said)], gvrsn=V2))
+                finally:
+                    rgy.close()
+    history.write_bytes(evidence)
+    # As in the individual fixture, source KEL is an explicit precondition; TEL advances only via the query.
+    later = tmp_path / 'unblind-issued2.cesr'
+    event, expected_opening = update(issuer, body, later, value='issued')
+    updates = Parser(version=V2).parse(ims=bytearray(later.read_bytes()), processive=False)
+    for side in holders:
+        intake(side, b''.join(serializeParsedSubstream(child) for child in updates[:-1]))
+    proposal = tmp_path / 'unblind-present-proposal.cesr'
+    outputs = [tmp_path / f'unblind-present-{i}.cesr' for i in range(2)]
+    logs = [tmp_path / f'unblind-live-{i}.log' for i in range(4)]
+    processes = []
+    def phase(index, name):
+        deadline = time.monotonic() + 15
+        while f'"phase": "{name}"' not in logs[index].read_text():
+            assert processes[index].poll() is None, logs[index].read_text()
+            assert time.monotonic() < deadline, logs[index].read_text()
+            time.sleep(.03)
+    with ExitStack() as stack:
+        def start(command, index):
+            log = stack.enter_context(logs[index].open('w'))
+            processes.append(subprocess.Popen([shutil.which('kli'), *command], cwd=tmp_path,
+                stdout=log, stderr=subprocess.STDOUT))
+        try:
+            # A provisioned nonlead proposes the presentation; both members explicitly stay for Unblind.
+            common = ['--from-grant', selected['grant'], '--recipient', verifiers[0]['pre'],
+                '--input', str(public), '--respond-unblind', '--deliver', '--timeout', '40']
+            start(['ipex', 'present', *holders[1]['args'], *common,
+                   '--proposal-output', str(proposal), '--output', str(outputs[0])], 0)
+            phase(0, 'group_proposed')
+            start(['ipex', 'present', *holders[0]['args'], *common,
+                   '--proposal', str(proposal), '--output', str(outputs[1])], 1)
+            deadline = time.monotonic() + 15
+            while not all(p.exists() for p in outputs):
+                assert all(p.poll() is None for p in processes), '\n'.join(log.read_text() for log in logs[:2])
+                assert time.monotonic() < deadline
+                time.sleep(.03)
+            grant = next(json.loads(line)['grant'] for line in logs[0].read_text().splitlines() if line.startswith('{'))
+            original_deadline = inspect(tmp_path, holders[0], grant)['deadline']
+
+            # Only the selected nonlead authors a query; its partial alone cannot complete or disclose.
+            options = ['--unblind', '--said', grant, '--input', str(history), '--input', str(outputs[1]),
+                '--input', str(later), '--unblind-proposer', verifiers[1]['member'], '--deliver', '--timeout', '30']
+            start(['ipex', 'admit', *verifiers[1]['args'], *options], 2)
+            phase(2, 'group_unblind_proposed')
+            requester_deadline = inspect(tmp_path, verifiers[1], grant)['deadline']
+            assert processes[2].poll() is None and '"admitted": true' not in logs[2].read_text()
+            assert all('"kind": "rpy"' not in log.read_text() for log in logs[:2])
+            # An authenticated non-proposer queues different Admit bytes before the real author is ready.
+            with closing(state(verifiers[0])) as hby:
+                hab = hby.habByName('verifiers')
+                presented = next(p.serder for p in Parser(version=V2).parse(
+                    ims=bytearray(outputs[1].read_bytes()), processive=False) if p.serder.route == '/ipex/grant')
+                alternate, atc = native_admit(hab, '', presented, gvrsn=V2)
+                wrapper, watc = multisigExn(hab, alternate.raw + atc, version=V2)
+                poster = StreamPoster(hby=hby, hab=hab.mhab, recp=verifiers[1]['member'],
+                                      topic='multisig', version=V2)
+                poster.send(wrapper, attachment=watc, gvrsn=V2)
+                delivery = doing.DoDoer(doers=poster.deliver())
+                doing.Doist(real=True, tock=.03125, limit=3).do(doers=[delivery])
+                assert delivery.done
+            deadline = time.monotonic() + 3
+            while True:
+                db = Baser(name=verifiers[1]['name'], base=issuer['base'], readonly=True, reopen=True)
+                try:
+                    queued = db.exns.get((wrapper.said,)) is not None
+                finally:
+                    db.close()
+                if queued:
+                    break
+                assert time.monotonic() < deadline
+                time.sleep(.03)
+            start(['ipex', 'admit', *verifiers[0]['args'], *options], 3)
+            for process in processes:
+                process.wait(timeout=45)
+            assert all(p.returncode == 0 for p in processes), '\n'.join(log.read_text() for log in logs)
+        finally:
+            for process in processes:
+                if process.poll() is None:
+                    process.terminate()
+                    process.wait(timeout=5)
+    results = [last_result(log.read_text()) for log in logs]
+    assert all(r['admitted'] and r['grant'] == grant for r in results)
+    assert len({r['admit'] for r in results}) == 1
+    assert not results[2]['transmitted'] and results[3]['transmitted']
+    query_views, reply_views = set(), set()
+    for side in verifiers:
+        current = inspect(tmp_path, side, grant)
+        assert current['deadline'] == requester_deadline
+        assert current['observations'][body.said]['said'] == event.said
+        with closing(state(side)) as hby:
+            assert not list(hby.ks.rroots.getTopItemIter())
+            assert hby.db.exns.get((alternate.said,)) is None
+            tsgs, _ = verify(hby, hby.db.exns.get((results[2]['admit'],)))
+            assert {sig.index for _, _, _, sigs in tsgs for sig in sigs} == {0, 1}
+            for _, packet in hby.db.exns.getTopItemIter():
+                if packet.route == '/multisig/qry':
+                    child = loadParsedNestedSubstreams(hby, packet.said)[0]
+                    assert child.nests[0].serder.raw == event.raw
+                    query_views.add((child.serder.raw, bytes(serializeParsedSubstream(child.nests[0]))))
+    for side in holders:
+        with closing(state(side)) as hby:
+            for _, packet in hby.db.exns.getTopItemIter():
+                if packet.route != '/multisig/rpy':
+                    continue
+                child = loadParsedNestedSubstreams(hby, packet.said)[0]
+                if child.serder.route == '/ipex/unblind':
+                    proofs = tuple(Blinder(data=BlindState(*data), verify=False).qb64b for data in child.bsqs)
+                    assert proofs == (expected_opening.qb64b,) and not child.bsss
+                    reply_views.add((child.serder.raw, proofs))
+    assert len(query_views) == len(reply_views) == 1  # Wrapping never regenerates bodies or evidence.
+    assert [inspect(tmp_path, side, selected['grant']) for side in holders] == history_before
+    assert inspect(tmp_path, holders[0], grant)['deadline'] == original_deadline
 
 
 def test_held_bound_refresh_and_invalid_revoked_refusal(tmp_path, live_parties):

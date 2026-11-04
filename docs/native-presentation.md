@@ -99,9 +99,32 @@ and current-issued acceptance permit output and delivery; each member evaluates
 native `Exchanger.lead` independently of who proposed or derived the proof. JSON
 reports local acceptance and actual transmission, without claiming a later
 Admit. Provision the auditor's public KEL/TEL/schema dependencies explicitly.
-Group `--respond-unblind` and group presentation admission are rejected; an
-individual recipient can admit complete current proofs using the command below
-without requesting auxiliary openings.
+Add `--respond-unblind` to both group presentation invocations to approve this
+exact outgoing Grant and remain live for query, threshold reply and final Admit.
+The original presentation proposer authors the reply; other members verify its
+minimal openings without needing a root. Native signature indices still elect
+the transmitter independently of the proposer.
+
+A group recipient runs the following finite command in each member's own store:
+
+```shell
+kli ipex admit --version 2.0 --name verifier-member --alias verifier-group \
+  --said EXACT_GRANT --unblind --unblind-proposer SELECTED_MEMBER_AID \
+  --input public-history.cesr --deliver --timeout 120
+```
+
+Every invocation explicitly selects the same Grant, message and proposer. The
+proposer authors one frozen query and, after current issued verification, one
+Admit. Other members contribute to those exact bytes through real member
+mailboxes. `--unblind-proposer` grants no root custody, special signature weight
+or transmitter authority. Group observer queries remain outside this profile;
+each member must have the accepted public history selected by the query.
+`/multisig/qry` is a CLI coordination extension: a member-signed native EXN with
+`a={gid,qry}` and one committed native query child, including its exact public
+event nests. `/multisig/rpy` and `/multisig/exn` carry reply and Admit contributions.
+All native query/reply verification uses the live conversation owners, never a
+private mux verifier. Partial signatures cannot authorize peer disclosure or
+Admit. All waits and deliveries remain bounded by the original Grant deadline.
 
 The native `Unblind` owner separately supports group responders. Each member
 explicitly approves the same live Grant and receives the authenticated requester
@@ -135,8 +158,8 @@ Only the verified threshold
 emits the elected member's `query` delivery cue. Repeated `start()` returns the
 frozen proposal or aggregate; it never renews the original Grant lifetime.
 Requester `complete()` remains false until the responder's reply verifies, and
-`finish()` still performs ordinary Grant verification. Member transport/CLI
-coordination is a subsequent unit; the CLI restrictions above remain in force.
+`finish()` still performs ordinary Grant verification. The CLI coordination above
+transports these proposals without adding another acceptance or custody owner.
 
 `--respond-unblind` approves this exact outgoing Grant before delivery and
 keeps its process alive for native Unblind replies and the selected Admit.

@@ -205,15 +205,17 @@ class NativePresentation(NativeIssuance):
             group = isinstance(self.hab, GroupHab)
             if staged and group:
                 raise ConfigurationError('prepare/endorse/resume require an individual local signer')
-            if group and (self.verb != 'present' or args.respond_unblind):
-                raise ConfigurationError('group Unblind and group presentation admission are not supported')
+            if group and evidenceSource is not None:
+                raise ConfigurationError('group signed observer acquisition is outside this presentation profile')
+            if not group and getattr(args, 'unblind_proposer', None):
+                raise ConfigurationError('--unblind-proposer requires a local group signer')
             if not group and (getattr(args, 'proposal', None) or getattr(args, 'proposal_output', None)):
                 raise ConfigurationError('presentation proposal options require a local group signer')
             self.rgy = Regery(hby=self.hby, name=args.name, base=args.base)
             notifier = Notifier(self.hby)
             self.exc = Exchanger(hby=self.hby, handlers=[])
             ipexing.loadHandlers(self.hby, self.exc, notifier, rgy=self.rgy)
-            self.unblind = None if group else Unblind(self.hab, self.exc, self.rgy, states=('issued', 'revoked', ''))
+            self.unblind = Unblind(self.hab, self.exc, self.rgy, states=('issued', 'revoked', ''))
             if self.unblind is not None:
                 self.hby.rtr.addRoute(Unblind.Route, self.unblind, blinders=True, attachments=True)
             kvy = Kevery(db=self.hby.db, rvy=self.hby.rvy, exc=self.exc, qvy=self.unblind,
@@ -232,11 +234,18 @@ class NativePresentation(NativeIssuance):
                                       output=args.output, transmitted=False)), flush=True)
                 return
             if group:
-                from .grouppresenting import GroupPresentation
-                presentation = GroupPresentation(self, notifier)
                 background.append(mbx)
                 self.extend(background)
-                yield from presentation.run()
+                if self.verb == 'present':
+                    from .grouppresenting import GroupPresentation
+                    yield from GroupPresentation(self, notifier).run()
+                else:
+                    from .groupunblinding import GroupUnblind
+                    message = self.hby.db.exns.get((args.said,)) or self.hby.db.epse.get((args.said,))
+                    if message is None or message.route != '/ipex/grant' or message.sad['ri'] != self.hab.pre:
+                        raise ConfigurationError('--said requires the exact native presentation Grant for this recipient')
+                    coordination = GroupUnblind(self, message, args.unblind_proposer, notifier, requester=True)
+                    yield from coordination.admit()
                 return
             if self.verb == 'present':
                 if prepare:

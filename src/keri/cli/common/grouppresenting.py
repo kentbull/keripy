@@ -118,6 +118,7 @@ class GroupPresentation:
             if stream or len(packet.nests) != 1:
                 raise ConfigurationError('--proposal requires one exact native /multisig/exn packet')
             self.grant = packet.nests[0].serder
+            proposer = packet.serder.pre
             self.proofs = [serializeParsedSubstream(node) for node in packet.nests[0].nests]
             if owner.hby.db.epsd.get((self.grant.said,)) is not None:
                 self.freezeDeadline()
@@ -126,6 +127,7 @@ class GroupPresentation:
             signed = owner.hab.endorse(child.serder, last=False, framed=False,
                 gvrsn=Vrsn_2_0, nests=self.proofs)
         else:
+            proposer = owner.hab.mhab.pre
             self.proofs = [serializeParsedSubstream(node) for node in self.nodes]
             self.grant, atc = ipexing.grant(owner.hab, recp=self.recipient, message=args.message,
                 origin=self.proofs[0], artifacts=self.proofs[1:] or None, modifiers=dict(dp=self.plan),
@@ -151,9 +153,17 @@ class GroupPresentation:
         if [serializeParsedSubstream(node) for node in loadParsedNestedSubstreams(owner.hby, self.grant.said)] != self.proofs:
             raise ConfigurationError('native accepted disclosure differs from the selected proposal proofs')
         raw = bytes(owner.hab.replay(gvrsn=Vrsn_2_0)) + serializeMessage(owner.hby, self.grant.said)
+        coordination = None
+        if args.respond_unblind:
+            from .groupunblinding import GroupUnblind
+            coordination = GroupUnblind(owner, self.grant, proposer, self.mux.notifier)
         owner.record(raw, initial=True)
         transmitted = owner.exc.lead(owner.hab, self.grant.said)
         if transmitted:
             yield from owner.send(raw, self.recipient)
         print(json.dumps(dict(grant=self.grant.said, xid=self.grant.said, locally_accepted=True,
             transmitted=transmitted)), flush=True)
+        if coordination is not None:
+            response = yield from coordination.respond()
+            print(json.dumps(dict(grant=self.grant.said, xid=self.grant.said, admit=response.said,
+                                  admitted=True, transmitted=transmitted)), flush=True)
