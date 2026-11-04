@@ -8,7 +8,7 @@ import argparse
 from hio.base import doing
 
 from ...common import existing, Parsery
-from ...common import issuing, presenting
+from ...common import evidencing, issuing, presenting
 
 from ....kering import Vrsn_1_0, Vrsn_2_0
 from ....app import (Notifier, Organizer, GroupHab,
@@ -36,6 +36,7 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
                                             "send to recipient", required=False, default="")
 parser.add_argument("--time", help="timestamp", required=False, default=None)
 issuing.options(parser)
+evidencing.options(parser)
 parser.add_argument('--unblind', action='store_true', help='select native presentation admission with live current-state verification')
 
 

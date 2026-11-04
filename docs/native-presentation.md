@@ -50,8 +50,14 @@ kli ipex admit --name auditor --alias auditor --version 2.0 \
 Unblind exchanges only event-specific proofs for the selected live Grant.
 Reply readiness is followed by native finish, exact Grant acceptance, and a
 current native recheck requiring issued state before constructing Admit.
-Revoked state cannot authorize Admit. Provide accepted KEL/TEL/schema and
-endpoint dependencies explicitly; these commands do not fetch missing history.
+Revoked state cannot authorize Admit. Provide accepted schema and endpoint
+dependencies explicitly. Optional `admit --evidence-url HTTPS --evidence-ca PEM`
+acquires only the selected registries' authenticated public KEL/TEL evidence
+before starting Unblind. `--evidence-hostname` may override an IP URL's certificate
+identity. HTTP 404/503 and authentic older prefixes wait within the original
+Grant deadline; TLS/authentication errors and conflicting evidence fail.
+The native Unblind query therefore selects its head after acquisition. Once
+selected, a changed head aborts that operation instead of restarting it.
 Both operations preserve native deadlines and abandon live authority on
 timeout/cancellation. A fresh process has no recovered Unblind approval.
 

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from hio.base import doing
 
 from . import setupHby
+from . import evidencing
 from .credentialing import load, recipient
 from .issuing import NativeIssuance
 from .negotiating import NativeNegotiation
@@ -165,6 +166,7 @@ class NativePresentation(NativeIssuance):
         self.tock = tock
         yield tock
         args = self.args
+        evidenceSource = evidencing.settings(args)
         if not args.deliver:
             raise ConfigurationError('live native presentation requires explicit --deliver')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -247,6 +249,11 @@ class NativePresentation(NativeIssuance):
                 print(json.dumps(dict(grant=message.said, xid=operation, phase='selected')), flush=True)
                 background.append(mbx)
                 self.extend(background)
+                context = self.exc.presentationContext(message.said, xid=operation,
+                    sender=message.pre, recipient=self.hab.pre)
+                if context is None:
+                    raise ConfigurationError('selected presentation context is unavailable')
+                yield from evidencing.acquire(self, context[2], self.unblind, operation, evidenceSource)
                 # Readiness never substitutes for the current issued-state gate.
                 needs_unblind = not self.exc.complete(message.said)
                 if not needs_unblind:
@@ -263,6 +270,7 @@ class NativePresentation(NativeIssuance):
                         raise ConfigurationError('native verification has not accepted the selected presentation')
                     print(json.dumps(dict(grant=message.said, xid=operation, phase='unblind_verified')),
                           flush=True)
+                self.unblind.complete(operation)
                 currentIssued(self.exc, message.said)
                 response, atc = ipexing.admit(self.hab, message=args.message, grant=message,
                                              kind=Kinds.json, gvrsn=Vrsn_2_0)

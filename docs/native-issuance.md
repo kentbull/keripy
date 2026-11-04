@@ -36,6 +36,31 @@ kli ipex admit --name holder --alias holder --version 2.0 \
   --said "$GRANT_SAID" --input grant-public.cesr --deliver --timeout 120
 ```
 
+Optionally require a configured observer to supply the selected registry's
+public evidence before Admit:
+
+```sh
+kli ipex admit --name holder --alias holder --version 2.0 \
+  --said "$GRANT_SAID" --deliver --timeout 120 \
+  --evidence-url https://127.0.0.1:5642 --evidence-ca observer-ca.pem \
+  --evidence-hostname observer.example
+```
+
+The actual selected holder signs a standard `tels` query with `q.i` naming the
+registry. HTTPS requires the explicit CA file; a certificate hostname override
+is allowed only when the URL uses an IP address. Redirects, authentication/TLS
+errors, conflicting or malformed evidence fail immediately. HTTP 404/503 and
+authentic older prefixes retry with a bounded cooperative delay. JSON phase
+`evidence_waiting` identifies the exact Grant, XID, registry and wait reason.
+
+Evidence must contain one complete ordered selected RIP/BUP history and its
+verified public KEL support. Native strict KEL/registry owners independently
+verify acceptance; no source header or timestamp supplies freshness authority.
+An older authentic prefix cannot authorize Admit or roll back the local head.
+A newer authentic head enters ordinary native verification and may prevent
+Admit if revoked or not openable as issued. Every acquisition wait rechecks the
+original native Grant lifetime; a longer CLI timeout cannot extend it.
+
 `--input` may repeat for signed public KEL/TEL/IPEX evidence. A Grant received
 through a mailbox still requires explicit `admit --said` selection. An optional
 Grant `--prior` selects an exact accepted native Apply or Agree and preserves
