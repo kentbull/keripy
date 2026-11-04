@@ -397,20 +397,22 @@ def test_receipt_end_returns_bytes_for_v1_receipt():
                              isith="1", nsith="1", version=Vrsn_1_0, kind=Kinds.json)
 
         serder, _, _ = cam.getOwnEvent(sn=0)
-        msg = cam.msgOwnEvent(sn=0, framed=True, gvrsn=serder.pvrsn)
+        msg = cam.msgOwnEvent(sn=0, framed=True, gvrsn=Vrsn_2_0)
 
         ims = bytearray(msg)
         serder = SerderKERI(raw=ims)
         del ims[:serder.size]
 
         app = falcon.App()
-        app.add_route("/receipts", ReceiptEnd(hab=wit))
+        endpoint = ReceiptEnd(hab=wit, version=Vrsn_1_0)
+        app.add_route("/receipts", endpoint)
         client = testing.TestClient(app)
 
         res = client.simulate_post("/receipts",
                                    body=serder.raw,
                                    headers={
                                        "Content-Type": CESR_CONTENT_TYPE,
+                                       "CESR-Genus": "2",
                                        CESR_ATTACHMENT_HEADER: bytes(ims).decode("utf-8"),
                                        CESR_DESTINATION_HEADER: wit.pre,
                                    })
@@ -420,6 +422,12 @@ def test_receipt_end_returns_bytes_for_v1_receipt():
         rserder = SerderKERI(raw=res.content)
         assert rserder.pvrsn == Vrsn_1_0
         assert rserder.ked["t"] == Ilks.rct
+        assert endpoint.psr.version == Vrsn_1_0
+        parsed = Parser(version=Vrsn_1_0).parse(ims=bytearray(res.content), processive=False)
+        assert parsed[0].serder.raw == rserder.raw
+        assert len(parsed[0].cigars) == 1
+        assert parsed[0].cigars[0].verfer.qb64 == wit.pre
+        assert parsed[0].cigars[0].verfer.verify(parsed[0].cigars[0].raw, serder.raw)
 
 
 def test_mailbox_query_honors_explicit_v1_kwargs():

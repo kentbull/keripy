@@ -60,6 +60,13 @@ keri.app.habbing
 keri.app.httping
 ----------------
 
+Detached CESR HTTP requests may advertise ``CESR-Genus: 1`` or
+``CESR-Genus: 2``. Intake restores that counter context with an ordinary GVC
+before the unchanged signed body and attachments. Body protocol version does
+not choose proof framing. Unsupported explicit values refuse; omitted headers
+retain the existing unprefixed wire. Witness receipt output keeps the endpoint's
+configured version independently of the incoming proof context.
+
 .. automodule:: keri.app.httping
     :members:
 
