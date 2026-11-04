@@ -10,9 +10,11 @@ from collections import deque
 from ..core import (Blinder, BlindState, BoundState, Number, Parser,
                     Prefixer, SealSource, messagize, query, reply)
 from ..core.parsing import MsgParseDom
+from ..core.eventing import verifySigs
+from ..db import fetchTsgs
 from ..kering import (Ilks, Kinds, MissingOpeningError, MissingSignatureError, ValidationError,
                        Vrsn_2_0)
-from ..peer.exchanging import (serializeParsedSubstream, verify,
+from ..peer.exchanging import (serializeParsedSubstream, verify, verifyAttachments,
                                verifyQueryAttachments)
 from . import chaining
 from ..recording import ExchangeRegistryStateRecord
@@ -20,21 +22,26 @@ from .regeventing import (_verifyAnchorCouple, vet, vetBlind, vetBound)
 
 
 class Unblind:
-    """Individual unblind operation using existing query/reply authentication.
+    """Explicit unblind operation using existing query/reply authentication.
 
     Inject as Kevery.qvy and register Route with Revery's router using
     ``blinders=True, attachments=True``. ``states`` is the application's explicit
     vocabulary for ordinary root-derived proofs. Bound proofs require held material.
     ``cues`` supplies {kin: 'reply', dest, msg}; approval and retry bytes are
     process-local. A fresh instance has no approved unfinished operations.
+    Group responders propose and contribute to one exact reply; Revery owns its
+    threshold. Group requesters remain unsupported. Applications transport member
+    proposals and the elected member's completed reply, never partial replies.
     """
     Route = "/ipex/unblind"
 
     def __init__(self, hab, exc, rgy, *, states):
-        from ..app.habbing import GroupHab
-        if (isinstance(hab, GroupHab) or hab.db is not exc.hby.db
+        from ..app.habbing import GroupHab, Hab
+        if (not isinstance(hab, (Hab, GroupHab))
+                or isinstance(hab, GroupHab) and not isinstance(hab.mhab, Hab)
+                or hab.db is not exc.hby.db
                 or rgy.hby.db is not hab.db):
-            raise ValueError("unblind requires one individual local habitat environment")
+            raise ValueError("unblind requires one local signing habitat environment")
         handler = exc.routes.get("/ipex/grant")
         if handler is None or handler.rgy is not rgy:
             raise ValueError("unblind must use the registered Grant verifier's registry owner")
@@ -44,6 +51,7 @@ class Unblind:
         if any(not isinstance(state, str) for state in states):
             raise ValueError("unblind states must be an explicit sequence of strings")
         self.hab, self.exc, self.rgy = hab, exc, rgy
+        self.group = isinstance(hab, GroupHab)
         self.states = tuple(states)
         self.cues, self._operations = deque(), {}
 
@@ -61,12 +69,14 @@ class Unblind:
             self._live(existing)
             return xid
         sender, recipient = message.pre, message.ked.get("ri")
+        if self.group and self.hab.pre == recipient:
+            raise ValidationError("group unblind requesters are not supported")
         if sender == recipient or self.hab.pre not in (sender, recipient):
             raise ValidationError("local habitat is not a presentation party")
         op = dict(grant=grant, x=xid, sender=sender, recipient=recipient,
                   raw=message.raw, bodies=None, scope=None, query=None, reply=None,
                   requested=None, selected=None, openings={}, requestedByPeer=False,
-                  received=False, abandoned=False)
+                  received=False, abandoned=False, proposal=None, contribution=None)
         _, nests, scope = self._live(op)
         op["bodies"] = tuple(nest.serder.raw for nest in nests)
         op["scope"] = scope
@@ -153,7 +163,7 @@ class Unblind:
             if head is None or head.said != saids[-1]:
                 raise ValidationError("registry head changed after the unblind request")
 
-    def _preflight(self, serder, field, local):
+    def _preflight(self, serder, field, local, *, own=False):
         """Bind a finite auxiliary body to the approved opposite-role peer."""
         data = serder.sad.get(field)
         if (not serder.verify() or serder.pvrsn != Vrsn_2_0
@@ -164,7 +174,7 @@ class Unblind:
         op = self._operation(data["x"])
         _, nests, scope = self._live(op)
         peer = "recipient" if local == "sender" else "sender"
-        if self.hab.pre != op[local] or serder.pre != op[peer]:
+        if self.hab.pre != op[local] or serder.pre != op[local if own else peer]:
             raise ValidationError("wrong unblind sender or local recipient")
         if not set(data["re"]).issubset(scope):
             raise ValidationError("unblind registry lies outside approved disclosure")
@@ -314,28 +324,114 @@ class Unblind:
         self._live(op)
         op["requested"] = {regid: list(saids) for regid, saids in requested.items()}
         op["requestedByPeer"] = True
-        self.respond(op["x"])
+        if not self.group:
+            self.respond(op["x"])
 
     def respond(self, xid):
         """Retry this authenticated live request locally without replaying KRAM intake.
 
         Proofs may become available after receipt. The frozen request, exact
         approved Grant and original deadline remain required. Queue and return
-        the same signed reply bytes on every successful attempt.
+        the same signed reply bytes on every successful individual attempt.
+        Groups explicitly prepare a signing proposal after request receipt;
+        repeated calls return that proposal or the completed aggregate. Only
+        own-reply threshold processing emits the elected member's delivery cue.
         """
         op = self._operation(xid)
         _, disclosure, _ = self._live(op)
         if self.hab.pre != op["sender"] or not op["requestedByPeer"]:
             raise ValidationError("unblind has no authenticated peer request")
         self._current(op)
+        if self.group and op['contribution'] is not None:
+            return op['reply'] or op['contribution']
         if op["reply"] is None:
             selected, openings = self._minimum(op, op["requested"], disclosure,
                 lambda event: self._held(op, event, disclosure))
             message = reply(pre=self.hab.pre, route=self.Route,
                 data=dict(x=op["x"], re=selected), pvrsn=Vrsn_2_0, kind=Kinds.json)
-            op["reply"] = self._signed(message, openings=openings)
+            signed = self._signed(message, openings=openings)
+            if self.group:
+                op['proposal'], op['contribution'] = message.raw, signed
+                self.cues.append(dict(kin='sign', dest=self.hab.pre, msg=signed))
+                return signed
+            op["reply"] = signed
         self.cues.append(dict(kin="reply", dest=op["recipient"], msg=op["reply"]))
         return op["reply"]
+
+    def contribute(self, xid, proposal):
+        """Approve one member's unchanged reply after the real peer request.
+
+        Openings are independently verified against the selected current suffix;
+        contributors need no root. This adds only the local indexed signature,
+        never completes a threshold or authorizes a different proposal body.
+        """
+        if not self.group:
+            raise ValidationError("unblind contribution requires a local group responder")
+        parsed = self._parse(proposal)
+        if (parsed.serder.ilk != Ilks.rpy or any(value for key, value in vars(parsed).items()
+                if key not in ('serder', 'tsgs', 'bsqs', 'bsss'))):
+            raise ValidationError("unblind proposal must be one signed reply with openings")
+        op, selected, nests = self._preflight(parsed.serder, 'a', 'sender', own=True)
+        if op['x'] != xid or not op['requestedByPeer']:
+            raise ValidationError("group reply requires its authenticated peer query")
+        self._current(op)
+        if op['proposal'] is not None and op['proposal'] != parsed.serder.raw:
+            raise ValidationError("unblind reply proposal is already frozen")
+        kever = self.hab.kever
+        if not parsed.tsgs:
+            raise ValidationError("unblind proposal lacks a group member signature")
+        for pre, number, diger, sigers in parsed.tsgs:
+            if (pre.qb64 != self.hab.pre or number.sn != kever.lastEst.s
+                    or diger.qb64 != kever.lastEst.d):
+                raise ValidationError("unblind proposal has different group establishment keys")
+            verified, _ = verifySigs(parsed.serder.raw, sigers, kever.verfers)
+            if not verified or len(verified) != len(sigers):
+                raise ValidationError("unblind proposal lacks valid member contributions")
+        openings = self._replyOpenings(op, selected, nests, parsed.bsqs, parsed.bsss)
+        minimum, _ = self._minimum(op, op['requested'], nests,
+            lambda event: self._opening(openings, event))
+        if selected != minimum:
+            raise ValidationError("reply is not the minimum current-state suffix")
+        if op['contribution'] is not None:
+            retained = self._parse(op['contribution'])
+            if serializeParsedSubstream(dict(vars(parsed), tsgs=[])) != serializeParsedSubstream(
+                    dict(vars(retained), tsgs=[])):
+                raise ValidationError("unblind reply proof bytes are already frozen")
+        if op['contribution'] is None:
+            # Carry the exact approved proof bytes; only our signature is new.
+            local = self._parse(self.hab.endorse(parsed.serder, gvrsn=Vrsn_2_0))
+            local.bsqs, local.bsss = parsed.bsqs, parsed.bsss
+            op['proposal'] = parsed.serder.raw
+            op['contribution'] = bytes(serializeParsedSubstream(local))
+        return op['contribution']
+
+    @staticmethod
+    def _opening(openings, event):
+        if event.said not in openings:
+            raise ValidationError("reply lacks a required opening")
+        return openings[event.said]
+
+    def _replyOpenings(self, op, selected, nests, bsqs, bsss):
+        """Validate candidate proof blocks without publishing or retaining them."""
+        if not set(selected).issubset(op['requested']):
+            raise ValidationError("unblind reply has no matching outstanding request")
+        for regid, saids in selected.items():
+            if any(said not in op['requested'][regid] for said in saids):
+                raise ValidationError("reply names an event outside the request")
+        seen, verified = set(), {}
+        for data in [*(bsqs or []), *(bsss or [])]:
+            opening = Blinder(data=(BlindState(*data) if len(data) == 4 else BoundState(*data)), verify=False)
+            if opening.said in seen:
+                raise ValidationError("duplicate unblind opening")
+            seen.add(opening.said)
+            matches = [self.rgy.store.event(said) for saids in selected.values() for said in saids
+                       if self.rgy.store.event(said).sad['b'] == opening.said]
+            if not matches:
+                raise ValidationError("reply carries an excess opening")
+            for event in matches:
+                self._checkOpening(op, event, opening, nests)
+                verified[event.said] = opening
+        return verified
 
     def processReply(self, *, serder, diger, route, cigars=None, tsgs=None, bsqs=None, bsss=None,
                      attachments=None):
@@ -345,52 +441,56 @@ class Unblind:
         if attachments is None or any(value for key, value in attachments.items()
                 if key not in ("bsqs", "bsss", "sigers", "local")):
             raise ValidationError("unblind reply carries unsupported attachments")
-        op, selected, nests = self._preflight(serder, "a", "recipient")
-        if op["query"] is None or not set(selected).issubset(op["requested"]):
+        own = self.group and serder.pre == self.hab.pre
+        op, selected, nests = self._preflight(serder, "a", 'sender' if own else 'recipient', own=own)
+        if own and (op['proposal'] != serder.raw or not op['requestedByPeer']):
+            raise ValidationError("own unblind reply lacks exact local proposal approval")
+        if not own and op["query"] is None:
             raise ValidationError("unblind reply has no matching outstanding request")
         self._current(op)
-        for regid, saids in selected.items():
-            if any(said not in op["requested"][regid] for said in saids):
-                raise ValidationError("reply names an event outside the request")
-        seen, verified = set(), {}
-        for data in [*(bsqs or []), *(bsss or [])]:
-            opening = Blinder(data=(BlindState(*data) if len(data) == 4 else BoundState(*data)), verify=False)
-            if opening.said in seen:
-                raise ValidationError("duplicate unblind opening")
-            seen.add(opening.said)
-            matches = [self.rgy.store.event(said) for saids in selected.values() for said in saids
-                       if self.rgy.store.event(said).sad["b"] == opening.said]
-            if not matches:
-                raise ValidationError("reply carries an excess opening")
-            for event in matches:
-                self._checkOpening(op, event, opening, nests)
-                verified[event.said] = opening
+        verified = self._replyOpenings(op, selected, nests, bsqs, bsss)
         # No untrusted reply SAID owns this cache: each entry independently opens
         # one requested accepted event and is bound to the approved disclosure.
         op["openings"].update(verified)
         if not self.hab.rvy.acceptReply(serder, diger, route, op["sender"], cigars=cigars, tsgs=tsgs):
             return
-        def resolve(event):
-            if event.said not in op["openings"]:
-                raise ValidationError("reply lacks a required opening")
-            return op["openings"][event.said]
-        minimum, _ = self._minimum(op, op["requested"], nests, resolve)
+        minimum, openings = self._minimum(op, op["requested"], nests,
+            lambda event: self._opening(op['openings'], event))
         if selected != minimum:
             raise ValidationError("reply is not the minimum current-state suffix")
         op["selected"] = {regid: list(saids) for regid, saids in selected.items()}
+        if own:
+            groups = [group for group in fetchTsgs(db=self.hab.db.tsgs, diger=diger)
+                      if group[0].qb64 == self.hab.pre]
+            groups, _, _, _, _ = verifyAttachments(self.exc.hby, serder, tsgs=groups)
+            if not groups:
+                raise ValidationError("group reply lacks a verified signature threshold")
+            if op['reply'] is None:
+                frame = self._parse(messagize(serder, tsgs=groups, gvrsn=Vrsn_2_0))
+                for opening in openings:
+                    (frame.bsss if opening.clan is BoundState else frame.bsqs).append(opening.data)
+                op['reply'] = bytes(serializeParsedSubstream(frame))
+            # Ordinary verified signing-index leadership, independent of root custody.
+            pre, number, digest, sigers = groups[0]
+            _, verfers = self.hab.db.resolveVerifiers(pre=pre.qb64, sn=number.sn, dig=digest.qb64)
+            contribution = self.hab.mhab.kever.fetchLatestContribTo(verfers=verfers)
+            if contribution is not None and contribution[1] == min(siger.index for siger in sigers):
+                self.cues.append(dict(kin='reply', dest=op['recipient'], msg=op['reply']))
+            return
         op["received"] = True
 
     def complete(self, xid):
         """Report authenticated reply readiness within the original live request.
 
         Partial signatures are not completion. This is readiness to retry Grant
-        verification, not a credential-state verdict or permission to Admit.
+        verification for a recipient, or a threshold reply for a group responder;
+        it is not a credential-state verdict or permission to Admit.
         """
         op = self._operation(xid)
         self._live(op)
         if op["requested"] is not None:
             self._current(op)
-        return op["received"]
+        return op['reply'] is not None if self.group else op["received"]
 
     def finish(self, xid):
         """Retry ordinary Grant verification with the authenticated minimal proofs."""

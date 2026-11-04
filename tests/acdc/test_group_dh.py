@@ -10,6 +10,7 @@ from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, admit, chaining, grant, loadHandlers, regeventing
 from keri.acdc.dhking import Dhke
 from keri.acdc.salting import RegistrySalt
+from keri.acdc.unblinding import Unblind
 from keri.app import Notifier, grouping, openCF, openHby
 from keri.core import (Blinder, Diger, Kevery, Kramer, Matter, MtrDex, Number, Parser, Salter,
                        SealSource, SerderACDC, SerderKERI, Signer, exchange as exchangeMessage,
@@ -188,7 +189,7 @@ def exchange(setup, enabled):
 
 
 @pytest.mark.parametrize('enabled', [False, True])
-def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled):
+def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelpingClock):
     with groups(enabled) as h:
         exchange(h, enabled)
         issuer, issuee = h.issuers[0], h.issuees[0]
@@ -279,6 +280,80 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled):
             assert {sig.index for pre, _, _, sigers in signatures if pre.qb64 == recipient.hab.pre
                     for sig in sigers} == {0, 1}
             assert not list(hby.ks.rroots.getTopItemIter())
+
+            # A later public update needs exact group-approved openings, not another root transfer.
+            for side in [*h.issuees, verifier]:
+                if side is not verifier:
+                    receive(side, full)
+                side.unblind = Unblind(side.hab, side.exc, side.rgy, states=('issued', 'revoked', ''))
+                side.kvy.qvy = side.unblind
+                side.hby.rtr.addRoute(Unblind.Route, side.unblind, blinders=True, attachments=True)
+                side.unblind.approve(presentation.said)
+            deadlines = [side.hby.db.epsd.get((presentation.said,)).dts for side in [*h.issuees, verifier]]
+            # Group requester support must fail explicitly, without an approved operation.
+            with pytest.raises(ValidationError, match='group unblind requesters'):
+                issuee.unblind.approve(h.grant.said)
+            proof3, event3 = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
+            kel3 = h.anchor(event3)
+            receive(verifier, b''.join(issuer.hby.db.clonePreIter(issuer.hab.pre, gvrsn=V2)))
+            receive(verifier, messagize(event3, bonds=[SealSource(s=kel3.snh, d=kel3.said)], gvrsn=V2))
+            query = verifier.unblind.start(presentation.said)
+            receive(recipient, query)
+            assert not recipient.unblind.cues  # A group never auto-authors independent reply timestamps.
+            proposal = recipient.unblind.respond(presentation.said)
+            assert recipient.unblind.respond(presentation.said) == proposal
+            cue = recipient.unblind.cues.popleft()
+            assert cue['kin'] == 'sign' and cue['dest'] == recipient.hab.pre
+            frame = parsed(proposal)
+            assert frame.serder.sad['a']['re'] == {h.registry.regk: [event3.said]}
+            assert [block[0].qb64 for block in frame.bsqs] == [proof3.said]
+            assert not frame.bsss and not frame.nests and root(recipient, h).qb64b not in proposal
+            with pytest.raises(ValidationError, match='authenticated peer query'):
+                issuee.unblind.contribute(presentation.said, proposal)
+            receive(issuee, query)
+
+            # The other member independently checks scope/proofs before signing these exact bytes.
+            extra = parsed(proposal)
+            extra.bsqs.append(derived.data)
+            with pytest.raises(ValidationError, match='excess opening'):
+                issuee.unblind.contribute(presentation.said, serializeParsedSubstream(extra))
+            contribution = issuee.unblind.contribute(presentation.said, proposal)
+            assert parsed(contribution).serder.raw == frame.serder.raw
+            assert issuee.unblind.contribute(presentation.said, proposal) == contribution
+            changed = deepcopy(frame.serder.sad)
+            changed['dt'] = '2021-01-01T00:00:01.000000+00:00'
+            altered = SerderKERI(sad=changed, makify=True)
+            with pytest.raises(ValidationError, match='already frozen'):
+                issuee.unblind.contribute(presentation.said, recipient.hab.endorse(altered, gvrsn=V2))
+
+            # Native Revery must obtain the other genuine signature; duplicate partials do not finish.
+            for side in h.issuees:
+                receive(side, proposal)
+                receive(side, proposal)
+                assert not side.unblind.complete(presentation.said)
+                assert not side.unblind.cues
+                receive(side, contribution)
+                assert side.unblind.complete(presentation.said)
+            assert not recipient.unblind.cues  # Provisioned nonlead authored; index zero transmits.
+            response = issuee.unblind.cues.popleft()
+            assert response['kin'] == 'reply' and response['dest'] == verifier.hab.pre
+            assert recipient.unblind.respond(presentation.said) == response['msg']
+            receive(verifier, response['msg'])
+            assert verifier.unblind.complete(presentation.said)
+            assert verifier.unblind.finish(presentation.said)
+            _, repaired, verdict, observations = exc.reverifyGrant(presentation.said)
+            assert verdict.verdict == chaining.Verdicts.valid
+            assert observations[h.credential.said].said == event3.said
+            assert repaired[0].serder.raw == h.credential.raw
+            assert [side.hby.db.epsd.get((presentation.said,)).dts
+                    for side in [*h.issuees, verifier]] == deadlines
+            assert not list(hby.ks.rroots.getTopItemIter())
+            assert all(tuple(side.hby.db.enst.get((h.grant.said,))) == held for side in h.issuees)
+            fakeHelpingClock.advance(seconds=301)
+            with pytest.raises(ValidationError):
+                recipient.unblind.respond(presentation.said)
+            with pytest.raises(ValidationError):
+                issuee.unblind.contribute(presentation.said, proposal)
         assert not recipient.dh._operations[h.xid]['private']
         assert tuple(recipient.hby.db.enst.get((h.grant.said,))) == held
 
