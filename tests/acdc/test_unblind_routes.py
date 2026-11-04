@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from keri import Vrsn_2_0 as V2
-from keri.acdc import Regery, Registrar, acdcmap, admit, blindate, grant, loadHandlers
+from keri.acdc import Regery, Registrar, acdcmap, admit, blindate, chaining, grant, loadHandlers
 from keri.acdc.unblinding import Unblind
 from keri.app import openCF, openHby
 from keri.core import (Blinder, BlindState, BoundState, Diger, Kevery, Kramer, Labeler, Number, Parser,
@@ -41,13 +41,14 @@ def transfer(issuer, recipients, registry, event):
 
 
 @contextmanager
-def presentation(enabled=False, *, bound=False, known=1):
+def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDirPath=None):
     """Explicit test capability only; no provisioning protocol is claimed."""
     with ExitStack() as stack:
         sides = []
         for number, name in enumerate(('issuer', 'holder', 'verifier'), 1):
             signer = Signer(raw=bytes([number]) * 32, transferable=False)
             hby = stack.enter_context(openHby(name=f'unblind-{name}', base='test', version=V2,
+                temp=headDirPath is None, headDirPath=headDirPath,
                 salt=Salter(raw=bytes([number]) * 16).qb64,
                 seed=signer.qb64, aeid=signer.verfer.qb64))
             hab = hby.makeHab(name=name, icount=2, isith='2', ncount=2, nsith='2')
@@ -98,26 +99,32 @@ def presentation(enabled=False, *, bound=False, known=1):
         for side in (issuer, holder):
             receive(side, admission.raw + atc)
             assert side.hby.db.exns.get((admission.said,)) is not None
-        proofs, events, later_tel = [first], [event], []
+        proofs, events, later_tel, later_kel = [first], [event], [], []
         for state in ('revoked', '', ''):
             proof, event = (registrar.issue(registry, credential, state=state, salt=root.qb64, **binding)
                             if state else registrar.vacate(registry, salt=root.qb64,
                                 **(dict(bound=True, bsn=0, bd='') if bound else {})))
-            kel, tel = transfer(issuer, (verifier,), registry, event)
+            kel, tel = transfer(issuer, () if accepted else (verifier,), registry, event)
             receive(holder, kel)  # Accepted issuer KEL, deliberately stale public TEL.
             if Number(numh=event.sad["n"]).num <= known:
                 receive(holder, tel)
             proofs.append(proof)
             events.append(event)
             later_tel.append(tel)
+            later_kel.append(kel)
         disclosed = messagize(credential, bonds=[proofs[known - 1].data], gvrsn=V2)
         message, atc = grant(hab=holder.hab, recp=verifier.hab.pre,
                              message='present', origin=disclosed)
         receive(holder, message.raw + atc)
         receive(verifier, message.raw + atc)
         assert holder.hby.db.exns.get((message.said,)) is not None
-        assert verifier.hby.db.epse.get((message.said,)) is not None
-        assert verifier.hby.db.exns.get((message.said,)) is None
+        if accepted:
+            assert verifier.hby.db.exns.get((message.said,)) is not None
+            for kel, tel in zip(later_kel, later_tel):
+                receive(verifier, kel + tel)
+        else:
+            assert verifier.hby.db.epse.get((message.said,)) is not None
+            assert verifier.hby.db.exns.get((message.said,)) is None
         for side in (holder, verifier):
             xid = side.route.approve(message.said)
         yield SimpleNamespace(issuer=issuer, holder=holder, verifier=verifier,
@@ -159,6 +166,56 @@ def test_unblind_exact_minimum_suffix_repairs_same_grant(enabled):
             h.verifier.route.start(h.grant.said)
         receive(h.holder, query)
         assert not h.holder.route.cues
+
+
+def test_accepted_live_grant_retains_unblind_proofs_without_changing_admitted_history(tmp_path):
+    with presentation(accepted=True, headDirPath=str(tmp_path)) as h:
+        db = h.verifier.hby.db
+        original = db.enst.get((h.grant.said,))
+        historical = h.holder.hby.db.enst.get((h.issuance.said,))
+        deadline = db.epsd.get((h.grant.said,)).dts
+        assert h.verifier.exc.reverifyGrant(h.grant.said)[2].verdict == chaining.Verdicts.unknown
+        with pytest.raises(ValidationError):
+            h.holder.route.approve(h.issuance.said)
+        receive(h.holder, h.verifier.route.start(h.grant.said))
+        response = h.holder.route.cues.popleft()['msg']
+        receive(h.verifier, response)
+        assert h.verifier.route.complete(h.xid)
+        # Even a valid replay cannot enrich the first accepted view.
+        frame = parsed(h.holder.hab.endorse(h.grant, gvrsn=V2))
+        frame.nests = loadParsedNestedSubstreams(h.holder.hby, h.grant.said)
+        frame.nests[0].bsqs = [proof.data for proof in h.proofs]
+        receive(h.verifier, signed(h.holder, frame))
+        assert db.enst.get((h.grant.said,)) == original
+        assert h.verifier.route.finish(h.xid) is True
+        body, nests, verdict, records = h.verifier.exc.reverifyGrant(h.grant.said)
+        assert verdict.verdict == chaining.Verdicts.valid
+        assert records[h.credential.said].state == 'revoked'
+        assert body.raw == h.grant.raw and nests[0].serder.raw == h.credential.raw
+        assert {data[0].qb64 for data in nests[0].bsqs} == {proof.said for proof in h.proofs}
+        assert db.epsd.get((h.grant.said,)).dts == deadline
+        retained = db.enst.get((h.grant.said,))
+        assert retained != original
+        # Ordinary replay cannot strip the explicitly retained proofs.
+        frame.nests[0].bsqs = [proof.data for proof in h.proofs[1:]]
+        receive(h.verifier, signed(h.holder, frame))
+        assert db.enst.get((h.grant.said,)) == retained
+        admission, atc = admit(hab=h.verifier.hab, message='received', grant=h.grant)
+        receive(h.verifier, admission.raw + atc)
+        with pytest.raises(ValidationError):
+            h.verifier.route.finish(h.xid)
+        with pytest.raises(ValidationError):
+            h.verifier.route.start(h.grant.said)
+        # Replay cannot enrich an already admitted historical view either.
+        frame = parsed(h.issuer.hab.endorse(h.issuance, gvrsn=V2))
+        frame.nests = nests
+        receive(h.holder, signed(h.issuer, frame))
+        assert h.holder.hby.db.enst.get((h.issuance.said,)) == historical
+        db.close(clear=False)
+        db.reopen(reuse=True)
+        restart(h.verifier)
+        assert h.verifier.exc.reverifyGrant(h.grant.said)[2].verdict == chaining.Verdicts.valid
+        assert db.enst.get((h.grant.said,)) == retained
 
 
 def signed(side, frame, *, indices=None):

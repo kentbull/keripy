@@ -393,6 +393,10 @@ class Unblind:
     def finish(self, xid):
         """Retry ordinary Grant verification with the authenticated minimal proofs."""
         op = self._operation(xid)
+        db = self.hab.db
+        retained = ([(bytes(key), bytes(raw)) for key, raw in db.getTopItemIter(
+            db=db.enst.sdb, top=db.enst._tokey((op["grant"], "")))]
+            if db.exns.get((op["grant"],)) is not None else [])
         message, nests, _ = self._live(op)
         if not op["received"]:
             raise ValidationError("unblind reply has not been authenticated and verified")
@@ -406,12 +410,30 @@ class Unblind:
                         and opening.said not in present):
                     (nest.bsss if opening.clan is BoundState else nest.bsqs).append(opening.data)
                     present.add(opening.said)
-        db = self.hab.db
         tsgs, cigars = verify(self.exc.hby, message)
         seals = [(Prefixer(qb64=keys[1]), number, diger)
                  for keys, (number, diger) in db.ests.getTopItemIter(keys=(op["grant"], ""))]
-        return self.exc.processEvent(serder=message, tsgs=tsgs, cigars=cigars, ssts=seals,
+        accepted = self.exc.processEvent(serder=message, tsgs=tsgs, cigars=cigars, ssts=seals,
             nests=nests, ptds=db.epath.get((op["grant"],)), essrs=db.essrs.get((op["grant"],)))
+        if accepted and retained:
+            self._retain(op, nests, retained)
+        return accepted
+
+    def _retain(self, op, nests, retained):
+        """Atomically add approved proofs to this still-live accepted view only."""
+        self._live(op)
+        self._current(op)
+        updates = [(key, old, bytes(serializeParsedSubstream(nest)))
+                   for (key, old), nest in zip(retained, nests, strict=True)]
+        db = self.hab.db
+        with db.env.begin(write=True) as txn:
+            if (txn.get(db.exns._tokey(op["grant"]), db=db.exns.sdb) != op["raw"]
+                    or txn.get(db.erpy._tokey(op["grant"]), db=db.erpy.sdb) is not None):
+                raise ValidationError("approved presentation is no longer live")
+            for key, old, new in updates:
+                if txn.get(key, db=db.enst.sdb) != old:
+                    raise ValidationError("approved presentation evidence changed")
+                txn.put(key, new, db=db.enst.sdb)
 
     def abandon(self, xid):
         """Discard live proofs and unsent replies; delivered bytes belong to the caller."""
