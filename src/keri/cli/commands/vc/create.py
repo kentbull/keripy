@@ -9,7 +9,7 @@ from ...common import existing, parseVersion
 from ...common.credentialing import NativeCredential
 from ...common.parsing import Parsery
 
-from ....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0
+from ....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0, Kinds
 
 from ....app import (MailboxDirector, HaberyDoer, GroupHab, Counselor,
                      Multiplexor, Organizer, Poster, Notifier,
@@ -159,17 +159,18 @@ class CredentialIssuer(doing.DoDoer):
         self.name = name
         self.registryName = registryName
         self.timestamp = timestamp
-        self.hby = existing.setupHby(name=name, base=base, bran=bran)
+        self.version = existing.controllerVersion(name, base, alias)
+        self.hby = existing.setupHby(name=name, base=base, bran=bran, version=self.version)
         self.hab = self.hby.habByName(alias)
         if self.hab is None:
             raise ValueError(f"invalid alias {alias}")
 
         self.rgy = Regery(hby=self.hby, name=name, base=base)
         self.hbyDoer = HaberyDoer(habery=self.hby)  # setup doer
-        self.counselor = Counselor(hby=self.hby)
+        self.counselor = Counselor(hby=self.hby, version=self.version, kind=Kinds.json)
         self.registrar = Registrar(hby=self.hby, rgy=self.rgy, counselor=self.counselor)
         self.org = Organizer(hby=self.hby)
-        self.postman = Poster(hby=self.hby)
+        self.postman = Poster(hby=self.hby, version=self.version, kind=Kinds.json)
         notifier = Notifier(self.hby)
         mux = Multiplexor(self.hby, notifier=notifier)
         exc = Exchanger(hby=self.hby, handlers=[])
@@ -177,7 +178,8 @@ class CredentialIssuer(doing.DoDoer):
 
         self.verifier = Verifier(hby=self.hby, reger=self.rgy.reger)
         mbx = MailboxDirector(hby=self.hby, topics=["/receipt", "/multisig", "/credential"],
-                              verifier=self.verifier, exc=exc)
+                              verifier=self.verifier, exc=exc,
+                              version=self.version, gvrsn=self.version, kind=Kinds.json)
         self.credentialer = Credentialer(hby=self.hby, rgy=self.rgy, registrar=self.registrar,
                                                        verifier=self.verifier)
 
@@ -244,10 +246,12 @@ class CredentialIssuer(doing.DoDoer):
         rseal = dict(i=rseal.i, s=rseal.s, d=rseal.d)
 
         if registry.estOnly:
-            anc = hab.rotate(data=[rseal], framed=True)
+            anc = hab.rotate(data=[rseal], framed=True, version=self.version,
+                             gvrsn=self.version, kind=Kinds.json)
 
         else:
-            anc = hab.interact(data=[rseal], framed=True)
+            anc = hab.interact(data=[rseal], framed=True, version=self.version,
+                               gvrsn=self.version, kind=Kinds.json)
 
         aserder = SerderKERI(raw=anc)
         self.credentialer.issue(self.creder, iserder)

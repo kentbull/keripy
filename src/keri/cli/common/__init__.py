@@ -7,7 +7,7 @@ keri.app.cli.common Package
 
 from .config import loadConfig, parseData, checkRequiredArgs, loadFileOptions
 from .displaying import printIdentifier, printExternal
-from .existing import setupHby, existingHby, existingHab, aliasInput
+from .existing import setupHby, existingHby, existingHab, aliasInput, controllerVersion
 from .parsing import Parsery, parseDataItems, parseVersion
 from .rotating import addRotationArgs
 from .terming import Colors, Symbols

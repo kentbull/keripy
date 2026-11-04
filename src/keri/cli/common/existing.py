@@ -8,9 +8,35 @@ import getpass
 import sys
 from contextlib import contextmanager
 
-from ...kering import AuthError
+from ...kering import AuthError, ConfigurationError
 from ...app import Habery, Keeper
+from ...db import Baser
 from keri.kering import Version
+
+
+
+def controllerVersion(name, base, alias):
+    """Read the accepted local controller version without opening signing custody.
+
+    The alias, habitat record, accepted state and exact latest event must agree.
+    This public fact selects one normal Habery opening; registry/TEL version is
+    independent. Missing local acceptance raises ConfigurationError. Database
+    opening failures propagate, and this lookup writes no records.
+    """
+    db = Baser(name=name, base=base, reopen=False)
+    try:
+        db.reopen(readonly=True)
+        pre = db.names.get(("", alias))
+        record = db.habs.get((pre,)) if pre else None
+        state = db.states.get((pre,)) if pre else None
+        event = db.evts.get((pre, state.d)) if state else None
+        if (record is None or record.hid != pre or state is None or state.i != pre
+                or event is None or event.pre != pre or event.said != state.d
+                or event.snh != state.s):
+            raise ConfigurationError(f"{alias} is not an accepted local identifier")
+        return event.pvrsn
+    finally:
+        db.close()
 
 
 def setupHby(name, base="", bran=None, cf=None, temp=False, noPrompt=False, version=None):
