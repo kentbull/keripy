@@ -76,12 +76,12 @@ doing.Doist(real=True, tock=0.03125).do(doers=doers)
         witness.communicate(timeout=10)
 
 
-def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, live_parties):
+def issue(tmp_path, live_parties, data='{"role":"reader"}'):
     issuer, holder = live_parties
     kli(tmp_path, 'vc', 'registry', 'incept', *issuer['args'], '--registry-name', 'fresh')
     bodyfile = tmp_path / 'body.cesr'
     kli(tmp_path, 'vc', 'create', *issuer['args'], '--registry-name', 'fresh',
-        '--recipient', holder['pre'], '--data', '{"role":"reader"}', '--output', str(bodyfile))
+        '--recipient', holder['pre'], '--data', data, '--output', str(bodyfile))
     application = tmp_path / 'apply.cesr'
     # Preserve the Apply opener XID through the entire live issuance.
     body = SerderACDC(raw=bodyfile.read_bytes())
@@ -139,6 +139,11 @@ def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, liv
     assert roots[0].encode() not in holderfile.read_bytes()
     evidence = Parser(version=V2).parse(ims=bytearray(holderfile.read_bytes()), processive=False)
     assert [parsed.serder.said for parsed in evidence] == [selected['grant'], result['admit']]
+    return selected, body
+
+
+def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, live_parties):
+    issue(tmp_path, live_parties)
 
 
 def test_finite_grant_timeout_keeps_registry_unissued_and_has_no_restart_keys(tmp_path, live_parties):
