@@ -906,6 +906,15 @@ class DuplicitousRegistryError(ValidationError):
     """
 
 
+class MissingOpeningError(ValidationError):
+    """An exact event opening is unavailable for an authenticated live request.
+
+    The caller may acquire the missing evidence and retry within the original
+    operation's scope and lifetime. This does not classify an invalid opening
+    as retryable or authorize a disclosure.
+    """
+
+
 class UnverifiedBlindError(ValidationError):
     """
     Error a disclosed blinded state attribute block does not reproduce the
