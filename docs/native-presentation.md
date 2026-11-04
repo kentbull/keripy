@@ -77,8 +77,21 @@ verifying its exact minimal openings. Contribution does not read or copy a root.
 The caller feeds these ordinary reply signatures through each member's live
 Parser/Revery. Only threshold completion produces a `reply` cue, on the member
 with the lowest verified contributing index. Root custody does not elect it.
-`complete(xid)` reports threshold readiness and the original Grant deadline still
-applies. Group requester approval is explicitly refused. Member transport/CLI
+`complete(xid)` reports reply threshold readiness and the original Grant deadline
+still applies.
+
+A native group requester instead calls `start(grant)` to freeze a query proposal
+and its exact accepted public events. Each other member explicitly approves the
+same Grant, then `contribute(xid, proposal)` checks that event selection before
+signing the unchanged query. Group query proposals use ordinary last-signature
+groups, matching native query dispatch; KRAM binds its partial aggregate to
+accepted establishment keys. The caller supplies contributions to the live
+KRAM/query owner (or a complete ordinary threshold when KRAM is disabled).
+Only the verified threshold
+emits the elected member's `query` delivery cue. Repeated `start()` returns the
+frozen proposal or aggregate; it never renews the original Grant lifetime.
+Requester `complete()` remains false until the responder's reply verifies, and
+`finish()` still performs ordinary Grant verification. Member transport/CLI
 coordination is a subsequent unit; the CLI restrictions above remain in force.
 
 `--respond-unblind` approves this exact outgoing Grant before delivery and

@@ -290,8 +290,8 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelp
                 side.hby.rtr.addRoute(Unblind.Route, side.unblind, blinders=True, attachments=True)
                 side.unblind.approve(presentation.said)
             deadlines = [side.hby.db.epsd.get((presentation.said,)).dts for side in [*h.issuees, verifier]]
-            # Group requester support must fail explicitly, without an approved operation.
-            with pytest.raises(ValidationError, match='group unblind requesters'):
+            # Group support cannot reopen the already admitted issuance.
+            with pytest.raises(ValidationError, match='unavailable, terminated or expired'):
                 issuee.unblind.approve(h.grant.said)
             proof3, event3 = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
             kel3 = h.anchor(event3)
@@ -349,7 +349,152 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelp
                     for side in [*h.issuees, verifier]] == deadlines
             assert not list(hby.ks.rroots.getTopItemIter())
             assert all(tuple(side.hby.db.enst.get((h.grant.said,))) == held for side in h.issuees)
+            # Form a rootless verifier group in independent stores; keep the individual history above.
+            individual_view = tuple(verifier.hby.db.enst.get((presentation.said,)))
+            verifier.unblind.abandon(presentation.said)
+            verifier.hby.rtr.routes[:] = [route for route in verifier.hby.rtr.routes
+                                         if route.resource is not verifier.unblind]
+            phby = stack.enter_context(openHby(name='dh-requester-peer', version=V2))
+            pmember = phby.makeHab(name='requester-peer')
+            prgy = Regery(hby=phby, name=phby.name, temp=True)
+            stack.callback(prgy.close)
+            pexc = Exchanger(hby=phby, handlers=[])
+            pexc.TimeoutPSE = 300
+            loadHandlers(phby, pexc, SimpleNamespace(add=lambda **_: None), rgy=prgy)
+            pkvy = Kevery(db=phby.db, rvy=phby.rvy, exc=pexc, kramer=Kramer(db=phby.db, cf=cf))
+            peer = SimpleNamespace(hby=phby, member=pmember, hab=pmember, rgy=prgy, exc=pexc, kvy=pkvy,
+                psr=Parser(version=V2, kvy=pkvy, rvy=phby.rvy, exc=pexc, rgy=prgy))
+            requesters = [SimpleNamespace(**(vars(verifier) | dict(member=verifier.hab))), peer]
+            for side in [*h.members, *requesters]:
+                for member in requesters:
+                    receive(side, member.member.msgOwnEvent(sn=0, framed=False, gvrsn=V2))
+            for side in requesters:
+                side.hab = side.hby.makeGroupHab(group='requester-group', mhab=side.member,
+                    smids=[member.member.pre for member in requesters], isith='2', nsith='2', version=V2)
+            for side in [*h.members, *requesters]:
+                for member in requesters:
+                    receive(side, member.hab.msgOwnInception(allowPartiallySigned=True, framed=False, gvrsn=V2))
+                side.kvy.processEscrows()
+                assert requesters[0].hab.pre in side.hby.kevers
+            for side in h.members:
+                receive(peer, b''.join(side.hby.db.clonePreIter(side.member.pre, gvrsn=V2)))
+            for side in (issuer, recipient):
+                receive(peer, b''.join(side.hby.db.clonePreIter(side.hab.pre, gvrsn=V2)))
+            for raw in h.registry.store.cloneTelIter(h.registry.regk):
+                event = SerderACDC(raw=raw)
+                sn, said = regeventing.vetAnchor(event, db=issuer.hby.db, issuer=issuer.hab.pre)
+                receive(peer, messagize(event, bonds=[SealSource(s=f'{sn:x}', d=said)], gvrsn=V2))
+            group_grant, atc = grant(hab=recipient.hab, recp=requesters[0].hab.pre, message='group verifier',
+                origin=messagize(h.credential, bonds=[proof3.data], gvrsn=V2))
+            wire = signed(group_grant, h.issuees,
+                nests=[serializeParsedSubstream(node) for node in parsed(group_grant.raw + atc).nests])
+            for side in [*h.issuees, *requesters]:
+                receive(side, wire)
+                assert side.exc.complete(group_grant.said)
+                if side in requesters:
+                    side.unblind = Unblind(side.hab, side.exc, side.rgy, states=('issued', 'revoked', ''))
+                    side.kvy.qvy = side.unblind
+                    side.hby.rtr.addRoute(Unblind.Route, side.unblind, blinders=True, attachments=True)
+                if side is not requesters[0]:
+                    side.unblind.approve(group_grant.said)
+            group_deadlines = [side.hby.db.epsd.get((group_grant.said,)).dts
+                               for side in [*h.issuees, *requesters]]
+            proof4, event4 = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
+            kel4 = h.anchor(event4)
+            for side in requesters:
+                receive(side, b''.join(issuer.hby.db.clonePreIter(issuer.hab.pre, gvrsn=V2)))
+                receive(side, messagize(event4, bonds=[SealSource(s=kel4.snh, d=kel4.said)], gvrsn=V2))
+
+            # Nonlead authors exactly one query; neither a partial nor its duplicate authorizes disclosure.
+            qproposal = requesters[1].unblind.start(group_grant.said)
+            assert requesters[1].unblind.start(group_grant.said) == qproposal
+            assert requesters[1].unblind.cues.popleft()['kin'] == 'sign'
+            qframe = parsed(qproposal)
+            assert qframe.serder.sad['q']['re'] == {h.registry.regk: [event4.said]}
+            assert [node.serder.raw for node in qframe.nests] == [event4.raw]
+            assert not qframe.bsqs and not qframe.bsss
+            receive(recipient, qproposal)
+            receive(recipient, qproposal)
+            with pytest.raises(ValidationError, match='authenticated peer request'):
+                recipient.unblind.respond(group_grant.said)
+            with pytest.raises(ValidationError, match='no local approval'):
+                requesters[0].unblind.contribute(group_grant.said, qproposal)
+            requesters[0].unblind.approve(group_grant.said)
+            # A separately selected local operation may be abandoned before any proposal leaves.
+            abandoned = Unblind(requesters[0].hab, requesters[0].exc, requesters[0].rgy, states=('issued',))
+            abandoned.start(group_grant.said)
+            assert abandoned.cues
+            abandoned.abandon(group_grant.said)
+            assert not abandoned.cues
+            with pytest.raises(ValidationError):
+                abandoned.contribute(group_grant.said, qproposal)
+            omitted = parsed(qproposal)
+            omitted.nests = []
+            with pytest.raises(ValidationError, match='selected accepted public events'):
+                requesters[0].unblind.contribute(group_grant.said, serializeParsedSubstream(omitted))
+            qcontribution = requesters[0].unblind.contribute(group_grant.said, qproposal)
+            assert parsed(qcontribution).serder.raw == qframe.serder.raw
+            assert [serializeParsedSubstream(node) for node in parsed(qcontribution).nests] == [
+                serializeParsedSubstream(node) for node in qframe.nests]
+            assert requesters[0].unblind.contribute(group_grant.said, qproposal) == qcontribution
+            changed = deepcopy(qframe.serder.sad)
+            changed['dt'] = '2021-01-01T00:00:02.000000+00:00'
+            altered = SerderKERI(sad=changed, makify=True)
+            with pytest.raises(ValidationError, match='already frozen'):
+                requesters[0].unblind.contribute(group_grant.said,
+                    requesters[1].hab.endorse(altered, last=False, gvrsn=V2))
+            combined = parsed(qproposal)
+            combined.lsgs[0][1].extend(parsed(qcontribution).lsgs[0][1])
+            for side in requesters:
+                receive(side, qproposal)
+                receive(side, qproposal)
+                assert not side.unblind.cues and not side.unblind.complete(group_grant.said)
+                # KRAM accumulates query factors; without it, supply the ordinary combined threshold.
+                receive(side, qcontribution if enabled else serializeParsedSubstream(combined))
+                assert not side.unblind.complete(group_grant.said)  # Query readiness is not reply readiness.
+            assert not requesters[1].unblind.cues
+            qcue = requesters[0].unblind.cues.popleft()
+            assert qcue['kin'] == 'query' and qcue['dest'] == recipient.hab.pre
+            assert requesters[1].unblind.start(group_grant.said) == qcue['msg']
+            assert parsed(qcue['msg']).serder.raw == qframe.serder.raw
+            assert {sig.index for _, sigs in parsed(qcue['msg']).lsgs for sig in sigs} == {0, 1}
+
+            # Both groups authenticate exact aggregates; each rootless requester independently finishes.
+            for side in h.issuees:
+                receive(side, qcue['msg'])
+            rproposal = recipient.unblind.respond(group_grant.said)
+            assert recipient.unblind.cues.popleft()['kin'] == 'sign'
+            rcontribution = issuee.unblind.contribute(group_grant.said, rproposal)
+            for side in h.issuees:
+                receive(side, rproposal)
+                assert not side.unblind.complete(group_grant.said)
+                receive(side, rcontribution)
+                assert side.unblind.complete(group_grant.said)
+            assert not recipient.unblind.cues
+            rcue = issuee.unblind.cues.popleft()
+            assert rcue['dest'] == requesters[0].hab.pre
+            rframe = parsed(rcue['msg'])
+            assert rframe.serder.sad['a']['re'] == {h.registry.regk: [event4.said]}
+            assert [block[0].qb64 for block in rframe.bsqs] == [proof4.said]
+            for side in requesters:
+                receive(side, rcue['msg'])
+                assert side.unblind.complete(group_grant.said)
+                assert side.unblind.finish(group_grant.said)
+                _, repaired, verdict, observations = side.exc.reverifyGrant(group_grant.said)
+                assert verdict.verdict == chaining.Verdicts.valid
+                assert observations[h.credential.said].said == event4.said
+                assert repaired[0].serder.raw == h.credential.raw
+                assert not list(side.hby.ks.rroots.getTopItemIter())
+            assert [side.hby.db.epsd.get((group_grant.said,)).dts
+                    for side in [*h.issuees, *requesters]] == group_deadlines
+            assert tuple(verifier.hby.db.enst.get((presentation.said,))) == individual_view
+            assert all(tuple(side.hby.db.enst.get((h.grant.said,))) == held for side in h.issuees)
             fakeHelpingClock.advance(seconds=301)
+            for side in requesters:
+                with pytest.raises(ValidationError):
+                    side.unblind.start(group_grant.said)
+                with pytest.raises(ValidationError):
+                    side.unblind.contribute(group_grant.said, qproposal)
             with pytest.raises(ValidationError):
                 recipient.unblind.respond(presentation.said)
             with pytest.raises(ValidationError):

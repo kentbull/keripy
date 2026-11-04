@@ -7,7 +7,7 @@ Applications own delivery, ordinary dependency acquisition and final Admit.
 
 from collections import deque
 
-from ..core import (Blinder, BlindState, BoundState, Number, Parser,
+from ..core import (Blinder, BlindState, BoundState, Diger, Number, Parser,
                     Prefixer, SealSource, messagize, query, reply)
 from ..core.parsing import MsgParseDom
 from ..core.eventing import verifySigs
@@ -29,9 +29,9 @@ class Unblind:
     vocabulary for ordinary root-derived proofs. Bound proofs require held material.
     ``cues`` supplies {kin: 'reply', dest, msg}; approval and retry bytes are
     process-local. A fresh instance has no approved unfinished operations.
-    Group responders propose and contribute to one exact reply; Revery owns its
-    threshold. Group requesters remain unsupported. Applications transport member
-    proposals and the elected member's completed reply, never partial replies.
+    Groups propose and contribute to one exact query or reply. KRAM/query
+    verification and Revery own their thresholds. Applications transport member
+    proposals and the elected member's completed messages, never partials.
     """
     Route = "/ipex/unblind"
 
@@ -69,8 +69,6 @@ class Unblind:
             self._live(existing)
             return xid
         sender, recipient = message.pre, message.ked.get("ri")
-        if self.group and self.hab.pre == recipient:
-            raise ValidationError("group unblind requesters are not supported")
         if sender == recipient or self.hab.pre not in (sender, recipient):
             raise ValidationError("local habitat is not a presentation party")
         op = dict(grant=grant, x=xid, sender=sender, recipient=recipient,
@@ -121,40 +119,57 @@ class Unblind:
         return bytes(serializeParsedSubstream(parsed))
 
     def start(self, grant):
-        """Return the disclosee's frozen query with exact accepted public events."""
+        """Freeze a query, or a group signing proposal, over accepted public events."""
         xid = self.approve(grant)
         op = self._operations[xid]
         if self.hab.pre != op["recipient"]:
             raise ValidationError("only the disclosee starts unblind")
-        if op["query"] is None:
-            _, disclosure, _ = self._live(op)
-            carried = self._carried(op, disclosure)
-            requested, nests = {}, []
-            for regid in op["scope"]:
-                events = self._events(regid)
-                missing, start = False, 0
-                for index in range(len(events) - 1, -1, -1):
-                    opening = carried.get(events[index].said)
-                    if opening is None:
-                        missing = True
-                    elif self._checkOpening(op, events[index], opening, disclosure):
-                        start = index + 1
-                        break
-                if not missing:
-                    continue
-                requested[regid] = []
-                for event in events[start:]:
-                    number, diger = self.rgy.store.anchor(event.said)
-                    requested[regid].append(event.said)
-                    nests.append(self._parse(messagize(event, nested=True,
-                        bonds=[SealSource(s=number.snh, d=diger.qb64)], gvrsn=Vrsn_2_0)))
-            if not requested:
-                raise ValidationError("the Grant already carries the required current openings")
+        if op["query"] is None and (not self.group or op['contribution'] is None):
+            requested, nests = self._request(op)
             message = query(pre=self.hab.pre, route=self.Route, replyRoute=self.Route,
                 query=dict(x=xid, re=requested), pvrsn=Vrsn_2_0, kind=Kinds.json)
-            op["requested"], op["query"] = requested, self._signed(message, nests=nests)
+            signed = self._signed(message, nests=nests)
+            op['requested'] = requested
+            if self.group:
+                op['proposal'], op['contribution'] = message.raw, signed
+                self.cues.append(dict(kin='sign', dest=self.hab.pre, msg=signed))
+            else:
+                op['query'] = signed
         self._current(op)
-        return op["query"]
+        return op['query'] or op['contribution']
+
+    def _request(self, op):
+        """Select exact missing-event query evidence without signing or state writes."""
+        _, disclosure, _ = self._live(op)
+        carried = self._carried(op, disclosure)
+        requested, nests = {}, []
+        for regid in op['scope']:
+            events = self._events(regid)
+            missing, start = False, 0
+            for index in range(len(events) - 1, -1, -1):
+                opening = carried.get(events[index].said)
+                if opening is None:
+                    missing = True
+                elif self._checkOpening(op, events[index], opening, disclosure):
+                    start = index + 1
+                    break
+            if not missing:
+                continue
+            requested[regid] = []
+            for event in events[start:]:
+                number, diger = self.rgy.store.anchor(event.said)
+                requested[regid].append(event.said)
+                nests.append(self._parse(messagize(event, nested=True,
+                    bonds=[SealSource(s=number.snh, d=diger.qb64)], gvrsn=Vrsn_2_0)))
+        if not requested:
+            raise ValidationError("the Grant already carries the required current openings")
+        return requested, nests
+
+    def _queryEvidence(self, op, requested, nests):
+        expected, events = self._request(op)
+        if (requested != expected or [serializeParsedSubstream(nest) for nest in nests] !=
+                [serializeParsedSubstream(event) for event in events]):
+            raise ValidationError("group query differs from the selected accepted public events")
 
     def _current(self, op):
         """A new public head needs a new explicitly approved live operation."""
@@ -314,12 +329,28 @@ class Unblind:
             raise ValidationError("invalid unblind query or return route")
         if any(value for key, value in kwa.items() if key not in ("local", "source")):
             raise ValidationError("unblind query carries unsupported attachments")
-        op, requested, disclosure = self._preflight(serder, "q", "sender")
+        own = self.group and serder.pre == self.hab.pre
+        op, requested, disclosure = self._preflight(serder, "q", 'recipient' if own else 'sender', own=own)
+        if own and op['proposal'] != serder.raw:
+            raise ValidationError("own unblind query lacks exact local proposal approval")
         if not verifyQueryAttachments(self.exc.hby, serder, lsgs=lsgs,
                                        tsgs=tsgs, sigers=sigers, cigars=cigars):
             raise MissingSignatureError("unblind query lacks the disclosee signature threshold")
         if op["requested"] is not None and requested != op["requested"]:
             raise ValidationError("conflicting unblind request for this operation")
+        if own:
+            self._queryEvidence(op, requested, nests or [])
+            self._current(op)
+            groups = [group for group in tsgs or [] if group[0].qb64 == self.hab.pre]
+            if not groups:
+                kever = self.hab.kever
+                groups = [(pre, Number(sn=kever.lastEst.s), Diger(qb64=kever.lastEst.d), signatures)
+                          for pre, signatures in lsgs or [] if pre.qb64 == self.hab.pre]
+            groups, _, _, _, _ = verifyAttachments(self.exc.hby, serder, tsgs=groups)
+            if not groups:
+                raise MissingSignatureError("own group query lacks its verified signature threshold")
+            self._groupMessage(op, 'query', serder, groups, nests=nests or [])
+            return
         self._receiveEvents(requested, nests or [])
         self._live(op)
         op["requested"] = {regid: list(saids) for regid, saids in requested.items()}
@@ -359,48 +390,63 @@ class Unblind:
         return op["reply"]
 
     def contribute(self, xid, proposal):
-        """Approve one member's unchanged reply after the real peer request.
+        """Approve one exact group query or reply; never manufacture its threshold.
 
-        Openings are independently verified against the selected current suffix;
-        contributors need no root. This adds only the local indexed signature,
-        never completes a threshold or authorizes a different proposal body.
+        Queries must select the same accepted public events. Replies require the
+        authenticated peer query and independently verified minimum openings.
+        Contributors need no root, and neither path regenerates body timestamps.
         """
         if not self.group:
-            raise ValidationError("unblind contribution requires a local group responder")
+            raise ValidationError("unblind contribution requires a local group member")
         parsed = self._parse(proposal)
-        if (parsed.serder.ilk != Ilks.rpy or any(value for key, value in vars(parsed).items()
-                if key not in ('serder', 'tsgs', 'bsqs', 'bsss'))):
-            raise ValidationError("unblind proposal must be one signed reply with openings")
-        op, selected, nests = self._preflight(parsed.serder, 'a', 'sender', own=True)
-        if op['x'] != xid or not op['requestedByPeer']:
+        isquery = parsed.serder.ilk == Ilks.qry
+        allowed = ('serder', 'tsgs', 'lsgs', 'nests') if isquery else ('serder', 'tsgs', 'bsqs', 'bsss')
+        if (parsed.serder.ilk not in (Ilks.qry, Ilks.rpy)
+                or any(value for key, value in vars(parsed).items() if key not in allowed)):
+            raise ValidationError("unblind proposal must be one signed query or reply with its exact evidence")
+        op, selected, nests = self._preflight(parsed.serder, 'q' if isquery else 'a',
+            'recipient' if isquery else 'sender', own=True)
+        if op['x'] != xid or isquery and parsed.serder.sad.get('rr') != self.Route:
+            raise ValidationError("unblind proposal differs from the approved transaction")
+        if not isquery and not op['requestedByPeer']:
             raise ValidationError("group reply requires its authenticated peer query")
-        self._current(op)
+        if op['requested'] is not None:
+            self._current(op)
         if op['proposal'] is not None and op['proposal'] != parsed.serder.raw:
-            raise ValidationError("unblind reply proposal is already frozen")
+            raise ValidationError("unblind proposal body is already frozen")
         kever = self.hab.kever
-        if not parsed.tsgs:
+        groups = list(parsed.tsgs)
+        if isquery:
+            groups.extend((pre, Number(sn=kever.lastEst.s), Diger(qb64=kever.lastEst.d), signatures)
+                          for pre, signatures in parsed.lsgs)
+        if not groups:
             raise ValidationError("unblind proposal lacks a group member signature")
-        for pre, number, diger, sigers in parsed.tsgs:
+        for pre, number, diger, sigers in groups:
             if (pre.qb64 != self.hab.pre or number.sn != kever.lastEst.s
                     or diger.qb64 != kever.lastEst.d):
                 raise ValidationError("unblind proposal has different group establishment keys")
             verified, _ = verifySigs(parsed.serder.raw, sigers, kever.verfers)
             if not verified or len(verified) != len(sigers):
                 raise ValidationError("unblind proposal lacks valid member contributions")
-        openings = self._replyOpenings(op, selected, nests, parsed.bsqs, parsed.bsss)
-        minimum, _ = self._minimum(op, op['requested'], nests,
-            lambda event: self._opening(openings, event))
-        if selected != minimum:
-            raise ValidationError("reply is not the minimum current-state suffix")
+        if isquery:
+            self._queryEvidence(op, selected, parsed.nests)
+        else:
+            openings = self._replyOpenings(op, selected, nests, parsed.bsqs, parsed.bsss)
+            minimum, _ = self._minimum(op, op['requested'], nests,
+                lambda event: self._opening(openings, event))
+            if selected != minimum:
+                raise ValidationError("reply is not the minimum current-state suffix")
         if op['contribution'] is not None:
             retained = self._parse(op['contribution'])
-            if serializeParsedSubstream(dict(vars(parsed), tsgs=[])) != serializeParsedSubstream(
-                    dict(vars(retained), tsgs=[])):
-                raise ValidationError("unblind reply proof bytes are already frozen")
+            if serializeParsedSubstream(dict(vars(parsed), tsgs=[], lsgs=[])) != serializeParsedSubstream(
+                    dict(vars(retained), tsgs=[], lsgs=[])):
+                raise ValidationError("unblind proposal evidence bytes are already frozen")
         if op['contribution'] is None:
             # Carry the exact approved proof bytes; only our signature is new.
-            local = self._parse(self.hab.endorse(parsed.serder, gvrsn=Vrsn_2_0))
-            local.bsqs, local.bsss = parsed.bsqs, parsed.bsss
+            local = self._parse(self.hab.endorse(parsed.serder, last=isquery, gvrsn=Vrsn_2_0))
+            local.bsqs, local.bsss, local.nests = parsed.bsqs, parsed.bsss, parsed.nests
+            if isquery:
+                op['requested'] = {regid: list(saids) for regid, saids in selected.items()}
             op['proposal'] = parsed.serder.raw
             op['contribution'] = bytes(serializeParsedSubstream(local))
         return op['contribution']
@@ -465,19 +511,28 @@ class Unblind:
             groups, _, _, _, _ = verifyAttachments(self.exc.hby, serder, tsgs=groups)
             if not groups:
                 raise ValidationError("group reply lacks a verified signature threshold")
-            if op['reply'] is None:
-                frame = self._parse(messagize(serder, tsgs=groups, gvrsn=Vrsn_2_0))
-                for opening in openings:
-                    (frame.bsss if opening.clan is BoundState else frame.bsqs).append(opening.data)
-                op['reply'] = bytes(serializeParsedSubstream(frame))
-            # Ordinary verified signing-index leadership, independent of root custody.
-            pre, number, digest, sigers = groups[0]
-            _, verfers = self.hab.db.resolveVerifiers(pre=pre.qb64, sn=number.sn, dig=digest.qb64)
-            contribution = self.hab.mhab.kever.fetchLatestContribTo(verfers=verfers)
-            if contribution is not None and contribution[1] == min(siger.index for siger in sigers):
-                self.cues.append(dict(kin='reply', dest=op['recipient'], msg=op['reply']))
+            self._groupMessage(op, 'reply', serder, groups, openings=openings)
             return
         op["received"] = True
+
+    def _groupMessage(self, op, field, serder, groups, *, nests=(), openings=()):
+        """Freeze a verified aggregate and cue its ordinary contributing-index leader."""
+        if field == 'query' and op[field] is not None:
+            return  # Emit the query once; start() returns the same aggregate for explicit retries.
+        if op[field] is None:
+            auth = dict(lsgs=[(group[0], group[3]) for group in groups]) if field == 'query' else dict(tsgs=groups)
+            frame = self._parse(messagize(serder, **auth, gvrsn=Vrsn_2_0))
+            frame.nests = [MsgParseDom(**nest) if isinstance(nest, dict) else nest for nest in nests]
+            for opening in openings:
+                (frame.bsss if opening.clan is BoundState else frame.bsqs).append(opening.data)
+            op[field] = bytes(serializeParsedSubstream(frame))
+        # Elect from the frozen aggregate, not later signatures absent from its wire.
+        pre, number, digest, sigers = groups[0] if field == 'query' else self._parse(op[field]).tsgs[0]
+        _, verfers = self.hab.db.resolveVerifiers(pre=pre.qb64, sn=number.sn, dig=digest.qb64)
+        contribution = self.hab.mhab.kever.fetchLatestContribTo(verfers=verfers)
+        if contribution is not None and contribution[1] == min(siger.index for siger in sigers):
+            dest = op['sender'] if field == 'query' else op['recipient']
+            self.cues.append(dict(kin=field, dest=dest, msg=op[field]))
 
     def complete(self, xid):
         """Report authenticated reply readiness within the original live request.
@@ -490,7 +545,7 @@ class Unblind:
         self._live(op)
         if op["requested"] is not None:
             self._current(op)
-        return op['reply'] is not None if self.group else op["received"]
+        return op['reply'] is not None if self.group and self.hab.pre == op['sender'] else op["received"]
 
     def finish(self, xid):
         """Retry ordinary Grant verification with the authenticated minimal proofs."""
@@ -551,9 +606,11 @@ class Unblind:
     def abandon(self, xid):
         """Discard live proofs and unsent replies; delivered bytes belong to the caller."""
         op = self._operation(xid)
-        pending = [cue for cue in self.cues if cue["msg"] != op["reply"]]
+        pending = [cue for cue in self.cues
+                   if cue['msg'] not in (op['query'], op['reply'], op['contribution'])]
         self.cues.clear()
         self.cues.extend(pending)
         op["reply"] = None
+        op['query'] = op['contribution'] = None
         op["openings"].clear()
         op["abandoned"] = True
