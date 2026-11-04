@@ -22,7 +22,7 @@ from ..kering import (Version, Roles, Ilks, Kinds,
                       MissingEntryError)
 from ..recording import TopicsRecord
 from ..core import (Kevery, parsing, routing, serdering,
-                    Counter, receipt, Codens)
+                    Counter, receipt, Codens, messagize)
 from ..db import BaserDoer
 from ..end import loadEnds as loadEndingEnds
 from ..help import nowUTC
@@ -1146,12 +1146,9 @@ class ReceiptEnd(doing.DoDoer):
                           version=self.version,
                           gvrsn=self.version,
                           kind=serder.kind)
-        rct = bytearray(rserder.raw)
-        if wigers := self.hab.db.wigs.get(keys=(preb, said)):
-            rct.extend(Counter(Codens.WitnessIdxSigs, count=len(wigers),
-                               version=self.version).qb64b)
-            for wiger in wigers:
-                rct.extend(wiger.qb64b)
+        wigers = self.hab.db.wigs.get(keys=(preb, said))
+        rct = (messagize(rserder, wigers=wigers, framed=True, gvrsn=self.version)
+               if wigers else rserder.raw)
 
         rep.set_header('Content-Type', CESR_CONTENT_TYPE)
         rep.status = falcon.HTTP_200
