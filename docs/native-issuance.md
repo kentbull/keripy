@@ -1,8 +1,9 @@
-# Individual native IPEX issuance
+# Native IPEX issuance
 
 `ipex grant` and `ipex admit` retain their v1 behavior by default. Native live
 issuance is opt-in with `--version 2.0` and requires encrypted, unlocked local
-individual habitats. Provision accepted peer KELs, witness/mailbox locations,
+individual issuers. Holders may use an individual habitat or the group issuance
+profile below. Provision accepted peer KELs, witness/mailbox locations,
 and schema evidence first. The commands borrow native Regery, Exchanger, DH,
 and the existing witness/delegation and mailbox owners.
 
@@ -35,6 +36,31 @@ verification of its issued, witnessed registry update:
 kli ipex admit --name holder --alias holder --version 2.0 \
   --said "$GRANT_SAID" --input grant-public.cesr --deliver --timeout 120
 ```
+
+For a holder group, run one finite Admit command per independent member store.
+Each command must select the same accepted group KEL event SAID, its elected
+custodian member AID, exact Grant and human message:
+
+```sh
+kli ipex admit --name holder-member-1 --alias holder-group --version 2.0 \
+  --said "$GRANT_SAID" --input grant-public.cesr --deliver --timeout 120 \
+  --coordinator "$GROUP_EVENT_SAID" --custodian "$CUSTODIAN_MEMBER_AID"
+# In the other member's process, use its own --name and the same selection.
+```
+
+The invocation approves only this transaction's native DH contributions and one
+matching Admit; it opens no additional consent prompt. Both members remain live.
+The elected custodian performs DH and retains the encrypted Keeper root. Other
+members verify the original issuer-signed Grant with completed public proofs,
+then sign the custodian's retained Admit bytes. They never finish DH or obtain a
+root. Ordinary group threshold verification precedes final transmission by the
+native exchange's elected transmitter. Other members report `transmitted: false`
+and `contributed: true`; DH custody does not select the Admit transmitter.
+`group_dh_proposed` marks the custodian's partial reply awaiting contributions.
+The standalone `multisig join` endpoint-role approval cannot approve DH replies.
+Timeout/cancellation abandons this process's operation; a restart requires fresh
+explicit selection and cannot recover lost ephemeral keys. Signed observer
+queries and group Unblind/presentation are outside this group issuance profile.
 
 Optionally require a configured observer to supply the selected registry's
 public evidence before Admit:
@@ -78,5 +104,5 @@ keys or revive a timed-out operation. Select a new fresh registry/transaction
 when an incomplete operation cannot finish.
 
 This command supports one disclosed credential in one fresh issuer-controlled
-registry. Groups, anchored Agree/Grant, multi-node/shared-registry profiles,
+registry. Group issuers, anchored Agree/Grant, multi-node/shared-registry profiles,
 presentation, Unblind, and provisioning are outside this live issuance unit.

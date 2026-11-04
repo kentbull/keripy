@@ -544,3 +544,28 @@ def test_native_ipex_proposals_replay_only_after_local_approval_with_native_veri
             assert h.issuees[0].exc.complete(admission.said) == (index == 1)
         assert h.issuees[0].hby.db.exns.get((admission.said,)).raw == admission.raw
         assert not list(h.issuees[0].hby.ks.rroots.getTopItemIter())
+
+
+def test_nonzero_dh_custodian_and_native_admit_transmitter_are_independent():
+    # Native election proof only: installed CLI transport is separately exercised with two members.
+    with groups(size=3, lead=1) as h:
+        exchange(h, False)
+        issuer, custodian = h.issuers[1], h.issuees[1]
+        _, event = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
+        h.anchor(event)
+        issuer.dh.finish(h.xid)
+        custodian.dh.finish(h.xid)
+        original = serializeMessage(issuer.hby, h.grant.said)
+        for side in h.members:
+            receive(side, original)
+            assert side.exc.complete(h.grant.said)
+        admission, _ = admit(custodian.hab, message='one retained body', grant=h.grant)
+        # The coordinator had signatures 1+2; this Admit reaches threshold with 0+1.
+        wire = signed(admission, h.issuees[:2])
+        for side in h.issuees:
+            receive(side, wire)
+            assert side.exc.complete(admission.said)
+        assert [side.exc.lead(side.hab, admission.said) for side in h.issuees] == [True, False, False]
+        assert custodian.dh._operations[h.xid]['custodian'] == custodian.member.pre
+        assert root(custodian, h) is not None
+        assert root(h.issuees[0], h) is None and root(h.issuees[2], h) is None
