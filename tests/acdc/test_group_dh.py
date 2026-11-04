@@ -7,12 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from keri import Vrsn_2_0 as V2
-from keri.acdc import Regery, Registrar, acdcmap, admit, grant, loadHandlers
+from keri.acdc import Regery, Registrar, acdcmap, admit, chaining, grant, loadHandlers, regeventing
 from keri.acdc.dhking import Dhke
 from keri.acdc.salting import RegistrySalt
-from keri.app import openCF, openHby
-from keri.core import (Diger, Kevery, Kramer, Matter, MtrDex, Number, Parser, Salter,
-                       SealSource, SerderKERI, Signer, interact, messagize, rotate)
+from keri.app import Notifier, openCF, openHby
+from keri.core import (Blinder, Diger, Kevery, Kramer, Matter, MtrDex, Number, Parser, Salter,
+                       SealSource, SerderACDC, SerderKERI, Signer, interact, messagize, rotate)
 from keri.kering import ValidationError
 from keri.peer import Exchanger
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
@@ -218,9 +218,67 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled):
                               coordinator=(coord.sn, coord.said))
         receive(recipient, wire)
         assert root(recipient, h) is None
+        assert not recipient.dh._operations[h.xid]['private']
         receive(recipient, recipient.hab.endorse(parsed(wire).serder, gvrsn=V2))
         matching = root(recipient, h).qb64 == root(issuee, h).qb64
         assert matching
+
+        # The provisioned nonlead opens a later accepted event without another DH operation.
+        held = tuple(recipient.hby.db.enst.get((h.grant.said,)))
+        _, later = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
+        h.anchor(later)
+        derived = Blinder.unblind(later.sad['b'], salt=root(recipient, h).qb64,
+            sn=Number(numh=later.sad['n']).num, acdc=h.credential.said, states=('issued',))
+        assert derived is not None and derived.said == later.sad['b']
+        assert recipient.rgy.store.headEvent(h.registry.regk).said == later.said
+
+        # Bootstrap an independent verifier with only real public KEL/TEL evidence.
+        with ExitStack() as stack:
+            hby = stack.enter_context(openHby(name='dh-independent-receiver', version=V2))
+            hab = hby.makeHab(name='receiver')
+            rgy = Regery(hby=hby, name=hby.name, temp=True)
+            stack.callback(rgy.close)
+            cf = stack.enter_context(openCF(name=hby.name, base='test'))
+            cf.put(issuer.kvy.kramer.cf.get())
+            notifier = Notifier(hby)
+            stack.callback(notifier.noter.close, clear=True)
+            exc = Exchanger(hby=hby, handlers=[])
+            loadHandlers(hby, exc, notifier, rgy=rgy)
+            kvy = Kevery(db=hby.db, rvy=hby.rvy, exc=exc, kramer=Kramer(db=hby.db, cf=cf))
+            verifier = SimpleNamespace(hby=hby, hab=hab, rgy=rgy, exc=exc, kvy=kvy,
+                psr=Parser(version=V2, kvy=kvy, rvy=hby.rvy, exc=exc, rgy=rgy))
+            for side in h.members:
+                receive(verifier, b''.join(side.hby.db.clonePreIter(side.member.pre, gvrsn=V2)))
+                receive(side, hab.msgOwnEvent(sn=0, framed=False, gvrsn=V2))
+            for side in (issuer, recipient):
+                receive(verifier, b''.join(side.hby.db.clonePreIter(side.hab.pre, gvrsn=V2)))
+            for raw in h.registry.store.cloneTelIter(h.registry.regk):
+                event = SerderACDC(raw=raw)
+                sn, said = regeventing.vetAnchor(event, db=issuer.hby.db, issuer=issuer.hab.pre)
+                receive(verifier, messagize(event, bonds=[SealSource(s=f'{sn:x}', d=said)], gvrsn=V2))
+            assert rgy.store.headEvent(h.registry.regk).said == later.said
+
+            presentation, atc = grant(hab=recipient.hab, recp=hab.pre, message='provisioned member',
+                origin=messagize(h.credential, bonds=[derived.data], gvrsn=V2))
+            # A usable opening does not replace the group's ordinary signature threshold.
+            receive(verifier, presentation.raw + atc)
+            assert not exc.complete(presentation.said)
+            nests = [serializeParsedSubstream(nest) for nest in parsed(presentation.raw + atc).nests]
+            full = signed(presentation, [recipient, issuee], nests=nests)
+            assert root(recipient, h).qb64b not in full
+            receive(verifier, full)
+            assert exc.complete(presentation.said)
+            _, checked, verdict, observations = exc.reverifyGrant(presentation.said)
+            assert verdict.verdict == chaining.Verdicts.valid
+            assert checked[0].serder.raw == h.credential.raw
+            state = observations[h.credential.said]
+            assert (state.said, state.sn, state.state) == (later.said, 2, 'issued')
+            signatures, _ = verify(hby, presentation)
+            assert {sig.index for pre, _, _, sigers in signatures if pre.qb64 == recipient.hab.pre
+                    for sig in sigers} == {0, 1}
+            assert not list(hby.ks.rroots.getTopItemIter())
+        assert not recipient.dh._operations[h.xid]['private']
+        assert tuple(recipient.hby.db.enst.get((h.grant.said,))) == held
 
 
 def test_frozen_nonzero_custodian_is_not_reelected_by_later_signatures():
