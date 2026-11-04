@@ -909,15 +909,20 @@ class Exchanger:
             return None
         return (serder, registries) if registries else None
 
-    def lead(self, hab, said):
+    def lead(self, hab, said, *, pendingPresentation=False):
         """ Determines is current member represented by hab is the lead of an exn message
 
         Lead is the lowest verified sender signing index at its referenced
         establishment event, resolved through the member's historical contribution.
+        An explicit pending-presentation fallback requires live native context.
+        This determines election eligibility, not standalone send authorization;
+        callers must approve their complete selected disclosure scope separately.
 
         Parameters:
             hab (Hab): Habitat for sending of exchange message represented by SAID
             said (str): qb64 SAID of exchange message
+            pendingPresentation (bool): opt into an authenticated live pending
+                presentation only when no accepted exchange exists
 
         Returns:
             bool: True means hab is the lead"""
@@ -927,6 +932,14 @@ class Exchanger:
             return True
 
         serder = self.hby.db.exns.get(keys=(said,))
+        if serder is None and pendingPresentation:
+            candidate = self.hby.db.epse.get(keys=(said,))
+            if candidate is not None and candidate.pre == hab.pre:
+                context = self.presentationContext(said,
+                    xid=candidate.said if candidate.ilk == Ilks.xip else candidate.ked.get('x'),
+                    sender=candidate.pre, recipient=candidate.ked.get('ri'))
+                if context is not None:
+                    serder = candidate
         if serder is None or serder.pre != hab.pre:
             return False
         try:

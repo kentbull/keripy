@@ -19,8 +19,11 @@ parser.add_argument('--derive', action='store_true', help='authorize ordinary pr
 parser.add_argument('--message', '-m', default='')
 parser.add_argument('--proposal-output', help='exclusive-create the exact native group Grant proposal for member approval')
 parser.add_argument('--proposal', help='explicitly contribute to this exact group proposal from the selected admitted view')
+parser.add_argument('--send-proposal', action='store_true', help='group --prepare only: explicitly send coordination packets to signing members; never deliver the recipient Grant')
+parser.add_argument('--consent-lifetime', type=float, help='group --prepare only: finite original partial-Grant consent seconds, selected before first intake; never renews a retained deadline')
+parser.add_argument('--unblind-proposer', help='group --resume only: signing member selected to author the exact Unblind reply; never a transmitter election')
 stages = parser.add_mutually_exclusive_group()
-stages.add_argument('--prepare', action='store_true', help='retain one exact held-proof Grant for independent issuer endorsement; no delivery')
+stages.add_argument('--prepare', action='store_true', help='retain one exact held-proof Grant for issuer endorsement; no recipient delivery; group coordination requires --send-proposal')
 stages.add_argument('--resume', metavar='GRANT', help='resume an existing local preparation with authentication additions only')
 
 

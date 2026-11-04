@@ -71,6 +71,26 @@ preparation and unchanged live deadline before importing the endorsed frame.
 It never reconstructs a missing preparation or revives an expired Grant.
 The auditor still independently verifies current issued state before Admit.
 
+A separate discloser group uses the same exact prepare/endorse/resume sequence.
+First complete its accepted group Admit and explicitly provision the existing
+registry root to the selected member's encrypted Keeper. Each member runs
+`--prepare --send-proposal --consent-lifetime 60 --output prepared.cesr`, with
+the creator selecting `--proposal-output proposal.cesr` and contributors selecting
+`--proposal proposal.cesr`. `--send-proposal` authorizes signing-member coordination
+only; `--deliver` remains forbidden during preparation. The finite consent lifetime
+must be selected before the first partial Grant. Existing deadlines are preserved,
+and the configured KRAM original-timestamp policy still applies.
+
+Preparation exports only after ordinary group sender signatures verify; it does
+not claim credential acceptance or issuer authorization. The independent issuer
+endorses the exact aggregate Grant as above. Each member then runs `--resume` with
+that endorsed file and the same explicit `--unblind-proposer MEMBER_AID`, selecting
+the root-bearing member to author the reply. `--respond-unblind --deliver` approves
+that exact live operation. Other members verify and sign the minimum openings
+without needing a root, and native signature indices elect delivery. The installed
+story covers an individual issuer/holder, a separate 2-of-2 discloser group and a
+rootless individual auditor, preserving earlier admitted bodies and proofs.
+
 A holder group uses two finite member processes and explicit proposal consent.
 A provisioned nonlead may create the new presentation from its encrypted group
 root; DH custody does not select the presentation proposer:
