@@ -5,7 +5,7 @@ from pathlib import Path
 
 from hio.base import doing
 
-from . import evidencing, nativeanchoring, parseVersion, setupHby
+from . import evidencing, nativeanchoring, sending, parseVersion, setupHby
 from .credentialing import recipient
 from .negotiating import NativeNegotiation
 from .witnessing import witnessAuths
@@ -13,8 +13,7 @@ from ... import Kinds, Vrsn_1_0, Vrsn_2_0
 from ...acdc import Regery, Registrar, ipexing, regeventing
 from ...acdc.dhking import Dhke
 from ...app import (GroupHab, Keeper, MailboxDirector, Notifier,
-                    SignifyHab, SignifyGroupHab, StreamPoster)
-from ...app.agenting import HTTPStreamMessenger
+                    SignifyHab, SignifyGroupHab)
 from ...core import Kevery, Kramer, Parser, SealSource, SerderACDC, messagize
 from ...kering import ConfigurationError
 from ...help import nowUTC
@@ -76,31 +75,8 @@ class NativeIssuance(doing.DoDoer):
                 output.write(raw)
 
     def send(self, raw, dest, *, topic='credential'):
-        """One existing finite StreamPoster owns every actual HTTP connection."""
-        sender = self.hab.mhab if isinstance(self.hab, GroupHab) else self.hab
-        poster = StreamPoster(hby=self.hby, hab=sender, recp=dest, topic=topic,
-                              version=Vrsn_2_0, kind=Kinds.json)
-        stream = bytearray(raw)
-        while stream:
-            before = bytes(stream)
-            parsed = Parser(version=Vrsn_2_0).parseOneBare(ims=stream, processive=False)
-            consumed = len(before) - len(stream)
-            poster.send(parsed.serder, attachment=before[parsed.serder.size:consumed], gvrsn=Vrsn_2_0)
-        children = poster.deliver()
-        if not children:
-            raise ConfigurationError('no finite recipient transport was available')
-        transport = doing.DoDoer(doers=children)
-        self.extend([transport])
-        try:
-            while not transport.done:
-                self.check()
-                yield self.tock
-            self.check()
-            for child in children:
-                if isinstance(child, HTTPStreamMessenger) and not 200 <= child.rep.status < 300:
-                    raise ConfigurationError(f'HTTP submission failed with status {child.rep.status}')
-        finally:
-            self.remove([transport])
+        """Deliver selected public bytes within this command's finite lifecycle."""
+        yield from sending.send(self, raw, dest, topic=topic)
 
     def run(self, tymth, tock=0.03125, **kwa):
         self.wind(tymth)

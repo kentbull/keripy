@@ -150,44 +150,46 @@ class JoinDoer(doing.DoDoer):
 
         print("Waiting for group multisig events...")
 
-        while self.notifier.noter.notes.cnt() == 0:
-            yield self.tock
+        processed = False
+        while not processed:
+            for keys, notice in self.notifier.noter.notes.getTopItemIter():
+                attrs = notice.attrs
+                route = attrs['r']
 
-        for keys, notice in self.notifier.noter.notes.getTopItemIter():
-            attrs = notice.attrs
-            route = attrs['r']
+                match route:
+                    case '/multisig/icp':
+                        done = yield from self.incept(attrs)
+                    case '/multisig/ixn':
+                        done = yield from self.interact(attrs)
+                    case '/multisig/rot':
+                        done = yield from self.rotate(attrs)
+                    case '/multisig/rpy':
+                        done = yield from self.rpy(attrs)
+                    case '/multisig/rip':
+                        done = yield from self.rip(attrs)
+                    case '/multisig/bup':
+                        done = yield from self.bup(attrs)
+                    case '/multisig/vcp':
+                        done = yield from self.vcp(attrs)
+                    case '/multisig/iss':
+                        done = yield from self.iss(attrs)
+                    case '/multisig/rev':
+                        done = yield from self.rev(attrs)
+                    case _:
+                        continue
 
-            match route:
-                case '/multisig/icp':
-                    done = yield from self.incept(attrs)
-                case '/multisig/ixn':
-                    done = yield from self.interact(attrs)
-                case '/multisig/rot':
-                    done = yield from self.rotate(attrs)
-                case '/multisig/rpy':
-                    done = yield from self.rpy(attrs)
-                case '/multisig/rip':
-                    done = yield from self.rip(attrs)
-                case '/multisig/bup':
-                    done = yield from self.bup(attrs)
-                case '/multisig/vcp':
-                    done = yield from self.vcp(attrs)
-                case '/multisig/iss':
-                    done = yield from self.iss(attrs)
-                case '/multisig/rev':
-                    done = yield from self.rev(attrs)
-                case _:
-                    continue
-
-            if done:
-                self.notifier.noter.notes.rem(keys=keys)
-
-            else:
-                delete = input(f"\nDelete event [Y|n]? ")
-                if delete in ("Y", "y"):
+                processed = True
+                if done:
                     self.notifier.noter.notes.rem(keys=keys)
 
-            yield self.tock
+                else:
+                    delete = input(f"\nDelete event [Y|n]? ")
+                    if delete in ("Y", "y"):
+                        self.notifier.noter.notes.rem(keys=keys)
+
+                yield self.tock
+            if not processed:
+                yield self.tock
 
         self.remove(self.toRemove)
 
