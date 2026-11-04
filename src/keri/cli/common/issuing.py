@@ -34,7 +34,8 @@ def legacy(args):
     if (args.input or args.output or args.deliver or args.timeout != 120.0
             or any(getattr(args, field, None) for field in
                    ('credential', 'prior', 'issue', 'authenticate', 'code', 'code_time', 'unblind',
-                    'evidence_url', 'evidence_ca', 'evidence_hostname', 'coordinator', 'custodian'))):
+                    'evidence_url', 'evidence_ca', 'evidence_hostname', 'coordinator', 'custodian',
+                    'unblind_proposer'))):
         raise ConfigurationError('native issuance options require --version 2.0')
 
 
