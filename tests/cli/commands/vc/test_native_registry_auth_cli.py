@@ -1,9 +1,14 @@
 """Witness-code option refusals must precede native registry and KEL mutation."""
+import pytest
+
 from keri import Vrsn_2_0
 from keri.acdc import Regery
 from keri.cli.common import setupHby
 
 from tests.cli.commands.vc.test_native_registry_cli import create_issuer, kli
+
+
+pytestmark = pytest.mark.real_store_roots
 
 
 def test_native_witness_options_refuse_bad_scope_before_authoring(tmp_path):
