@@ -179,9 +179,9 @@ class NativePresentation(NativeIssuance):
         if (prepare or self.verb == 'endorse') and (not args.output or args.deliver):
             raise ConfigurationError('preparation and endorsement require --output without --deliver')
         if staged and (getattr(args, 'refresh', False) or getattr(args, 'derive', False)
-                       or getattr(args, 'opening', None) or getattr(args, 'proposal', None)
-                       or getattr(args, 'proposal_output', None)):
-            raise ConfigurationError('prepare/endorse/resume preserve held proofs; refresh and group proposal options are unsupported')
+                       or getattr(args, 'opening', None)
+                       or not prepare and (getattr(args, 'proposal', None) or getattr(args, 'proposal_output', None))):
+            raise ConfigurationError('prepare/endorse/resume preserve held proofs; proposal options require group --prepare')
         if prepare and args.respond_unblind or resume and not args.respond_unblind:
             raise ConfigurationError('--prepare cannot approve Unblind; --resume requires --respond-unblind')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -203,8 +203,15 @@ class NativePresentation(NativeIssuance):
                     or isinstance(self.hab, (SignifyHab, SignifyGroupHab))):
                 raise ConfigurationError('presentation requires an accepted local signer')
             group = isinstance(self.hab, GroupHab)
-            if staged and group:
-                raise ConfigurationError('prepare/endorse/resume require an individual local signer')
+            if self.verb == 'endorse' and group:
+                raise ConfigurationError('independent endorsement requires an individual registry issuer')
+            sendProposal, consent = getattr(args, 'send_proposal', False), getattr(args, 'consent_lifetime', None)
+            if (sendProposal or consent is not None) and not (group and prepare):
+                raise ConfigurationError('--send-proposal and --consent-lifetime require group --prepare')
+            if group and prepare and (not sendProposal or consent is None or not math.isfinite(consent) or consent <= 0):
+                raise ConfigurationError('group --prepare requires --send-proposal and finite positive --consent-lifetime')
+            if group and self.verb == 'present' and bool(getattr(args, 'unblind_proposer', None)) != bool(resume):
+                raise ConfigurationError('group --resume requires explicit --unblind-proposer; other presentation modes forbid it')
             if group and evidenceSource is not None:
                 raise ConfigurationError('group signed observer acquisition is outside this presentation profile')
             if not group and getattr(args, 'unblind_proposer', None):
@@ -214,6 +221,8 @@ class NativePresentation(NativeIssuance):
             self.rgy = Regery(hby=self.hby, name=args.name, base=args.base)
             notifier = Notifier(self.hby)
             self.exc = Exchanger(hby=self.hby, handlers=[])
+            if group and prepare:
+                self.exc.TimeoutPSE = consent  # Before first partial intake; existing epsd rows are never renewed.
             ipexing.loadHandlers(self.hby, self.exc, notifier, rgy=self.rgy)
             self.unblind = Unblind(self.hab, self.exc, self.rgy, states=('issued', 'revoked', ''))
             if self.unblind is not None:
@@ -237,8 +246,27 @@ class NativePresentation(NativeIssuance):
                 background.append(mbx)
                 self.extend(background)
                 if self.verb == 'present':
-                    from .grouppresenting import GroupPresentation
-                    yield from GroupPresentation(self, notifier).run()
+                    if resume:
+                        from .disclosing import SelectedPreparation
+                        from .groupunblinding import GroupUnblind
+                        selection = SelectedPreparation(self)
+                        message, endorsed, operation = selection.resume()
+                        # resume's exact all-node context check authorizes scope; lead only elects delivery.
+                        transmitted = self.exc.lead(self.hab, message.said, pendingPresentation=True)
+                        # Native approve rechecks the existing identical live Grant; it never recreates consent.
+                        coordination = GroupUnblind(self, message, args.unblind_proposer, notifier)
+                        raw = bytes(self.hab.replay(gvrsn=Vrsn_2_0)) + endorsed
+                        self.record(raw, initial=True)
+                        if transmitted:
+                            yield from self.send(raw, selection.recipient)
+                        print(json.dumps(dict(grant=message.said, xid=xid(message), phase='group_resumed',
+                                              transmitted=transmitted)), flush=True)
+                        response = yield from coordination.respond()
+                        print(json.dumps(dict(grant=message.said, xid=xid(message), admit=response.said,
+                                              admitted=True, transmitted=transmitted)), flush=True)
+                    else:
+                        from .grouppresenting import GroupPresentation
+                        yield from GroupPresentation(self, notifier).run()
                 else:
                     from .groupunblinding import GroupUnblind
                     message = self.hby.db.exns.get((args.said,)) or self.hby.db.epse.get((args.said,))

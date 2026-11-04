@@ -100,12 +100,16 @@ class SelectedPreparation:
         self.owner.check()
         return item, deadline.dts
 
-    def prepare(self):
+    def checkSource(self):
+        """Allow missing current openings, never a known invalid admitted view."""
         _, _, verdict, records = self.owner.exc.reverifyGrant(self.source.said)
         if (not (verdict.verdict == chaining.Verdicts.valid
                  or verdict.verdict == chaining.Verdicts.unknown and verdict.retryable)
                 or any(record.state != 'issued' for record in records.values())):
             raise ConfigurationError('preparation requires issued state or retryable unknown current evidence')
+
+    def prepare(self):
+        self.checkSource()
         streams = [serializeParsedSubstream(node) for node in self.nests]
         message, atc = ipexing.grant(self.owner.hab, recp=self.recipient, message=self.args.message,
             origin=streams[0], artifacts=streams[1:] or None, modifiers=dict(dp=self.plan),
