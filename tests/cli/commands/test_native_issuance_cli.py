@@ -370,7 +370,7 @@ def issuer_group(tmp_path, live_parties):
     return issuers, holder, coordinator, bodyfile
 
 
-def test_installed_group_issuer_exact_grant_query_and_bup_join(tmp_path, live_parties):
+def group_issuer_issue(tmp_path, live_parties):
     issuers, holder, coordinator, bodyfile = issuer_group(tmp_path, live_parties)
     lead, peer = issuers
     body = SerderACDC(raw=bodyfile.read_bytes())
@@ -497,6 +497,13 @@ def test_installed_group_issuer_exact_grant_query_and_bup_join(tmp_path, live_pa
     assert len(queries) == 2 and len({raw for raw, _ in queries}) == 1
     assert set.union(*(indices for _, indices in queries)) == {0, 1}
     assert all(roots[0].encode() not in path.read_bytes() for path in (proposal, grantfile))
+
+
+    return issuers, holder, body, selected
+
+
+def test_installed_group_issuer_exact_grant_query_and_bup_join(tmp_path, live_parties):
+    group_issuer_issue(tmp_path, live_parties)
 
 
 def test_group_issuer_expired_consent_cannot_be_renewed(tmp_path, live_parties):

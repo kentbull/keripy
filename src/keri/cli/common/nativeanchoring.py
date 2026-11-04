@@ -37,7 +37,7 @@ def anchor(owner, registry, event, auths, background):
     return signed
 
 
-def groupAnchor(owner, registry, event, mux, background, *, grant):
+def groupAnchor(owner, registry, event, mux, background, *, grant=None):
     """Propose one BUP; existing join, Multiplexor and Counselor own approval."""
     from ...app import Counselor, multisigBupExn
     from ...core import SealSource, messagize
@@ -61,8 +61,10 @@ def groupAnchor(owner, registry, event, mux, background, *, grant):
         if member != owner.hab.mhab.pre:
             yield from owner.send(proposal.raw + atc, member, topic='multisig')
     import json
-    print(json.dumps(dict(grant=grant, phase='group_bup_proposed',
-                          registry=registry.regk, bup=event.said, anchor=anchor.said)), flush=True)
+    result = dict(phase='group_bup_proposed', registry=registry.regk, bup=event.said, anchor=anchor.said)
+    if grant is not None:
+        result['grant'] = grant
+    print(json.dumps(result), flush=True)
     while True:
         owner.check()
         mux.kvy.processEscrows()
