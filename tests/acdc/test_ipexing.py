@@ -8298,7 +8298,7 @@ def test_ipex_v2_presentation_registry_binds_proxy_grant():
             # A trailing vacuous update preserves the latest non-vacuous binding
             # and therefore requires its own proof alongside the presentation.
             vacuousProof, vacuous = registrar.vacate(presentationRegistry)
-            _anchor(issuee, presentationRegistry, vacuous)
+            vacuousAnchor = _anchor(issuee, presentationRegistry, vacuous)
 
             recorder = Recorder()
             exc = Exchanger(hby=hby, handlers=[])
@@ -8343,6 +8343,74 @@ def test_ipex_v2_presentation_registry_binds_proxy_grant():
                                  nests=[_nest(node)],
                                  framed=False,
                                  gvrsn=Vrsn_2_0)
+
+            # An independent receiver can know the Issuee's accepted source
+            # KEL before the presentation BUPs arrive from its TEL service.
+            with (openHby(name="ipex-v2-presentation-receiver", base="test",
+                          version=Vrsn_2_0) as receiver,
+                  openCF(name="ipex-v2-presentation-receiver", base="test") as cf):
+                cf.put(dict(kram=dict(enabled=True, denials=[], caches={
+                    '~': [1000, 5000, 60000, 300000, 5000, 60000, 300000]})))
+                receiverRgy = Regery(hby=receiver, temp=True)
+                try:
+                    receiverExc = Exchanger(hby=receiver, handlers=[])
+                    loadHandlers(receiver, receiverExc, Recorder(), rgy=receiverRgy)
+                    receiverKvy = Kevery(db=receiver.db, rvy=receiver.rvy,
+                        exc=receiverExc, cf=cf, enableKram=True, lax=False, local=False)
+                    parser = Parser(version=Vrsn_2_0, kvy=receiverKvy, rvy=receiver.rvy,
+                                    exc=receiverExc, rgy=receiverRgy)
+                    for hab in (issuer, issuee, proxy, recipient):
+                        parser.parse(ims=hab.replay(gvrsn=Vrsn_2_0), framed=False)
+                    empty = Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b
+                    for raw in rgy.store.cloneTelIter(issuerRegistry.regk):
+                        parser.parse(ims=bytearray(raw + empty), framed=False)
+                    presentationTel = [raw + empty for raw in
+                        rgy.store.cloneTelIter(presentationRegistry.regk)]
+                    parser.parse(ims=bytearray(presentationTel[0]), framed=False)
+                    assert receiverRgy.store.headEvent(presentationRegistry.regk).ilk == 'rip'
+                    bothSources = _proofed(acdc, issuerProof, presentationProof, vacuousProof,
+                        anchors=[(issuee, presentedAnchor), (issuee, vacuousAnchor)])
+                    waiting = messagize(grantExn, tsgs=[senderTsg], nests=[_nest(bothSources)],
+                                        framed=False, gvrsn=Vrsn_2_0)
+                    parser.parse(ims=bytearray(waiting), framed=False)
+                    assert receiver.db.exns.get((grantExn.said,)) is None
+                    assert receiver.db.epse.get((grantExn.said,)).raw == grantExn.raw
+                    retained = receiver.db.enst.get((grantExn.said,))
+                    deadline = receiver.db.epsd.get((grantExn.said,)).dts
+                    cache = receiver.db.kramTMSC.get((proxy.pre, grantExn.said, grantExn.said))
+                    assert cache is not None
+                    receiverExc.processEscrow()
+                    receiverExc.processEscrow()
+                    assert receiver.db.epse.get((grantExn.said,)).raw == grantExn.raw
+                    assert receiver.db.enst.get((grantExn.said,)) == retained
+                    assert receiver.db.epsd.get((grantExn.said,)).dts == deadline
+                    assert receiver.db.kramTMSC.get((proxy.pre, grantExn.said, grantExn.said)) == cache
+
+                    # An older matching source must not hide a later missing body.
+                    parser.parse(ims=bytearray(presentationTel[1]), framed=False)
+                    receiverExc.processEscrow()
+                    assert receiver.db.epse.get((grantExn.said,)) is not None
+                    assert receiver.db.epsd.get((grantExn.said,)).dts == deadline
+                    parser.parse(ims=bytearray(presentationTel[2]), framed=False)
+                    receiverExc.processEscrow()
+                    assert receiver.db.exns.get((grantExn.said,)).raw == grantExn.raw
+                    assert receiver.db.epse.get((grantExn.said,)) is None
+                    assert receiver.db.enst.get((grantExn.said,)) == retained
+                    assert receiver.db.kramTMSC.get((proxy.pre, grantExn.said, grantExn.said)) == cache
+
+                    # A known same-sequence conflict is refusal, not missing TEL.
+                    conflict = _serder(issuee.interact(data=[dict(
+                        i=presentationRegistry.regk, s=vacuous.sad['n'],
+                        d=Diger(ser=b'conflicting presentation body').qb64)],
+                        framed=False, gvrsn=Vrsn_2_0))
+                    parser.parse(ims=issuee.replay(gvrsn=Vrsn_2_0), framed=False)
+                    assert receiverExc.routes['/ipex/grant']._vetRegistry(
+                        regk=presentationRegistry.regk, proofs=[presentationProof, vacuousProof],
+                        target=grantExn.said, controller=issuee.pre, cutoff=cache.rdt,
+                        sourceSeals=[(issuee.kever.prefixer, Number(num=conflict.sn),
+                                      Diger(qb64=conflict.said))], requireSource=True) is None
+                finally:
+                    receiverRgy.close()
 
             directAnchor = proxy.interact(
                 data=[dict(d=grantExn.said)],

@@ -2211,13 +2211,20 @@ class IpexHandler:
         if not proofs or (evidence := self._registryEvidence(regk)) is None:
             return None
 
+        # Missing-body acquisition may rely only on this registry's controller.
+        if requireSource and (evidence[0].said != regk or evidence[0].israid != controller):
+            return None
+
         # Import lazily to avoid the ACDC module cycle.
         from . import regeventing
         try:
             # Resolve node-local source triples into exact TEL anchor claims.
             sources = {}
             unresolved = False
+            missingTel = False
             if requireSource:
+                head = evidence[1][-1] if evidence[1] else evidence[0]
+                headNumber = Number(numh=head.sad["n"]).num
                 for prefixer, number, diger in sourceSeals or []:
                     if prefixer.qb64 != controller:
                         continue
@@ -2240,6 +2247,24 @@ class IpexHandler:
                         unresolved = True
                         continue
 
+                    # A verified source can precede retrieval of its sealed TEL
+                    # body. Only an exact canonical full seal above the accepted
+                    # (unfiltered) head establishes that missing dependency.
+                    if event.said == diger.qb64 and self.hby.db.fullyWitnessed(event):
+                        for seal in event.sad.get("a", []):
+                            if (not isinstance(seal, Mapping) or set(seal) != {"i", "s", "d"}
+                                    or seal["i"] != regk or not isinstance(seal["s"], str)
+                                    or not isinstance(seal["d"], str)):
+                                continue
+                            try:
+                                sequence = Number(numh=seal["s"])
+                                digest = Diger(qb64=seal["d"])
+                            except (KeriError, ValueError, TypeError):
+                                continue
+                            if (sequence.numh == seal["s"] and digest.qb64 == seal["d"]
+                                    and sequence.num > headNumber):
+                                missingTel = True
+
                     # Match the source only to TEL events it actually seals.
                     for update in evidence[1]:
                         if regeventing._verifyAnchorCouple(
@@ -2249,6 +2274,9 @@ class IpexHandler:
                                 number=number,
                                 diger=diger):
                             sources[update.said] = diger.qb64
+
+                if missingTel:
+                    raise MissingChainError(f"registry {regk} is missing source-anchored TEL evidence")
 
                 # An unavailable attached source is retryable after KEL retrieval.
                 if not sources and unresolved:
