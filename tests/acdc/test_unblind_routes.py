@@ -8,6 +8,7 @@ import pytest
 
 from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, admit, agree, blindate, chaining, grant, loadHandlers, offer
+from keri.acdc.salting import RegistrySalt
 from keri.acdc.unblinding import Unblind
 from keri.app import openCF, openHby
 from keri.core import (Blinder, BlindState, BoundState, Diger, Kevery, Kramer, Labeler, Number, Parser,
@@ -41,11 +42,11 @@ def transfer(issuer, recipients, registry, event):
 
 
 @contextmanager
-def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDirPath=None):
-    """Explicit test capability only; no provisioning protocol is claimed."""
+def actors(names, *, enabled=False, headDirPath=None):
+    """Bootstrap independent encrypted two-key actors through real KEL intake."""
     with ExitStack() as stack:
         sides = []
-        for number, name in enumerate(('issuer', 'holder', 'verifier'), 1):
+        for number, name in enumerate(names, 1):
             signer = Signer(raw=bytes([number]) * 32, transferable=False)
             hby = stack.enter_context(openHby(name=f'unblind-{name}', base='test', version=V2,
                 temp=headDirPath is None, headDirPath=headDirPath,
@@ -67,12 +68,20 @@ def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDir
             psr = Parser(version=V2, kvy=kvy, exc=exc, rvy=hby.rvy, rgy=rgy)
             sides.append(SimpleNamespace(hby=hby, hab=hab, rgy=rgy, exc=exc,
                                           route=route, kvy=kvy, psr=psr))
-        issuer, holder, verifier = sides
         for side in sides:
             for other in sides:
                 if side is not other:
                     receive(side, other.hab.msgOwnEvent(sn=0, framed=False, gvrsn=V2))
                     assert side.hby.db.kevers[other.hab.pre].sn == 0
+        yield sides
+
+
+@contextmanager
+def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDirPath=None):
+    """Explicit test capability only; no provisioning protocol is claimed."""
+    with actors(('issuer', 'holder', 'verifier'), enabled=enabled,
+                headDirPath=headDirPath) as sides:
+        issuer, holder, verifier = sides
         if bound:
             kel = holder.hab.interact(data=[], framed=False, gvrsn=V2)
             for side in (issuer, verifier):
@@ -145,6 +154,123 @@ def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDir
         yield SimpleNamespace(issuer=issuer, holder=holder, verifier=verifier,
             registry=registry, credential=credential, grant=message, xid=xid, root=root,
             proofs=proofs, events=events, later_tel=later_tel, issuance=issued)
+
+
+def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admitted_proofs():
+    with actors(('issuer', 'holder', 'discloser', 'verifier'), enabled=True) as sides:
+        issuer, holder, discloser, verifier = sides
+        assert verifier.kvy.kramer.enabled
+
+        # Issue BUP1 with a root held only by the issuer; every recipient verifies public TEL.
+        registrar = Registrar(issuer.rgy)
+        registry = registrar.makeRegistry('states', issuer.hab.pre)
+        transfer(issuer, sides[1:], registry, issuer.rgy.store.event(registry.regk))
+        root = Salter(raw=b'public-test-root')
+        issuer.hab.mgr.putRegistryRoot(issuer.hab.pre, registry.regk, root)
+        credential = acdcmap(israid=issuer.hab.pre, iseaid=holder.hab.pre,
+                              regid=registry.regk, attribute=dict(d='', role='member'))
+        first, event1 = registrar.issue(registry, credential, state='issued', salt=root.qb64)
+        transfer(issuer, sides[1:], registry, event1)
+        for side in sides[1:]:
+            assert side.hab.mgr.getRegistryRoot(side.hab.pre, registry.regk) is None
+
+        # Two actual Grant/Admit hops retain the BUP1 proof under each exact admitted Grant.
+        origin = messagize(credential, bonds=[first.data], gvrsn=V2)
+        issued, atc = grant(issuer.hab, holder.hab.pre, 'issue', origin=origin)
+        for side in (issuer, holder):
+            receive(side, issued.raw + atc)
+            assert side.exc.complete(issued.said)
+        admitted, atc = admit(holder.hab, 'received', issued)
+        for side in (issuer, holder):
+            receive(side, admitted.raw + atc)
+            assert side.exc.complete(admitted.said)
+        held = bytes(serializeParsedSubstream(loadParsedNestedSubstreams(holder.hby, issued.said)[0]))
+        forwarded, atc = grant(holder.hab, discloser.hab.pre, 'delegate disclosure', origin=held)
+        for side in (holder, discloser):
+            receive(side, forwarded.raw + atc)
+            assert side.exc.complete(forwarded.said)
+        admitted, atc = admit(discloser.hab, 'received', forwarded)
+        for side in (holder, discloser):
+            receive(side, admitted.raw + atc)
+            assert side.exc.complete(admitted.said)
+        selected = loadParsedNestedSubstreams(discloser.hby, forwarded.said)[0]
+        disclosed = bytes(serializeParsedSubstream(selected))
+        assert disclosed == held
+        snapshots = [(holder, issued.said, held), (discloser, forwarded.said, disclosed)]
+
+        # Native RegistrySalt copies the root to the discloser's encrypted Keeper only.
+        sender = RegistrySalt(issuer.hab, issuer.rgy)
+        recipient = RegistrySalt(discloser.hab, discloser.rgy)
+        discloser.hby.rtr.addRoute(RegistrySalt.Route, recipient, attachments=True)
+        opening = Blinder(data=BlindState(*selected.bsqs[0]), verify=False)
+        recipient.approve(registry.regk, issuer.hab.pre, event=event1.said, opening=opening)
+        root_copy = sender.prepare(registry.regk, discloser.hab.pre, discloser.hab.pre)
+        assert root.qb64b not in root_copy
+        receive(discloser, root_copy)
+        assert discloser.hab.mgr.getRegistryRoot(discloser.hab.pre, registry.regk).qb64 == root.qb64
+        cipher = discloser.hab.mgr.ks.rroots.get((discloser.hab.pre, registry.regk))
+        assert cipher.qb64 != root.qb64
+        for side in (holder, verifier):
+            assert side.hab.mgr.getRegistryRoot(side.hab.pre, registry.regk) is None
+
+        # The verifier learns BUP2; the discloser still presents the exact BUP1 child bytes.
+        second, event2 = registrar.issue(registry, credential, state='issued', salt=root.qb64)
+        kel, _ = transfer(issuer, (verifier,), registry, event2)
+        receive(discloser, kel)
+        message, atc = grant(discloser.hab, verifier.hab.pre, 'present', origin=disclosed)
+        original = parsed(message.raw + atc)
+        # Match native authoring: self-authored bytes use the protected Habery owner.
+        # Remote delivery still uses each actor's separate KRAM-enabled Kevery.
+        local = Parser(version=V2, kvy=discloser.hby.kvy, exc=discloser.exc,
+                       rvy=discloser.hby.rvy, rgy=discloser.rgy, local=True)
+        local.parse(ims=bytearray(message.raw + atc), framed=False)
+        assert discloser.exc.complete(message.said)
+        deadline = discloser.hby.db.epsd.get((message.said,)).dts
+        with pytest.raises(ValidationError):
+            discloser.route.approve(message.said)
+
+        # A foreign Habery signs the same body independently; ordinary intake verifies both TSGs.
+        endorsement = parsed(issuer.hab.endorse(message, gvrsn=V2))
+        assert endorsement.serder.raw == original.serder.raw == message.raw
+        original.tsgs.extend(endorsement.tsgs)
+        authorized = bytes(serializeParsedSubstream(original))
+        local.parse(ims=bytearray(authorized), framed=False)
+        assert discloser.hby.db.epsd.get((message.said,)).dts == deadline
+        # Register the final outbound frame with its conversation owner before delivery.
+        receive(discloser, authorized)
+        assert discloser.hby.db.epsd.get((message.said,)).dts == deadline
+        receive(verifier, authorized)  # First remote delivery already carries issuer consent.
+        assert verifier.hby.db.epse.get((message.said,)).raw == message.raw
+        assert verifier.hby.db.exns.get((message.said,)) is None
+        for side in (discloser, verifier):
+            xid = side.route.approve(message.said)
+        assert discloser.rgy.store.headEvent(registry.regk).said == event1.said
+        assert discloser.rgy.store.opening(event2.said) is None
+
+        # Unblind requests and returns BUP2 alone, deriving it without transferring the root.
+        query = verifier.route.start(message.said)
+        assert parsed(query).serder.sad['q']['re'] == {registry.regk: [event2.said]}
+        receive(discloser, query)
+        response = discloser.route.cues.popleft()['msg']
+        reply = parsed(response)
+        assert reply.serder.sad['a']['re'] == {registry.regk: [event2.said]}
+        assert not reply.nests and not reply.bsss and len(reply.bsqs) == 1
+        assert Blinder(data=BlindState(*reply.bsqs[0]), verify=False).qb64 == second.qb64
+        assert root.qb64b not in response and first.qb64b not in response
+        receive(verifier, response)
+        assert verifier.route.finish(xid) is True
+        body, _, verdict, records = verifier.exc.reverifyGrant(message.said)
+        assert body.raw == message.raw and verdict.verdict == chaining.Verdicts.valid
+        assert records[credential.said].state == 'issued'
+        assert records[credential.said].said == event2.said
+        admission, atc = admit(verifier.hab, 'received', message)
+        for side in (discloser, verifier):
+            receive(side, admission.raw + atc)
+            assert side.exc.complete(admission.said), side.hab.name
+        for side, said, proof in snapshots:
+            assert bytes(serializeParsedSubstream(loadParsedNestedSubstreams(side.hby, said)[0])) == proof
+        for side in (holder, verifier):
+            assert side.hab.mgr.getRegistryRoot(side.hab.pre, registry.regk) is None
 
 
 @pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
