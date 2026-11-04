@@ -114,7 +114,19 @@ retains the established root until separate explicit member provisioning. Choose
 the original conversation policy before the first partial Grant; neither another
 member nor a longer command timeout renews it. The installed two-member-per-party
 case covers this issuance composition through witnessed BUP and group Admit;
-independent accepted rotations remain separate qualification work.
+an additional installed case performs a later fresh issuance after the issuer
+and holder independently accept their member and group rotations.
+
+For that rotation profile, first complete the local member rotations with
+`kli rotate --version 2.0 --receipt-endpoint` and make their signed, witnessed
+public KELs available to the other members. Then use `kli multisig rotate
+--version 2.0` and the other member's `kli multisig join --version 2.0` to approve
+the exact native group rotation. The existing group signature and next-key
+thresholds and witness receipts still decide acceptance. Each party selects its
+own accepted post-rotation coordinator event and existing elected custodian for
+the later transaction. A fresh registry starts new DH; the old roots, admitted
+messages and held proofs remain unchanged. Rotation does not reopen the original
+issuance or recover its discarded ephemeral keys.
 
 Optionally require a configured observer to supply the selected registry's
 public evidence before Admit:

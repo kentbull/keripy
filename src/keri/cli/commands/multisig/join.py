@@ -539,8 +539,18 @@ class JoinDoer(doing.DoDoer):
         rmids = payload["rmids"]
         ked = exn.ked
 
-        embeds = ked['e']
-        orot = SerderKERI(sad=embeds["rot"])
+        native = exn.pvrsn == Vrsn_2_0
+        if native:
+            if self.rgyV2 is None:
+                raise ConfigurationError('native group rotation approval requires --version 2.0')
+            children = loadParsedNestedSubstreams(self.hby, said)
+            self.mux.validate(exn, nests=children)
+            orot = children[0].serder
+            if orot.pre != payload['gid']:
+                raise ValidationError('native rotation child does not match its selected group')
+        else:
+            embeds = ked['e']
+            orot = SerderKERI(sad=embeds["rot"])
 
         both = list(set(smids + (rmids or [])))
 
@@ -585,25 +595,33 @@ class JoinDoer(doing.DoDoer):
                 ghab = self.hby.joinGroupHab(pre, group=group, mhab=mhab, smids=smids, rmids=rmids)
 
             try:
-                ghab.rotate(serder=orot, smids=smids, rmids=rmids, framed=True, gvrsn=orot.pvrsn)
+                ghab.rotate(serder=orot, smids=smids, rmids=rmids, framed=True,
+                            gvrsn=Vrsn_2_0 if native else orot.pvrsn)
             except ValueError:
                 return False
 
-            rot = ghab.msgOwnEvent(allowPartiallySigned=True, sn=orot.sn, gvrsn=orot.pvrsn)
+            rot = ghab.msgOwnEvent(allowPartiallySigned=True, sn=orot.sn,
+                                  gvrsn=Vrsn_2_0 if native else orot.pvrsn)
 
             exn, ims = multisigRotateExn(ghab,
                                          smids=ghab.smids,
                                          rmids=ghab.rmids,
                                          rot=rot,
-                                         version=Vrsn_1_0,
+                                         version=Vrsn_2_0 if native else Vrsn_1_0,
+                                         gvrsn=Vrsn_2_0 if native else orot.pvrsn,
                                          kind=orot.kind)
-            local = Parser(version=exn.pvrsn).parse(ims=bytearray(exn.raw + ims),
+            if native:
+                self.psr.parse(ims=bytearray(exn.raw + ims), local=True)
+                if not self.exc.complete(exn.said):
+                    raise ValidationError('native rotation approval did not authenticate local consent')
+            else:
+                local = Parser(version=exn.pvrsn).parse(ims=bytearray(exn.raw + ims),
                                                     framed=True,
                                                     processive=False)[0]
-            self.mux.exc.logEvent(serder=local.serder, pathed=local.ptds,
+                self.mux.exc.logEvent(serder=local.serder, pathed=local.ptds,
                                   tsgs=local.tsgs, cigars=local.cigars,
                                   essrs=local.essrs)
-            self.mux.add(local.serder)
+                self.mux.add(local.serder)
             others = list(oset(smids + (rmids or [])))
 
             others.remove(ghab.mhab.pre)
@@ -613,7 +631,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims, stream=native)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock

@@ -13,15 +13,16 @@ from hio.help import ogler
 from ...common import (Parsery, config, addRotationArgs,
                        setupHby, printIdentifier, parseVersion)
 
-from ....kering import ConfigurationError, Kinds, Vrsn_1_0
+from ....kering import ConfigurationError, Kinds, Vrsn_1_0, Vrsn_2_0
 from ....app import (Notifier, Multiplexor, Counselor,
                      MailboxDirector, HaberyDoer, Poster,
                      multisigRotateExn)
 from ....app.grouping import loadHandlers
 
-from ....core import Prefixer, Number, Diger, SerderKERI, Parser
+from ....core import Prefixer, Number, Diger, SerderKERI, Parser, Kevery, Kramer
 from ....db import dgKey
 from ....peer import Exchanger
+from ....acdc import Regery, ipexing
 
 
 logger = ogler.getLogger()
@@ -93,15 +94,27 @@ class GroupMultisigRotate(doing.DoDoer):
         self.adds = adds if adds is not None else []
 
         self.hbyDoer = HaberyDoer(habery=self.hby)  # setup doer
+        self.rgy = (Regery(hby=self.hby, name=self.hby.name, base=self.hby.base)
+                    if version == Vrsn_2_0 else None)
         notifier = Notifier(self.hby)
-        mux = Multiplexor(self.hby, notifier=notifier)
+        mux = Multiplexor(self.hby, notifier=notifier, rgy=self.rgy)
         self.mux = mux
         exc = Exchanger(hby=self.hby, handlers=[])
         loadHandlers(exc, mux)
+        if self.rgy is not None:
+            # Rotation must not turn retained pending Grants into signature-only acceptance.
+            ipexing.loadHandlers(self.hby, exc, notifier, rgy=self.rgy)
 
         kwa = dict(version=version, gvrsn=version, kind=Kinds.json) if version is not None else {}
+        if self.rgy is not None:
+            kwa.update(rvy=self.hby.rvy, kvy=Kevery(db=self.hby.db, rvy=self.hby.rvy,
+                exc=exc, lax=True, local=False, direct=False,
+                kramer=Kramer(db=self.hby.db, cf=self.hby.cf)))
         mbd = MailboxDirector(hby=self.hby, topics=['/receipt', '/multisig', '/replay'], exc=exc,
-                              **kwa)
+                              rgy=self.rgy, **kwa)
+        self.psr = mbd.parser
+        if self.rgy is not None:
+            self.mux.replay = self.psr
         self.counselor = Counselor(hby=self.hby, version=version, kind=Kinds.json)
         self.postman = Poster(hby=self.hby, version=version, kind=Kinds.json)
 
@@ -111,6 +124,14 @@ class GroupMultisigRotate(doing.DoDoer):
         doers.extend([doing.doify(self.rotateDo)])
 
         super(GroupMultisigRotate, self).__init__(doers=doers)
+
+    def exit(self, deeds=None):
+        try:
+            super().exit(deeds=deeds)
+        finally:
+            if deeds is None and self.rgy is not None:
+                self.rgy.close()
+                self.mux.notifier.noter.close()
 
     def rotateDo(self, tymth, tock=0.0, **opts):
         """ Create or participate in an rotation event for a distributed multisig identifier
@@ -219,15 +240,20 @@ class GroupMultisigRotate(doing.DoDoer):
                                      smids=smids,
                                      rmids=rmids,
                                      rot=bytearray(rot),
-                                     version=Vrsn_1_0,
+                                     version=Vrsn_2_0 if self.rgy is not None else Vrsn_1_0,
                                      kind=Kinds.json)
-        local = Parser(version=exn.pvrsn).parse(ims=bytearray(exn.raw + ims),
+        if self.rgy is not None:
+            self.psr.parse(ims=bytearray(exn.raw + ims), local=True)
+            if not self.psr.exc.complete(exn.said):
+                raise ConfigurationError('native rotation proposal did not authenticate local consent')
+        else:
+            local = Parser(version=exn.pvrsn).parse(ims=bytearray(exn.raw + ims),
                                                 framed=True,
                                                 processive=False)[0]
-        self.mux.exc.logEvent(serder=local.serder, pathed=local.ptds,
+            self.mux.exc.logEvent(serder=local.serder, pathed=local.ptds,
                               tsgs=local.tsgs, cigars=local.cigars,
                               essrs=local.essrs)
-        self.mux.add(local.serder)
+            self.mux.add(local.serder)
         others = list(oset(smids + (rmids or [])))
 
         others.remove(ghab.mhab.pre)
@@ -237,11 +263,13 @@ class GroupMultisigRotate(doing.DoDoer):
                               dest=recpt,
                               topic="multisig",
                               serder=exn,
-                              attachment=bytearray(ims))
+                              attachment=bytearray(ims), stream=self.rgy is not None)
 
         self.counselor.start(ghab=ghab, prefixer=prefixer, number=number, diger=Diger(qb64=rserder.said))
 
         while True:
+            if self.rgy is not None:
+                self.mux.kvy.processEscrows()
             saider = self.hby.db.cgms.get(keys=(ghab.pre, number.qb64))
             if saider is not None:
                 break

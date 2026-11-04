@@ -1,4 +1,5 @@
 """Installed bilateral issuance with two independently encrypted 2-of-2 groups."""
+import hashlib
 import json
 import shutil
 import subprocess
@@ -23,7 +24,7 @@ from tests.cli.commands.vc.test_native_registry_cli import group_registry
 pytestmark = pytest.mark.real_store_roots
 
 
-def test_installed_both_groups_require_native_thresholds_before_issuance_and_admit(tmp_path, live_parties):
+def both_parties(tmp_path, live_parties):
     # Establish each party independently; existing installed commands approve the issuer RIP.
     issuers, individual, icoordinator = group_registry(tmp_path, live_parties)
     _, holders, holder_public, hcoordinator = holder_group(tmp_path, (issuers[0], individual))
@@ -38,13 +39,19 @@ def test_installed_both_groups_require_native_thresholds_before_issuance_and_adm
             hby.cf.put(config)
         finally:
             hby.close()
-    bodyfile = tmp_path / 'both-group-body.cesr'
-    kli(tmp_path, 'vc', 'create', *issuers[0]['args'], '--registry-name', 'issuer-fresh',
+    return issuers, holders, holder_public, icoordinator, hcoordinator
+
+
+def issue_groups(tmp_path, issuers, holders, holder_public, icoordinator, hcoordinator,
+                 *, registry_name='issuer-fresh', stem=''):
+    actors = [*issuers, *holders]
+    bodyfile = tmp_path / (stem + 'both-group-body.cesr')
+    kli(tmp_path, 'vc', 'create', *issuers[0]['args'], '--registry-name', registry_name,
         '--recipient', holders[0]['pre'], '--data', '{"role":"both groups"}', '--output', str(bodyfile))
     body = SerderACDC(raw=bodyfile.read_bytes())
-    proposal, grantfile = tmp_path / 'both-group-proposal.cesr', tmp_path / 'both-group-grant.cesr'
-    outputs = [tmp_path / name for name in ('holder-lead.cesr', 'holder-peer.cesr')]
-    logs = [tmp_path / name for name in ('issuer-lead.log', 'issuer-peer.log', 'holder-lead.log', 'holder-peer.log')]
+    proposal, grantfile = tmp_path / (stem + 'both-group-proposal.cesr'), tmp_path / (stem + 'both-group-grant.cesr')
+    outputs = [tmp_path / (stem + name) for name in ('holder-lead.cesr', 'holder-peer.cesr')]
+    logs = [tmp_path / (stem + name) for name in ('issuer-lead.log', 'issuer-peer.log', 'holder-lead.log', 'holder-peer.log')]
     grant_args = ['--credential', str(bodyfile), '--recipient', holders[0]['pre'], '--issue', '--deliver',
         '--coordinator', icoordinator, '--custodian', issuers[0]['member'], '--consent-lifetime', '70', '--timeout', '65',
         '--input', str(holder_public)]
@@ -53,7 +60,7 @@ def test_installed_both_groups_require_native_thresholds_before_issuance_and_adm
     def roots(side):
         keeper = Keeper(name=side['name'], base=side['base'], readonly=True, reopen=True)
         try:
-            return bool(list(keeper.rroots.getTopItemIter()))
+            return keeper.rroots.get((side['pre'], body.regid)) is not None
         finally:
             keeper.close()
 
@@ -136,13 +143,15 @@ def test_installed_both_groups_require_native_thresholds_before_issuance_and_adm
     assert all(r['admitted'] and r['registry_issued'] and r['grant'] == selected['grant'] for r in results)
     assert len({r['admit'] for r in results}) == 1
     assert results[1]['transmitted'] and not results[2]['transmitted']
-    retained, queries, replies = [], [], []
+    retained, queries, replies, private_root = [], [], [], None
     for side in actors:
         hby = setupHby(name=side['name'], base=side['base'], bran=PASSCODE, noPrompt=True, version=V2)
         rgy = Regery(hby, name=side['name'], base=side['base'])
         try:
             root = hby.habByName(side['alias']).mgr.getRegistryRoot(side['pre'], body.regid)
-            retained.append(root.qb64 if root else None)
+            retained.append(hashlib.sha256(root.qb64b).hexdigest() if root else None)
+            if root is not None and private_root is None:
+                private_root = root.qb64b
             assert hby.db.epsd.get((selected['grant'],)).dts == deadlines[side['name']]
             head = rgy.store.headEvent(body.regid)
             assert head.said == proposed['bup']
@@ -163,6 +172,9 @@ def test_installed_both_groups_require_native_thresholds_before_issuance_and_adm
             for _, packet in hby.db.exns.getTopItemIter():
                 if packet.route in ('/multisig/qry', '/multisig/rpy'):
                     child = loadParsedNestedSubstreams(hby, packet.said)[0]
+                    data = child.serder.sad['q' if packet.route.endswith('/qry') else 'a']
+                    if data.get('x') != selected['xid']:
+                        continue
                     indices = {sig.index for pre, sigers in child.lsgs if pre.qb64 == side['pre'] for sig in sigers}
                     indices.update(sig.index for pre, _, _, sigers in child.tsgs if pre.qb64 == side['pre'] for sig in sigers)
                     (queries if packet.route.endswith('/qry') else replies).append((child.serder.raw, indices))
@@ -173,4 +185,12 @@ def test_installed_both_groups_require_native_thresholds_before_issuance_and_adm
     for contributions in (queries, replies):
         assert len(contributions) == 2 and len({raw for raw, _ in contributions}) == 1
         assert set.union(*(indices for _, indices in contributions)) == {0, 1}
-    assert all(retained[0].encode() not in path.read_bytes() for path in (proposal, grantfile, *outputs))
+    public_only = bool(private_root) and all(private_root not in path.read_bytes() for path in (proposal, grantfile, *outputs))
+    assert public_only, 'private registry root appeared in a public artifact'
+
+    return body, selected
+
+
+def test_installed_both_groups_require_native_thresholds_before_issuance_and_admit(tmp_path, live_parties):
+    issuers, holders, public, icoordinator, hcoordinator = both_parties(tmp_path, live_parties)
+    issue_groups(tmp_path, issuers, holders, public, icoordinator, hcoordinator)
