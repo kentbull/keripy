@@ -17,6 +17,8 @@ parser.add_argument('--refresh', action='store_true', help='explicitly refresh p
 parser.add_argument('--opening', action='append', default=[], help='exact CESR opening file, repeated; requires --refresh')
 parser.add_argument('--derive', action='store_true', help='authorize ordinary proof derivation from this signer\'s encrypted Keeper root; requires --refresh')
 parser.add_argument('--message', '-m', default='')
+parser.add_argument('--proposal-output', help='exclusive-create the exact native group Grant proposal for member approval')
+parser.add_argument('--proposal', help='explicitly contribute to this exact group proposal from the selected admitted view')
 
 
 def handler(args):
