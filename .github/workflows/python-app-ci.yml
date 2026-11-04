@@ -41,13 +41,13 @@ jobs:
         include:
           - os: macos-latest
             job_name: "test (macos-latest)"
-            pytest_command: "pytest tests/ --ignore tests/demo/ --ignore test/scripts -n auto"
+            pytest_command: "pytest tests/ --ignore tests/demo/ --ignore test/scripts -m 'not real_store_roots' -n auto"
           - os: ubuntu-latest
             job_name: "test (ubuntu-latest)"
-            pytest_command: "pytest tests/ --ignore tests/demo/ --ignore test/scripts -n auto"
+            pytest_command: "pytest tests/ --ignore tests/demo/ --ignore test/scripts -m 'not real_store_roots' -n auto"
           - os: windows-latest
             job_name: "test (windows-latest)"
-            pytest_command: "pytest tests/ --ignore tests/demo/ --ignore test/scripts"
+            pytest_command: "pytest tests/ --ignore tests/demo/ --ignore test/scripts -m 'not real_store_roots'"
     name: ${{ matrix.job_name }}
 
     steps:
@@ -86,6 +86,11 @@ jobs:
       - name: Run core KERI tests
         run: |
           ${{ matrix.pytest_command }}
+        shell: pwsh
+      # Finite real-process flows run without concurrent pytest workers.
+      - name: Run real-store KERI tests serially
+        run: |
+          pytest tests/ --ignore tests/demo/ --ignore test/scripts -m real_store_roots
         shell: pwsh
       - name: Run KERI demo tests
         run: |

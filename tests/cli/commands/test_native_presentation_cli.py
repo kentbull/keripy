@@ -510,6 +510,9 @@ def test_group_unblind_uses_live_member_thresholds_before_exact_admit(tmp_path, 
             assert time.monotonic() < deadline, logs[index].read_text()
             time.sleep(.03)
     with ExitStack() as stack:
+        # Unlock before the original presentation lifetime starts; release before verifier0's CLI owns it.
+        signing = state(verifiers[0])
+        stack.callback(signing.close)
         def start(command, index):
             log = stack.enter_context(logs[index].open('w'))
             processes.append(subprocess.Popen([shutil.which('kli'), *command], cwd=tmp_path,
@@ -529,29 +532,32 @@ def test_group_unblind_uses_live_member_thresholds_before_exact_admit(tmp_path, 
                 assert time.monotonic() < deadline
                 time.sleep(.03)
             grant = next(json.loads(line)['grant'] for line in logs[0].read_text().splitlines() if line.startswith('{'))
-            original_deadline = inspect(tmp_path, holders[0], grant)['deadline']
+            # Observe the recorded clock without another CLI startup inside the live exchange.
+            with closing(Baser(name=holders[0]['name'], base=holders[0]['base'], readonly=True, reopen=True)) as db:
+                original_deadline = db.epsd.get((grant,)).dts
 
             # Only the selected nonlead authors a query; its partial alone cannot complete or disclose.
             options = ['--unblind', '--said', grant, '--input', str(history), '--input', str(outputs[1]),
                 '--input', str(later), '--unblind-proposer', verifiers[1]['member'], '--deliver', '--timeout', '30']
             start(['ipex', 'admit', *verifiers[1]['args'], *options], 2)
             phase(2, 'group_unblind_proposed')
-            requester_deadline = inspect(tmp_path, verifiers[1], grant)['deadline']
+            with closing(Baser(name=verifiers[1]['name'], base=verifiers[1]['base'], readonly=True, reopen=True)) as db:
+                requester_deadline = db.epsd.get((grant,)).dts
             assert processes[2].poll() is None and '"admitted": true' not in logs[2].read_text()
             assert all('"kind": "rpy"' not in log.read_text() for log in logs[:2])
             # An authenticated non-proposer queues different Admit bytes before the real author is ready.
-            with closing(state(verifiers[0])) as hby:
-                hab = hby.habByName('verifiers')
-                presented = next(p.serder for p in Parser(version=V2).parse(
-                    ims=bytearray(outputs[1].read_bytes()), processive=False) if p.serder.route == '/ipex/grant')
-                alternate, atc = native_admit(hab, '', presented, gvrsn=V2)
-                wrapper, watc = multisigExn(hab, alternate.raw + atc, version=V2)
-                poster = StreamPoster(hby=hby, hab=hab.mhab, recp=verifiers[1]['member'],
-                                      topic='multisig', version=V2)
-                poster.send(wrapper, attachment=watc, gvrsn=V2)
-                delivery = doing.DoDoer(doers=poster.deliver())
-                doing.Doist(real=True, tock=.03125, limit=3).do(doers=[delivery])
-                assert delivery.done
+            hab = signing.habByName('verifiers')
+            presented = next(p.serder for p in Parser(version=V2).parse(
+                ims=bytearray(outputs[1].read_bytes()), processive=False) if p.serder.route == '/ipex/grant')
+            alternate, atc = native_admit(hab, '', presented, gvrsn=V2)
+            wrapper, watc = multisigExn(hab, alternate.raw + atc, version=V2)
+            poster = StreamPoster(hby=signing, hab=hab.mhab, recp=verifiers[1]['member'],
+                                  topic='multisig', version=V2)
+            poster.send(wrapper, attachment=watc, gvrsn=V2)
+            delivery = doing.DoDoer(doers=poster.deliver())
+            doing.Doist(real=True, tock=.03125, limit=3).do(doers=[delivery])
+            assert delivery.done
+            signing.close()
             deadline = time.monotonic() + 3
             while True:
                 db = Baser(name=verifiers[1]['name'], base=issuer['base'], readonly=True, reopen=True)
