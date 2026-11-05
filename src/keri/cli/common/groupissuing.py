@@ -149,11 +149,11 @@ class GroupIssuance:
         protected.parse(ims=serializeParsedSubstream(self.child), local=True)
         return self.child
 
-    def freezeDeadline(self):
-        dater = self.owner.hby.db.epsd.get((self.grant.said,))
-        if dater is None:
-            raise ConfigurationError('selected group Grant has no original consent deadline')
-        self.owner.nativeDeadline = dater.datetime
+    def freezeDeadline(self, *, required=False):
+        deadline = self.owner.exc.exchangeDeadline(self.grant)
+        if deadline is None and required:
+            raise ConfigurationError('selected group Grant has no authenticated KRAM lifetime')
+        self.owner.nativeDeadline = deadline
         self.owner.check()
 
     def broadcastQuery(self, raw):
@@ -181,7 +181,7 @@ class GroupIssuance:
             if stream or len(packet.nests) != 1:
                 raise ConfigurationError('--proposal requires one exact native /multisig/exn Grant packet')
             self.grant = packet.nests[0].serder
-            if owner.hby.db.epsd.get((self.grant.said,)) is not None:
+            if owner.exc.exchangeDeadline(self.grant) is not None:
                 self.freezeDeadline()
             child = self.accept(raw)
             signed = owner.hab.endorse(child.serder, last=False, framed=False, gvrsn=Vrsn_2_0,
@@ -207,6 +207,7 @@ class GroupIssuance:
                                       recipient=self.recipient) is None:
             owner.check()
             yield owner.tock
+        self.freezeDeadline(required=True)
         self.xid = owner.dh.approve(self.grant.said, coordinator=self.coordinator, custodian=self.custodian)
         if self.lead:
             tsgs, cigars = verify(owner.hby, self.grant)

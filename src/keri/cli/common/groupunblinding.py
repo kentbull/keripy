@@ -43,8 +43,8 @@ class GroupUnblind:
         if grant.route != '/ipex/grant' or grant.sad['a'].get('ax', [False])[0]:
             raise ConfigurationError('group Unblind requires an unanchored native presentation Grant')
         self.operation = owner.unblind.approve(grant.said)
-        self.deadline = self.hab.db.epsd.get((grant.said,)).dts
-        owner.nativeDeadline = self.hab.db.epsd.get((grant.said,)).datetime
+        self.deadline = owner.exc.exchangeDeadline(grant)
+        owner.nativeDeadline = self.deadline
         self.author = self.hab.mhab.pre == proposer
         self.pending, self.frozen, self.contributed = {}, {}, set()
         self.response, self.finished, self.ready = None, False, False
@@ -56,7 +56,7 @@ class GroupUnblind:
 
     def check(self):
         self.owner.check()
-        if self.hab.db.epsd.get((self.grant.said,)).dts != self.deadline:
+        if self.owner.exc.exchangeDeadline(self.grant) != self.deadline:
             raise ConfigurationError('group Unblind changed the original Grant deadline')
         if self.hab.db.erpy.get((self.grant.said,)) is None:
             self.owner.unblind.complete(self.operation)  # Rechecks native scope and lifetime, not readiness.

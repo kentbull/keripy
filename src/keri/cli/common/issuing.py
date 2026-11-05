@@ -130,7 +130,7 @@ class NativeIssuance(doing.DoDoer):
                 if consent is None or not math.isfinite(consent) or consent <= 0:
                     raise ConfigurationError('group Grant requires finite positive --consent-lifetime seconds')
                 # Explicit command policy precedes the first partial Grant intake.
-                # Native put-only epsd and configured KRAM remain authoritative.
+                # This bounds signature collection; KRAM alone bounds live DH.
                 self.exc.TimeoutPSE = consent
             elif consent is not None or any(getattr(args, field, None) for field in ('proposal', 'proposal_output')):
                 raise ConfigurationError('proposal and consent lifetime options require a group Grant')
@@ -195,7 +195,7 @@ class NativeIssuance(doing.DoDoer):
             if len(nests) != 1:
                 raise ConfigurationError('live issuance supports exactly one disclosed registry node')
             xid = self.dh.approve(message.said, coordinator=coordinator, custodian=custodian)
-            self.nativeDeadline = self.hby.db.epsd.get((message.said,)).datetime
+            self.nativeDeadline = self.exc.exchangeDeadline(message)
             admission = None
             if group:
                 from .groupadmitting import GroupAdmission

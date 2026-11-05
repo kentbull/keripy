@@ -485,11 +485,6 @@ class Exchanger:
                                   cigars=cigars,
                                   sourceSeals=sourceSeals)
 
-        # One original auxiliary lifetime also covers a Grant's schema wait.
-        if self._isV2Grant(serder):
-            self.hby.db.epsd.put(keys=(dig,), val=Dater(dts=helping.toIso8601(
-                self._partialSignedDeadline(serder))))
-
         # Freeze the PSE deadline once; retransmission must not extend it.
         # Older receipt-time rows expire conservatively after this transition.
         if dater is not None:
@@ -508,25 +503,36 @@ class Exchanger:
         return serder.pvrsn.major >= 2 and serder.ked["r"] == "/ipex/grant"
 
     def _removeEscrowDeadline(self, serder, dater):
-        """Keep a V2 Grant's first lifetime even after its escrow body is evicted."""
+        """Remove cleanup timing when its corresponding escrow no longer needs it."""
         dig = serder.said
         schemaPending = any(self.hby.db.emse.getTopItemIter(keys=(dig,)))
         if dater is self.hby.db.emsd and schemaPending:
             return
-        if dater is self.hby.db.epsd and self._isV2Grant(serder):
-            return
         dater.rem(keys=(dig,))
 
+    def exchangeDeadline(self, serder):
+        """Return the original authenticated v2 Grant deadline, without writes.
+
+        The exact accepted KRAM transaction row owns exchange validity (xdt + xl).
+        Missing receipt evidence returns None, including KRAM-off processing;
+        signature escrow timing never authorizes DH or Unblind. The returned
+        timezone-aware datetime may already be expired; callers enforce it.
+        """
+        if not self._isV2Grant(serder):
+            return None
+        xid = serder.said if serder.ilk == Ilks.xip else serder.ked.get("x")
+        if not xid:
+            return None
+        cache = self.hby.db.kramTMSC.get(keys=(serder.pre, xid, serder.said))
+        if cache is None or not cache.rdt:
+            return None
+        return (helping.fromIso8601(cache.xdt)
+                + datetime.timedelta(milliseconds=cache.xl))
+
     def _partialSignedDeadline(self, serder):
-        """Use an accepted Grant's XID lifetime, otherwise the ordinary PSE window."""
-        if serder.ked["r"] == "/ipex/grant":
-            xid = serder.said if serder.ilk == Ilks.xip else serder.ked.get("x")
-            cache = self.hby.db.kramTMSC.get(keys=(serder.pre, xid, serder.said))
-            if cache is not None and cache.rdt:
-                # xl is exchange validity; pxl only retains replay evidence.
-                return (helping.fromIso8601(cache.xdt)
-                        + datetime.timedelta(milliseconds=cache.xl))
-        return helping.nowUTC() + datetime.timedelta(seconds=self.TimeoutPSE)
+        """Bound escrow cleanup by KRAM validity or the local PSE timeout."""
+        return (self.exchangeDeadline(serder)
+                or helping.nowUTC() + datetime.timedelta(seconds=self.TimeoutPSE))
 
     def escrowPSEvent(self, serder, tsgs, pathed, cigars=None,
                       sourceSeals=None, nests=None):
@@ -774,9 +780,6 @@ class Exchanger:
 
         exnDiger = Diger(qb64=serder.said)
         if self.hby.db.exns.get(keys=(dig,)) is None:
-            if self._isV2Grant(serder):
-                self.hby.db.epsd.put(keys=(dig,), val=Dater(dts=helping.toIso8601(
-                    self._partialSignedDeadline(serder))))
             # An accepted empty set replaces provisional rows too; pin([]) does not.
             self.hby.db.epath.rem(keys=(dig,))
             self.hby.db.enst.rem(keys=(dig,))
@@ -845,20 +848,20 @@ class Exchanger:
 
         Accepted or pending presence is not authorization. Reverify stored
         authentication and shared disclosure rules before returning
-        (Grant, retained nests, registry -> selected node SAIDs). A legacy
-        accepted Grant without an original deadline is unavailable. This lookup
+        (Grant, retained nests, registry -> selected node SAIDs). A Grant without
+        accepted KRAM lifetime evidence is unavailable. This lookup
         changes no stores and cannot authorize admission or fresh-root DH.
         """
         accepted = self.hby.db.exns.get(keys=(said,))
         serder = accepted or self.hby.db.epse.get(keys=(said,))
-        dater = self.hby.db.epsd.get(keys=(said,))
+        deadline = self.exchangeDeadline(serder) if serder is not None else None
         handler = self.routes.get("/ipex/grant")
-        if (serder is None or dater is None or handler is None
+        if (serder is None or deadline is None or handler is None
                 or not self._isV2Grant(serder)
                 or serder.pre != sender or serder.ked.get("ri") != recipient
                 or (serder.said if serder.ilk == Ilks.xip else serder.ked.get("x")) != xid
                 or self.hby.db.erpy.get(keys=(said,)) is not None
-                or helping.nowUTC() >= dater.datetime):
+                or helping.nowUTC() >= deadline):
             return None
         try:
             tsgs, cigars = verify(self.hby, serder)
@@ -885,15 +888,15 @@ class Exchanger:
         Returns (serder, registries), or None when unavailable or unauthorized.
         """
         serder = self.hby.db.epse.get(keys=(said,))
-        dater = self.hby.db.epsd.get(keys=(said,))
+        deadline = self.exchangeDeadline(serder) if serder is not None else None
         handler = self.routes.get("/ipex/grant")
-        if (serder is None or dater is None or handler is None
+        if (serder is None or deadline is None or handler is None
                 or serder.ked["r"] != "/ipex/grant"
                 or serder.pre != sender or serder.ked.get("ri") != recipient
                 or (serder.said if serder.ilk == Ilks.xip else serder.ked.get("x")) != xid
                 or self.hby.db.exns.get(keys=(said,)) is not None
                 or self.hby.db.erpy.get(keys=(said,)) is not None
-                or helping.nowUTC() >= dater.datetime):
+                or helping.nowUTC() >= deadline):
             return None
         try:
             tsgs, cigars = verify(self.hby, serder)

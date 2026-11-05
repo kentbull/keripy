@@ -23,7 +23,7 @@ from ...acdc.unblinding import Unblind
 from ...app import GroupHab, MailboxDirector, Notifier, SignifyHab, SignifyGroupHab
 from ...core import Blinder, BlindState, BoundState, Kevery, Kramer, Number, Parser, SerderACDC, messagize
 from ...db import Baser
-from ...help import nowUTC
+from ...help import nowUTC, toIso8601
 from ...kering import ConfigurationError, KeriError
 from ...peer import Exchanger
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
@@ -220,7 +220,7 @@ class NativePresentation(NativeIssuance):
             notifier = Notifier(self.hby)
             self.exc = Exchanger(hby=self.hby, handlers=[])
             if group and prepare:
-                self.exc.TimeoutPSE = consent  # Before first partial intake; existing epsd rows are never renewed.
+                self.exc.TimeoutPSE = consent  # Signature collection only; authenticated KRAM bounds live Unblind.
             ipexing.loadHandlers(self.hby, self.exc, notifier, rgy=self.rgy)
             self.unblind = Unblind(self.hab, self.exc, self.rgy, states=('issued', 'revoked', ''))
             if self.unblind is not None:
@@ -405,10 +405,10 @@ class NativeInspection(doing.Doer):
             verify(hby, message)
             nests = loadParsedNestedSubstreams(hby, message.said)
             terminal = db.erpy.get((message.said,))
-            deadline = db.epsd.get((message.said,))
+            deadline = Exchanger(hby=SimpleNamespace(db=db), handlers=[]).exchangeDeadline(message)
             result = dict(said=message.said, grant=message.sad,
                 accepted=db.exns.get((message.said,)) is not None,
-                deadline=deadline.dts if deadline else None,
+                deadline=toIso8601(deadline) if deadline else None,
                 terminal=terminal.qb64 if terminal else None,
                 disclosure=[dict(said=nest.serder.said, body=nest.serder.sad,
                     raw_b64=base64.b64encode(nest.serder.raw).decode(),

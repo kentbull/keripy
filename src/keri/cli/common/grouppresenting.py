@@ -107,11 +107,11 @@ class GroupPresentation:
             protected.parse(ims=serializeParsedSubstream(self.child), local=True)
         return self.child
 
-    def freezeDeadline(self):
-        dater = self.owner.hby.db.epsd.get((self.grant.said,))
-        if dater is None:
-            raise ConfigurationError('selected native Grant has no original deadline')
-        self.owner.nativeDeadline = dater.datetime
+    def freezeDeadline(self, *, required=False):
+        deadline = self.owner.exc.exchangeDeadline(self.grant)
+        if deadline is None and required:
+            raise ConfigurationError('selected Grant has no authenticated KRAM lifetime')
+        self.owner.nativeDeadline = deadline
         self.owner.check()
 
     def run(self):
@@ -125,7 +125,7 @@ class GroupPresentation:
             self.grant = packet.nests[0].serder
             proposer = packet.serder.pre
             self.proofs = [serializeParsedSubstream(node) for node in packet.nests[0].nests]
-            if owner.hby.db.epsd.get((self.grant.said,)) is not None:
+            if owner.exc.exchangeDeadline(self.grant) is not None:
                 self.freezeDeadline()
             child = self.accept(raw)
             self.freezeDeadline()
@@ -169,6 +169,7 @@ class GroupPresentation:
             owner.check()
             yield owner.tock
         owner.check()
+        self.freezeDeadline(required=True)
         currentIssued(owner.exc, self.grant.said)
         if [serializeParsedSubstream(node) for node in loadParsedNestedSubstreams(owner.hby, self.grant.said)] != self.proofs:
             raise ConfigurationError('native accepted disclosure differs from the selected proposal proofs')

@@ -10366,21 +10366,23 @@ def test_pending_grant_preserves_original_kram_deadline(fresh_issuance, fakeHelp
         scope = dict(xid=xid, sender=issuer.pre, recipient=issuee.pre)
         cache = hby.db.kramTMSC.get((issuer.pre, xid, grant.said))
         deadline = helping.fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
+        assert exc.exchangeDeadline(grant) == deadline
         assert hby.db.epsd.get((grant.said,)).datetime == deadline
         fakeHelpingClock.advance(seconds=30)
         exc.processEscrow()
         _receive_ipex(exc, grant, atc)
         assert hby.db.epsd.get((grant.said,)).datetime == deadline
         assert exc.pendingGrant(grant.said, **scope) is not None
-        # A lost/pruned cache cannot turn the fixed deadline into a new receipt window.
+        # Escrow timing cannot replace missing authenticated exchange lifetime.
         hby.db.kramTMSC.rem((issuer.pre, xid, grant.said))
         exc.TimeoutPSE = 3600
-        fakeHelpingClock.set(helping.toIso8601(deadline - timedelta(milliseconds=1)))
-        assert exc.pendingGrant(grant.said, **scope) is not None
-        fakeHelpingClock.advance(milliseconds=1)
+        assert exc.exchangeDeadline(grant) is None
         assert exc.pendingGrant(grant.said, **scope) is None
+        assert hby.db.epsd.get((grant.said,)).datetime == deadline
+        fakeHelpingClock.set(helping.toIso8601(deadline))
         exc.processEscrow()
         assert hby.db.epse.get((grant.said,)) is None
+        assert hby.db.epsd.get((grant.said,)) is None
         assert hby.db.exns.get((grant.said,)) is None
 
 
