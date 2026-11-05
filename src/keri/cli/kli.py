@@ -3,6 +3,8 @@
 keri.cli module
 
 """
+import sys
+
 import multicommand
 
 from .. import help
@@ -15,6 +17,12 @@ logger = help.ogler.getLogger()
 
 
 def main():
+    # Status symbols such as the check mark must not abort a command whose
+    # stdout uses a narrower encoding, e.g. cp1252 when redirected on Windows.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
+
     parser = multicommand.create_parser(commands)
     args = parser.parse_args()
 
