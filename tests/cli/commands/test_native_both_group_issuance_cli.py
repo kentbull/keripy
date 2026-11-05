@@ -17,7 +17,7 @@ from keri.db import Baser
 from keri.peer.exchanging import loadParsedNestedSubstreams, verify
 from tests.cli.commands.test_native_issuance_cli import PASSCODE, holder_group
 from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
-from tests.cli.commands.test_native_negotiation_cli import kli
+from tests.cli.commands.test_native_negotiation_cli import exchange_deadline, kli
 from tests.cli.commands.vc.test_native_registry_cli import group_registry
 
 
@@ -67,7 +67,7 @@ def issue_groups(tmp_path, issuers, holders, holder_public, icoordinator, hcoord
     def deadline(side, grant):
         db = Baser(name=side['name'], base=side['base'], readonly=True, reopen=True)
         try:
-            return db.epsd.get((grant,)).dts
+            return exchange_deadline(db, grant)
         finally:
             db.close()
 
@@ -94,14 +94,16 @@ def issue_groups(tmp_path, issuers, holders, holder_public, icoordinator, hcoord
             start(['ipex', 'grant', *issuers[0]['args'], *grant_args, '--proposal-output', str(proposal),
                    '--output', str(grantfile)], logs[0])
             selected = phase(logs[0], 'group_proposed')
-            deadlines[issuers[0]['name']] = deadline(issuers[0], selected['grant'])
+            # A partial proposal has no authenticated KRAM lifetime before threshold intake.
+            assert deadline(issuers[0], selected['grant']) is None
             assert not grantfile.exists() and not any(roots(side) for side in actors)
             contributor = start(['ipex', 'grant', *issuers[1]['args'], *grant_args,
                                  '--proposal', str(proposal)], logs[1])
             contributor.wait(timeout=20)
             assert contributor.returncode == 0 and '"phase": "contributed"' in logs[1].read_text(), logs[1].read_text()
             phase(logs[0], 'group_dh_proposed')
-            deadlines[issuers[1]['name']] = deadline(issuers[1], selected['grant'])
+            for side in issuers:
+                deadlines[side['name']] = deadline(side, selected['grant'])
             admit_args = ['--said', selected['grant'], '--input', str(issuers[0]['public']), '--input', str(grantfile),
                 '--coordinator', hcoordinator, '--custodian', holders[0]['member'], '--deliver', '--timeout', '30']
             # The elected holder proposes its partial reply; neither elected lead may retain a root yet.
@@ -152,7 +154,7 @@ def issue_groups(tmp_path, issuers, holders, holder_public, icoordinator, hcoord
             retained.append(hashlib.sha256(root.qb64b).hexdigest() if root else None)
             if root is not None and private_root is None:
                 private_root = root.qb64b
-            assert hby.db.epsd.get((selected['grant'],)).dts == deadlines[side['name']]
+            assert exchange_deadline(hby.db, selected['grant']) == deadlines[side['name']]
             head = rgy.store.headEvent(body.regid)
             assert head.said == proposed['bup']
             _, said = regeventing.vetAnchor(head, db=hby.db, issuer=issuers[0]['pre'])

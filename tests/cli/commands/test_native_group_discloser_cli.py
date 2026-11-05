@@ -16,11 +16,10 @@ from keri.acdc.ipexing import loadHandlers
 from keri.app import Habery, MailboxDirector, Notifier
 from keri.core import BlindState, Blinder, Diger, Kevery, Kramer, Parser
 from keri.db import Baser, fetchTsgs
-from keri.help import fromIso8601, nowUTC
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from keri.peer import Exchanger
 from tests.cli.commands.test_native_issuance_cli import PASSCODE, holder_group, issue, live_parties, witnessed
-from tests.cli.commands.test_native_negotiation_cli import kli
+from tests.cli.commands.test_native_negotiation_cli import exchange_deadline, kli
 from tests.cli.commands.test_native_presentation_cli import intake, inspect, state, update
 from tests.cli.commands.test_native_registry_root_cli import last_result
 
@@ -171,7 +170,7 @@ def test_separate_group_discloser_resumes_only_issuer_endorsed_exact_preparation
                 '--recipient', verifier['pre'], '--prepare', '--send-proposal', '--output', str(prepared[0]), succeeds=False)
             assert 'require group --prepare' in refused
 
-            # First partial freezes explicit original consent; one signature cannot export a prepared Grant.
+            # A first partial has no authenticated KRAM lifetime; one signature cannot export a prepared Grant.
             preparation = [*common, '--prepare', '--send-proposal', '--consent-lifetime', '60', '--timeout', '40']
             log = start(root_member, 'present', *preparation, '--proposal-output', str(proposal),
                 '--output', str(prepared[1]), label='prepare-nonlead')
@@ -180,14 +179,15 @@ def test_separate_group_discloser_resumes_only_issuer_endorsed_exact_preparation
             assert not proposed['locally_accepted'] and not prepared[1].exists()
             with closing(Baser(name=root_member['name'], base=root_member['base'], readonly=True, reopen=True)) as db:
                 assert db.exns.get((grant,)) is None and db.erpy.get((grant,)) is None
-                first_deadline = db.epsd.get((grant,)).dts
-                assert 10 < (fromIso8601(first_deadline) - nowUTC()).total_seconds() <= 60
+                assert exchange_deadline(db, grant) is None
             start(members[0], 'present', *preparation, '--proposal', str(proposal),
                 '--output', str(prepared[0]), label='prepare-lead')
             finish()
             preparations = [inspect(tmp_path, side, grant) for side in members]
             assert all(not saved['accepted'] and saved['terminal'] is None for saved in preparations)
-            assert preparations[1]['deadline'] == first_deadline
+            # Threshold intake fixes one authenticated lifetime for both members' preparations.
+            assert preparations[1]['deadline'] is not None
+            assert preparations[1]['deadline'] == preparations[0]['deadline']
             original = Parser(version=V2).parseOneBare(ims=bytearray(prepared[1].read_bytes()), processive=False)
             assert prepared[0].read_bytes() == prepared[1].read_bytes()
             assert {sig.index for pre, _, _, sigs in original.tsgs if pre.qb64 == root_member['pre']
@@ -229,10 +229,10 @@ def test_separate_group_discloser_resumes_only_issuer_endorsed_exact_preparation
                     exc = Exchanger(hby, handlers=[])
                     loadHandlers(hby, exc, None, rgy=rgy)
                     hab = hby.habByName(members[0]['alias'])
-                    deadline = hby.db.epsd.get((grant,)).dts
+                    deadline = exc.exchangeDeadline(hby.db.epse.get((grant,)))
                     assert not exc.lead(hab, grant)
                     assert exc.lead(hab, grant, pendingPresentation=True)
-                    assert hby.db.exns.get((grant,)) is None and hby.db.epsd.get((grant,)).dts == deadline
+                    assert hby.db.exns.get((grant,)) is None and exc.exchangeDeadline(hby.db.epse.get((grant,))) == deadline
                 finally:
                     rgy.close()
             verify_log = start(verifier, 'admit', '--unblind', '--said', grant,
@@ -284,21 +284,22 @@ def test_separate_group_discloser_resumes_only_issuer_endorsed_exact_preparation
                 leaked = any(root.qb64b in path.read_bytes() for path in tmp_path.glob('*.cesr'))
             assert not leaked
 
-            # A later invocation cannot renew a different preparation's expired original partial lifetime.
+            # A partial preparation has only the command timeout; once its escrow expires a later
+            # invocation with a longer consent lifetime cannot renew it.
             expired, unavailable = tmp_path / 'expired-proposal.cesr', tmp_path / 'expired-prepared.cesr'
             refused = kli(tmp_path, 'ipex', 'present', *root_member['args'], *common, '--prepare',
                 '--send-proposal', '--consent-lifetime', '2', '--proposal-output', str(expired),
                 '--output', str(unavailable), '--timeout', '5', succeeds=False)
-            assert 'original native Grant deadline' in refused and not unavailable.exists()
+            assert 'before --timeout' in refused and not unavailable.exists()
             dead_grant = Parser(version=V2).parseOneBare(ims=bytearray(expired.read_bytes()), processive=False).nests[0].serder.said
             with closing(Baser(name=root_member['name'], base=root_member['base'], readonly=True, reopen=True)) as db:
-                saved = db.epsd.get((dead_grant,)).dts
+                assert exchange_deadline(db, dead_grant) is None
             refused = kli(tmp_path, 'ipex', 'present', *root_member['args'], *common, '--prepare',
                 '--send-proposal', '--consent-lifetime', '60', '--proposal', str(expired),
                 '--output', str(unavailable), succeeds=False)
-            assert 'original native Grant deadline' in refused and not unavailable.exists()
+            assert 'proposal did not pass current authentication' in refused and not unavailable.exists()
             with closing(Baser(name=root_member['name'], base=root_member['base'], readonly=True, reopen=True)) as db:
-                assert db.epsd.get((dead_grant,)).dts == saved
+                assert exchange_deadline(db, dead_grant) is None
                 assert db.exns.get((dead_grant,)) is None and db.erpy.get((dead_grant,)) is None
         finally:
             for process in processes:

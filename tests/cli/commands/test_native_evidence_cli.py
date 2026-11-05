@@ -17,6 +17,7 @@ from keri.db import Baser
 from keri.peer.exchanging import serializeParsedSubstream, verifyQueryAttachments
 
 from tests.cli.commands.test_native_issuance_cli import issue, live_parties
+from tests.cli.commands.test_native_negotiation_cli import enable_kram, exchange_deadline
 from tests.cli.commands.test_native_presentation_cli import intake, present, state, update
 
 pytestmark = pytest.mark.real_store_roots
@@ -42,10 +43,10 @@ def public(raw, registry, *, prefix=False, replacement=None):
 def retained(holder, grant):
     db = Baser(name=holder['name'], base=holder['base'], reopen=True, readonly=True)
     try:
-        deadline = db.epsd.get((grant,))
+        deadline = exchange_deadline(db, grant)
         return dict(accepted=db.exns.get((grant,)) is not None,
                     terminal=db.erpy.get((grant,)) is not None,
-                    deadline=deadline.dts if deadline else None)
+                    deadline=deadline)
     finally:
         db.close()
 
@@ -168,10 +169,18 @@ def test_installed_admit_waits_through_http_failures_and_authentic_prefix(tmp_pa
 
 def test_native_expiry_stops_stale_source_despite_longer_cli_timeout(tmp_path, live_parties):
     started = time.monotonic()
+    # The holder's accepted KRAM exchange window (xl) is the native clock that must expire first.
+    hby = state(live_parties[1])
+    try:
+        enable_kram(hby, caches={'~': [1000, 20000, 20000, 20000, 60000, 60000, 300000]})
+    finally:
+        hby.close()
     with observer(tmp_path, live_parties, 'stale') as (flags, calls, snapshots):
-        selected, _, output = issue(tmp_path, live_parties, admit_options=flags, succeeds=False)
-    assert 'expired' in output and 'before --timeout' not in output
-    assert time.monotonic() - started < 20
+        selected, _, output = issue(tmp_path, live_parties, admit_options=[*flags, '--timeout', '60'],
+                                    succeeds=False)
+    assert 'original native deadline' in output and 'before --timeout' not in output
+    # Setup plus the 20 s window that starts at the Apply, well before the admit's 60 s CLI timeout.
+    assert time.monotonic() - started < 35
     assert len(calls) > 3 and len({snapshot['deadline'] for snapshot in snapshots}) == 1
     assert not retained(live_parties[1], selected['grant'])['terminal']
 

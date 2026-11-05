@@ -11,7 +11,7 @@ from keri.cli.common import setupHby
 from keri.core import Blinder, Kevery, Parser, Salter, messagize
 from tests.cli.commands.test_native_issuance_cli import PASSCODE, issue
 from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
-from tests.cli.commands.test_native_negotiation_cli import kli
+from tests.cli.commands.test_native_negotiation_cli import enable_kram, kli
 from tests.cli.commands.test_native_registry_root_cli import last_result
 
 
@@ -281,6 +281,7 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
     name, base = f'continuation-verifier-{uuid4().hex}', lead['base']
     hby = Habery(name=name, base=base, bran=PASSCODE, version=V2)
     try:
+        enable_kram(hby)
         witness = (tmp_path / 'witness.cesr').read_bytes()
         Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(witness))
         wit = Parser(version=V2).parseOneBare(ims=bytearray(witness), processive=False).serder.pre

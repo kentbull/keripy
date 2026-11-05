@@ -5,6 +5,7 @@ import subprocess
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Event, Thread
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -30,6 +31,26 @@ def kli(tmp_path, *args, succeeds=True):
     output = result.stdout + result.stderr
     assert (result.returncode == 0 and 'ERR:' not in output) == succeeds, output
     return output
+
+
+# Live DH and Unblind require an accepted KRAM transaction; installed kli reads
+# KRAM settings from each Habery's own config file and keeps them off by default.
+KRAM_CACHES = {'~': [1000, 60000, 60000, 300000, 60000, 60000, 300000]}
+
+
+def exchange_deadline(db, said):
+    """Return a stored v2 Grant's accepted KRAM exchange deadline, or None."""
+    serder = db.exns.get((said,)) or db.epse.get((said,))
+    if serder is None:
+        return None
+    return Exchanger(hby=SimpleNamespace(db=db), handlers=[]).exchangeDeadline(serder)
+
+
+def enable_kram(hby, caches=None):
+    """Enable KRAM in this Habery's config file, as an operator would."""
+    config = hby.cf.get()
+    config['kram'] = dict(enabled=True, denials=[], caches=caches or KRAM_CACHES)
+    hby.cf.put(config)
 
 
 @pytest.fixture
