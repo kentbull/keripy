@@ -57,9 +57,11 @@ def history(side, body, grant):
             verify(hby, hby.db.exns.get((admission.qb64,)))
         # Accepted proofs are durable history; expired pending scratch evidence may be removed.
         proofs = tuple(hby.db.enst.get((grant,))) if message is not None else None
+        # Accepted KRAM transaction evidence fixes the exchange lifetime, whether or not the body is retained.
+        lifetime = tuple((keys, cache.xdt, cache.xl) for keys, cache in hby.db.kramTMSC.getTopItemIter()
+                         if keys[-1] == grant and cache.rdt)
         return (hashlib.sha256(root.qb64b).hexdigest() if root else None, message.raw if message else None,
-                proofs, admission.qb64 if admission else None,
-                hby.db.epsd.get((grant,)).dts)
+                proofs, admission.qb64 if admission else None, lifetime)
     finally:
         hby.close()
 

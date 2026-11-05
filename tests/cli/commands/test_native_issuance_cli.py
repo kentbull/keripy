@@ -24,7 +24,7 @@ from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubs
 from keri.kering import KeriError
 from keri.help import fromIso8601
 
-from tests.cli.commands.test_native_negotiation_cli import kli
+from tests.cli.commands.test_native_negotiation_cli import enable_kram, exchange_deadline, kli
 
 
 pytestmark = pytest.mark.real_store_roots
@@ -73,6 +73,7 @@ doing.Doist(real=True, tock=0.03125).do(doers=doers)
             name = f'{alias}-{uuid4().hex}'
             hby = Habery(name=name, base=base, bran=PASSCODE, version=V2)
             try:
+                enable_kram(hby)
                 Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(witness_raw))
                 hab = hby.makeHab(name=alias, wits=[witness_pre], toad=1)
                 witnessed(hby, hab)
@@ -162,6 +163,26 @@ def issue(tmp_path, live_parties, data='{"role":"reader"}', *, admit_options=(),
 
 def test_installed_witnessed_apply_grant_dh_bup_and_selected_admit(tmp_path, live_parties):
     issue(tmp_path, live_parties)
+
+
+def test_live_issuance_without_configured_kram_names_the_missing_configuration(tmp_path, live_parties):
+    """KRAM stays off by default; live DH refuses with an actionable configuration hint."""
+    issuer, holder = live_parties
+    hby = setupHby(name=issuer['name'], base=issuer['base'], bran=PASSCODE, noPrompt=True, version=V2)
+    try:
+        config = hby.cf.get()
+        config['kram']['enabled'] = False
+        hby.cf.put(config)
+    finally:
+        hby.close()
+    kli(tmp_path, 'vc', 'registry', 'incept', *issuer['args'], '--registry-name', 'unconfigured')
+    bodyfile, grantfile = tmp_path / 'body.cesr', tmp_path / 'grant.cesr'
+    kli(tmp_path, 'vc', 'create', *issuer['args'], '--registry-name', 'unconfigured',
+        '--recipient', holder['pre'], '--data', '{"role":"reader"}', '--output', str(bodyfile))
+    refused = kli(tmp_path, 'ipex', 'grant', *issuer['args'], '--credential', str(bodyfile),
+        '--recipient', holder['pre'], '--input', str(holder['public']), '--issue', '--deliver',
+        '--output', str(grantfile), '--timeout', '5', succeeds=False)
+    assert 'live DH/Unblind requires KRAM enabled in the Habery config' in refused, refused
 
 
 def holder_group(tmp_path, live_parties):
@@ -296,7 +317,7 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             try:
                 assert store.exns.get((selected['grant'],)) is None
                 assert not list(keeper.rroots.getTopItemIter())
-                lead_deadline = store.epsd.get((selected['grant'],)).dts
+                lead_deadline = exchange_deadline(store, selected['grant'])
             finally:
                 keeper.close()
                 store.close()
@@ -305,11 +326,11 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             phase(logs[2], 'selected')
             store = Baser(name=holders[1]['name'], base=holders[1]['base'], readonly=True, reopen=True)
             try:
-                original_deadline = store.epsd.get((selected['grant'],)).dts
+                original_deadline = exchange_deadline(store, selected['grant'])
                 cache = store.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
                 assert original_deadline == lead_deadline
                 assert cache is not None and cache.rdt and cache.xl == 300000
-                assert fromIso8601(original_deadline) == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
+                assert original_deadline == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
             finally:
                 store.close()
             for process in processes:
@@ -342,7 +363,7 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
                             for sig in sigers} == {0, 1}
             assert hby.db.exrs.get((selected['grant'], body.said)).state == 'issued'
             if side is holders[1]:
-                assert hby.db.epsd.get((selected['grant'],)).dts == original_deadline
+                assert exchange_deadline(hby.db, selected['grant']) == original_deadline
                 assert hby.db.exns.get((wrong.said,)) is None
                 assert hby.db.kramMSGC.get((holders[0]['member'], wrong.said)) is not None
         finally:
@@ -411,7 +432,8 @@ def group_issuer_issue(tmp_path, live_parties):
             selected = phase(logs[0], 'group_proposed')
             store = Baser(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
             try:
-                original = store.epsd.get((selected['grant'],)).dts
+                # A partial proposal has no authenticated KRAM lifetime before threshold intake.
+                assert exchange_deadline(store, selected['grant']) is None
             finally:
                 store.close()
             time.sleep(10.2)
@@ -419,7 +441,7 @@ def group_issuer_issue(tmp_path, live_parties):
             keeper = Keeper(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
             try:
                 assert store.exns.get((selected['grant'],)) is None and store.erpy.get((selected['grant'],)) is None
-                assert store.epsd.get((selected['grant'],)).dts == original
+                assert exchange_deadline(store, selected['grant']) is None
                 assert not list(keeper.rroots.getTopItemIter())
             finally:
                 keeper.close()
@@ -453,7 +475,8 @@ def group_issuer_issue(tmp_path, live_parties):
             try:
                 assert store.erpy.get((selected['grant'],)) is None
                 assert store.kels.getLast(keys=lead['pre'], on=2) != bup['anchor']
-                assert store.epsd.get((selected['grant'],)).dts == original
+                # Threshold intake fixed the authenticated KRAM lifetime once.
+                assert exchange_deadline(store, selected['grant']) is not None
             finally:
                 store.close()
             joined = subprocess.run([shutil.which('kli'), 'multisig', 'join', '--name', peer['name'],
@@ -522,20 +545,23 @@ def test_group_issuer_expired_consent_cannot_be_renewed(tmp_path, live_parties):
         '--custodian', lead['member']]
     output = kli(tmp_path, *arguments, '--proposal-output', str(proposal), '--consent-lifetime', '1',
                  '--timeout', '5', succeeds=False)
-    assert 'original native deadline' in output
+    # A partial proposal has no authenticated KRAM lifetime; only the command timeout bounds it,
+    # and the consent lifetime only governs cleanup of its signature escrow.
+    assert 'before --timeout' in output
     selected = next(json.loads(line) for line in output.splitlines() if line.startswith('{'))
     store = Baser(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
     try:
-        original = store.epsd.get((selected['grant'],)).dts
+        assert exchange_deadline(store, selected['grant']) is None
     finally:
         store.close()
+    # The expired escrow is gone; a fresh, longer consent lifetime cannot revive the proposal.
     output = kli(tmp_path, *arguments, '--proposal', str(proposal), '--consent-lifetime', '300',
                  '--timeout', '5', succeeds=False)
-    assert 'original native deadline' in output
+    assert 'proposal did not pass authentication' in output
     store = Baser(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
     keeper = Keeper(name=lead['name'], base=lead['base'], readonly=True, reopen=True)
     try:
-        assert store.epsd.get((selected['grant'],)).dts == original
+        assert exchange_deadline(store, selected['grant']) is None
         assert store.exns.get((selected['grant'],)) is None and store.erpy.get((selected['grant'],)) is None
         assert not list(keeper.rroots.getTopItemIter())
     finally:
@@ -586,13 +612,13 @@ def test_group_custodian_refusal_and_finite_timeout_leave_exact_pending_grant(tm
                     assert store.exns.get((selected['grant'],)) is None
                     assert not list(keeper.rroots.getTopItemIter())
                     assert store.epse.get((selected['grant'],)).raw == frames[-1].serder.raw
-                    original_deadline = store.epsd.get((selected['grant'],)).dts
+                    original_deadline = exchange_deadline(store, selected['grant'])
                     cache = store.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
                     assert cache is not None and cache.rdt and cache.xl == 300000
-                    assert fromIso8601(original_deadline) == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
+                    assert original_deadline == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
                     store.close()
                     store.reopen(readonly=True)
-                    assert store.epsd.get((selected['grant'],)).dts == original_deadline
+                    assert exchange_deadline(store, selected['grant']) == original_deadline
                     assert store.epse.get((selected['grant'],)).raw == frames[-1].serder.raw
                 finally:
                     keeper.close()

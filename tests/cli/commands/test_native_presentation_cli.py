@@ -14,7 +14,7 @@ from keri.app import Habery, Receiptor, StreamPoster, multisigExn
 from keri.cli.common import setupHby
 from keri.core import BlindState, Blinder, Kevery, Kramer, Parser, SealSource, SerderACDC, SerderKERI, messagize
 from keri.db import Baser
-from keri.help import fromIso8601, nowUTC
+from keri.help import fromIso8601, nowUTC, toIso8601
 from keri.peer import Exchanger
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from keri.acdc.ipexing import admit as native_admit, loadHandlers
@@ -22,7 +22,7 @@ from types import SimpleNamespace
 
 from tests.cli.commands.test_native_issuance_cli import PASSCODE, issue, live_parties, witnessed
 from tests.cli.commands.test_native_registry_root_cli import group_copy, last_result, retained
-from tests.cli.commands.test_native_negotiation_cli import kli
+from tests.cli.commands.test_native_negotiation_cli import enable_kram, exchange_deadline, kli
 
 import pytest
 pytestmark = pytest.mark.real_store_roots
@@ -65,14 +65,15 @@ def update(side, credential, output, *, value='', bound=False):
         hby.close()
 
 
-def intake(side, raw, *, proof=None, event=None, kram=False):
+def intake(side, raw, *, proof=None, event=None):
     hby = state(side)
     rgy = Regery(hby, name=side['name'], base=side['base'])
     try:
         exc = Exchanger(hby, handlers=[])
         loadHandlers(hby, exc, SimpleNamespace(add=lambda **_: None), rgy=rgy)
-        kvy = (Kevery(db=hby.db, rvy=hby.rvy, exc=exc, local=False, direct=False, lax=True,
-                      kramer=Kramer(db=hby.db, cf=hby.cf)) if kram else hby.kvy)
+        # Receive like installed kli: through the Habery's configured KRAM.
+        kvy = Kevery(db=hby.db, rvy=hby.rvy, exc=exc, local=False, direct=False, lax=True,
+                     kramer=Kramer(db=hby.db, cf=hby.cf))
         Parser(kvy=kvy, rvy=hby.rvy, rgy=rgy, exc=exc, version=V2).parse(ims=bytearray(raw))
         if proof:
             assert rgy.store.putOpening(event.said, proof)
@@ -81,7 +82,7 @@ def intake(side, raw, *, proof=None, event=None, kram=False):
         hby.close()
 
 
-def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True, admit_options=(), kram=False):
+def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True, admit_options=()):
     evidence, log = tmp_path / (filename + '.cesr'), tmp_path / (filename + '.log')
     with log.open('w') as output:
         process = subprocess.Popen([shutil.which('kli'), 'ipex', 'present', *sender['args'],
@@ -95,7 +96,7 @@ def present(tmp_path, sender, receiver, source, filename, *extra, succeeds=True,
                 assert time.monotonic() < deadline, log.read_text()
                 time.sleep(0.03)
             selected = next(json.loads(line) for line in log.read_text().splitlines() if line.startswith('{'))
-            intake(receiver, evidence.read_bytes(), kram=kram)
+            intake(receiver, evidence.read_bytes())
             before = inspect(tmp_path, receiver, selected['grant'])
             admitted = kli(tmp_path, 'ipex', 'admit', *receiver['args'], '--unblind', '--said', selected['grant'],
                 '--deliver', '--timeout', '10', *admit_options, succeeds=succeeds)
@@ -207,7 +208,7 @@ def test_independent_issuer_endorses_prepared_discloser_grant_before_live_resume
             hby.close()
     for side in extra:
         intake(side, (tmp_path / 'grant.cesr').read_bytes())
-    forwarded, _, _ = present(tmp_path, holder, discloser, issued['grant'], 's4-admitted', kram=True)
+    forwarded, _, _ = present(tmp_path, holder, discloser, issued['grant'], 's4-admitted')
     old = [inspect(tmp_path, side, said) for side, said in ((holder, issued['grant']), (discloser, forwarded))]
 
     # Complete real encrypted custody and public support before the original preparation window starts.
@@ -290,6 +291,13 @@ def test_independent_issuer_endorses_prepared_discloser_grant_before_live_resume
     assert retained(verifier, body)[0] is None
 
     # A closed preparation has no revived authority: the real original clock expires before input import.
+    # The accepted KRAM exchange window (xl) is that clock; shorten it for this preparation only,
+    # since each accepted transaction keeps the window it was accepted under.
+    hby = state(discloser)
+    try:
+        enable_kram(hby, caches={'~': [1000, 5000, 10000, 10000, 5000, 60000, 300000]})
+    finally:
+        hby.close()
     expired_file = tmp_path / 's4-expiring.cesr'
     expiring = last_result(kli(tmp_path, 'ipex', 'present', *discloser['args'], *common,
         '--prepare', '--output', str(expired_file)))
@@ -430,7 +438,8 @@ def test_provisioned_nonlead_presents_exact_group_view_at_native_threshold(tmp_p
             db = Baser(name=holders[1]['name'], base=base, readonly=True, reopen=True)
             try:
                 assert db.exns.get((proposed['grant'],)) is None
-                original_deadline = db.epsd.get((proposed['grant'],)).dts
+                # A partial proposal has no authenticated KRAM lifetime before threshold intake.
+                assert exchange_deadline(db, proposed['grant']) is None
             finally:
                 db.close()
             processes.append(subprocess.Popen([shutil.which('kli'), 'ipex', 'present', *holders[0]['args'],
@@ -465,7 +474,7 @@ def test_provisioned_nonlead_presents_exact_group_view_at_native_threshold(tmp_p
         assert inspect(tmp_path, side, selected['grant']) == before[holders.index(side)]
     hby = state(holders[1])
     try:
-        assert hby.db.epsd.get((proposed['grant'],)).dts == original_deadline
+        assert exchange_deadline(hby.db, proposed['grant']) is not None
         # Authenticate a fuller disclosure of the SAME SAID; selected a/shown/ must still cap approval.
         packet = Parser(version=V2).parseOneBare(ims=bytearray(proposal.read_bytes()), processive=False)
         child = packet.nests[0]
@@ -595,7 +604,7 @@ def test_group_unblind_uses_live_member_thresholds_before_exact_admit(tmp_path, 
             grant = next(json.loads(line)['grant'] for line in logs[0].read_text().splitlines() if line.startswith('{'))
             # Observe the recorded clock without another CLI startup inside the live exchange.
             with closing(Baser(name=holders[0]['name'], base=holders[0]['base'], readonly=True, reopen=True)) as db:
-                original_deadline = db.epsd.get((grant,)).dts
+                original_deadline = exchange_deadline(db, grant)
 
             # Only the selected nonlead authors a query; its partial alone cannot complete or disclose.
             options = ['--unblind', '--said', grant, '--input', str(history), '--input', str(outputs[1]),
@@ -603,7 +612,7 @@ def test_group_unblind_uses_live_member_thresholds_before_exact_admit(tmp_path, 
             start(['ipex', 'admit', *verifiers[1]['args'], *options], 2)
             phase(2, 'group_unblind_proposed')
             with closing(Baser(name=verifiers[1]['name'], base=verifiers[1]['base'], readonly=True, reopen=True)) as db:
-                requester_deadline = db.epsd.get((grant,)).dts
+                requester_deadline = exchange_deadline(db, grant)
             assert processes[2].poll() is None and '"admitted": true' not in logs[2].read_text()
             assert all('"kind": "rpy"' not in log.read_text() for log in logs[:2])
             # An authenticated non-proposer queues different Admit bytes before the real author is ready.
@@ -646,7 +655,7 @@ def test_group_unblind_uses_live_member_thresholds_before_exact_admit(tmp_path, 
     query_views, reply_views = set(), set()
     for side in verifiers:
         current = inspect(tmp_path, side, grant)
-        assert current['deadline'] == requester_deadline
+        assert current['deadline'] == toIso8601(requester_deadline)
         assert current['observations'][body.said]['said'] == event.said
         with closing(state(side)) as hby:
             assert not list(hby.ks.rroots.getTopItemIter())
@@ -670,7 +679,7 @@ def test_group_unblind_uses_live_member_thresholds_before_exact_admit(tmp_path, 
                     reply_views.add((child.serder.raw, proofs))
     assert len(query_views) == len(reply_views) == 1  # Wrapping never regenerates bodies or evidence.
     assert [inspect(tmp_path, side, selected['grant']) for side in holders] == history_before
-    assert inspect(tmp_path, holders[0], grant)['deadline'] == original_deadline
+    assert inspect(tmp_path, holders[0], grant)['deadline'] == toIso8601(original_deadline)
 
 
 def test_held_bound_refresh_and_invalid_revoked_refusal(tmp_path, live_parties):
