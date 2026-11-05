@@ -390,6 +390,7 @@ def test_provisioned_nonlead_presents_exact_group_view_at_native_threshold(tmp_p
     name, base = f'group-verifier-{uuid4().hex}', issuer['base']
     hby = Habery(name=name, base=base, bran=PASSCODE, version=V2)
     try:
+        enable_kram(hby)  # Its live Unblind needs the accepted KRAM transaction, like any kli verifier.
         witness = (tmp_path / 'witness.cesr').read_bytes()
         Parser(kvy=hby.kvy, rvy=hby.rvy, version=V2).parse(ims=bytearray(witness))
         wit = Parser(version=V2).parseOneBare(ims=bytearray(witness), processive=False).serder.pre
