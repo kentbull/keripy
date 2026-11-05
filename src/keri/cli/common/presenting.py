@@ -203,8 +203,6 @@ class NativePresentation(NativeIssuance):
                     or isinstance(self.hab, (SignifyHab, SignifyGroupHab))):
                 raise ConfigurationError('presentation requires an accepted local signer')
             group = isinstance(self.hab, GroupHab)
-            if self.verb == 'endorse' and group:
-                raise ConfigurationError('independent endorsement requires an individual registry issuer')
             sendProposal, consent = getattr(args, 'send_proposal', False), getattr(args, 'consent_lifetime', None)
             if (sendProposal or consent is not None) and not (group and prepare):
                 raise ConfigurationError('--send-proposal and --consent-lifetime require group --prepare')
@@ -238,9 +236,12 @@ class NativePresentation(NativeIssuance):
                     self.intake(Path(filename).read_bytes())
             if self.verb == 'endorse':
                 from .disclosing import endorse
-                message = endorse(self)
-                print(json.dumps(dict(grant=message.said, xid=xid(message), endorsed=True,
-                                      output=args.output, transmitted=False)), flush=True)
+                message, endorsed = endorse(self)
+                result = dict(grant=message.said, xid=xid(message), endorsed=endorsed,
+                              output=args.output, transmitted=False)
+                if group:
+                    result['contributed'] = True
+                print(json.dumps(result), flush=True)
                 return
             if group:
                 background.append(mbx)

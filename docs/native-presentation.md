@@ -53,6 +53,14 @@ kli ipex present --name discloser --alias discloser --version 2.0 \
   --resume "$PREPARED_GRANT" --input endorsed.cesr --respond-unblind --deliver
 ```
 
+For a group registry issuer, each member uses its own store and the same original
+`--grant prepared.cesr`. The first member writes a partial endorsement; subsequent
+members add `--contribution member-1.cesr` (repeat for additional members) and write
+a new output file. Until the ordinary issuer signing threshold is satisfied,
+the result reports `contributed: true, endorsed: false`. Resume only with the
+aggregate reporting `endorsed: true`. Contributions preserve the exact prepared
+body and nested evidence and must use the same issuer establishment event.
+
 Complete public KEL/TEL/schema acquisition and explicit encrypted root
 provisioning before preparation. Preparation exports exactly one public Grant
 frame, approves no Unblind operation and sends nothing. Its original native

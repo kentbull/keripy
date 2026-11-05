@@ -309,6 +309,67 @@ def test_independent_issuer_endorses_prepared_discloser_grant_before_live_resume
     assert inspect(tmp_path, discloser, forwarded) == old[1]
 
 
+def test_group_issuer_endorsement_preserves_exact_preparation_until_threshold(tmp_path):
+    """Real group keys contribute files; only complete native authentication endorses."""
+    from keri.acdc import grant
+    from keri.cli.common.disclosing import endorse, frame, nodes, wire
+    from keri.cli.common.presenting import NativePresentation
+    from keri.core import Salter
+    from keri.kering import ConfigurationError
+    from keri.peer.exchanging import verifyAttachments
+    from tests.acdc.test_group_dh import groups, parsed, signed
+
+    with groups() as h:
+        opening, event = h.registrar.issue(h.registry, h.credential, salt=Salter().qb64)
+        h.anchor(event)
+        message, attachment = grant(h.issuees[0].hab, h.issuers[0].hab.pre,
+            'selected presentation', origin=messagize(h.credential, bonds=[opening.data], gvrsn=V2))
+        evidence = [serializeParsedSubstream(node) for node in parsed(message.raw + attachment).nests]
+        original = tmp_path / 'prepared.cesr'
+        original.write_bytes(signed(message, h.issuees, nests=evidence))
+
+        def owner(member, output, contributions=()):
+            args = SimpleNamespace(grant=str(original), said=message.said,
+                sender=message.pre, recipient=message.sad['ri'], output=str(output),
+                contribution=[str(path) for path in contributions])
+            command = NativePresentation(args, 'endorse')
+            command.wind(lambda: 0.0)
+            command.deadline = 10
+            command.hby, command.hab, command.rgy, command.exc = (
+                member.hby, member.hab, member.rgy, member.exc)
+            return command
+
+        partial = tmp_path / 'member-one.cesr'
+        _, complete = endorse(owner(h.issuers[0], partial))
+        assert not complete
+        first = frame(partial.read_bytes())
+        baseline = frame(original.read_bytes())
+        assert first.serder.raw == baseline.serder.raw and nodes(first) == nodes(baseline)
+        assert verifyAttachments(h.issuers[0].hby, message, tsgs=first.tsgs)[3]
+        assert {sig.index for pre, _, _, sigs in first.tsgs if pre.qb64 == h.issuers[0].hab.pre
+                for sig in sigs} == {0}
+
+        # A member signature commits the Grant body; the separately selected
+        # original file also caps its exact nested disclosure and proof bytes.
+        altered = frame(partial.read_bytes())
+        altered.nests[0].bsqs = []
+        wrong = tmp_path / 'changed-proof.cesr'
+        wrong.write_bytes(wire(altered))
+        output = tmp_path / 'endorsed.cesr'
+        with pytest.raises(ConfigurationError, match='exact prepared Grant'):
+            endorse(owner(h.issuers[1], output, [wrong]))
+        assert not output.exists()
+
+        _, complete = endorse(owner(h.issuers[1], output, [partial]))
+        assert complete
+        final = frame(output.read_bytes())
+        assert final.serder.raw == baseline.serder.raw and nodes(final) == nodes(baseline)
+        assert {sig.index for pre, _, _, sigs in final.tsgs if pre.qb64 == h.issuers[0].hab.pre
+                for sig in sigs} == {0, 1}
+        assert not verifyAttachments(h.issuers[1].hby, message, tsgs=final.tsgs)[3]
+        verify(h.issuers[1].hby, message)
+
+
 def test_provisioned_nonlead_presents_exact_group_view_at_native_threshold(tmp_path, live_parties):
     issuer, holders, body, selected = group_copy(tmp_path, live_parties,
         data='{"d":"","shown":{"d":"","name":"Ada"},"secret":{"d":"","name":"hidden"}}')
