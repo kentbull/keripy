@@ -19,7 +19,7 @@ from keri.peer import Exchanger
 
 
 @contextmanager
-def parties(enabled=False, count=1, opener="grant"):
+def parties(enabled=False, count=1, opener="grant", approve_issuee=True):
     """Two isolated encrypted Haberies; TEL crosses authenticated parser intake."""
     with ExitStack() as stack:
         sides = []
@@ -78,7 +78,8 @@ def parties(enabled=False, count=1, opener="grant"):
             receive(side, message.raw + atc)
             assert side.hby.db.epse.get((message.said,)) is not None
             assert side.hby.db.exns.get((message.said,)) is None
-            assert side.dh.approve(message.said) == xid
+            if side is issuer or approve_issuee:
+                assert side.dh.approve(message.said) == xid
         yield SimpleNamespace(issuer=issuer, issuee=issuee, registrar=registrar,
                               registries=registries, nodes=nodes, grant=message,
                               xid=xid, prior=prior)
@@ -246,20 +247,41 @@ def test_reply_refusals_write_no_roots(enabled, fault, fakeHelpingClock):
         assert all(root is None for root in roots(issuer, setup))
 
 
-def test_kram_query_and_reply_accumulate_real_partial_signatures():
-    with parties(True) as setup:
+def test_kram_query_and_reply_accumulate_real_partial_signatures(fakeHelpingClock):
+    with parties(True, approve_issuee=False) as setup:
         issuer, issuee = setup.issuer, setup.issuee
-        qry = SerderKERI(raw=issuer.dh.start(setup.grant.said))
+        stream = issuer.dh.start(setup.grant.said)
+        qry = SerderKERI(raw=stream)
+        deadlines = [side.hby.db.epsd.get((setup.grant.said,)).dts for side in (issuer, issuee)]
         receive(issuee, resign(issuer, qry, 0))
         receive(issuee, resign(issuer, qry, 0))
         assert not issuee.dh.cues and roots(issuee, setup) == [None]
         receive(issuee, resign(issuer, qry, 1))
-        assert issuee.hby.db.kramPMKS.get((issuer.hab.pre, qry.said)) == []
+        key = (issuer.hab.pre, qry.said)
+        assert issuee.hby.db.kramPMKS.get(key) == []
+        assert not issuee.dh.cues and roots(issuee, setup) == [None]
+        originalCache = deepcopy(issuee.hby.db.kramMSGC.get(key))
+        assert originalCache is not None
+        assert issuee.dh.approve(setup.grant.said) == setup.xid
+        # A cached marker cannot authenticate a new partial contribution.
+        receive(issuee, resign(issuer, qry, 0))
+        assert not issuee.dh.cues and roots(issuee, setup) == [None]
+        assert issuee.hby.db.kramPMKM.get(key) is None
+        # The exact full query now reaches the independently approved real owner.
+        receive(issuee, stream)
         rpy = SerderKERI(raw=issuee.dh.cues.popleft()["msg"])
         receive(issuer, resign(issuee, rpy, 0))
         assert roots(issuer, setup) == [None]
         receive(issuer, resign(issuee, rpy, 1))
         assert roots(issuer, setup)[0].qb64 == roots(issuee, setup)[0].qb64
+        assert issuee.hby.db.kramMSGC.get(key) == originalCache
+        assert [side.hby.db.epsd.get((setup.grant.said,)).dts for side in (issuer, issuee)] == deadlines
+        # Cache timing, not a renewed approval or successful retry, limits later delivery.
+        fakeHelpingClock.advance(seconds=62)
+        receive(issuee, stream)
+        assert not issuee.dh.cues
+        assert issuee.hby.db.kramMSGC.get(key) == originalCache
+        assert [side.hby.db.epsd.get((setup.grant.said,)).dts for side in (issuer, issuee)] == deadlines
 
 
 def test_same_operation_conflict_and_local_approval(fakeHelpingClock):

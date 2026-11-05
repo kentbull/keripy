@@ -8,6 +8,22 @@ from ...core import Codens, Counter, Parser, Texter
 from ...kering import ConfigurationError, ExtractionError
 
 
+class HttpSubmissionError(ConfigurationError):
+    """Retain actual failed HTTP statuses for the selected finite delivery."""
+    def __init__(self, statuses):
+        self.statuses = tuple(statuses)
+        super().__init__(f'HTTP submission failed with statuses {self.statuses}')
+
+
+def sendQuery(owner, raw, dest):
+    """An exact approved query may await remote consent; other delivery failures remain fatal."""
+    try:
+        yield from owner.send(raw, dest)
+    except HttpSubmissionError as ex:
+        if not ex.statuses or any(status != 403 for status in ex.statuses):
+            raise
+
+
 def messageParts(raw):
     """Yield v2 bodies and unchanged attachments from bare or counted messages.
 
@@ -66,8 +82,9 @@ def send(owner, raw, dest, *, topic='credential'):
             owner.check()
             yield owner.tock
         owner.check()
-        for child in children:
-            if isinstance(child, HTTPStreamMessenger) and not 200 <= child.rep.status < 300:
-                raise ConfigurationError(f'HTTP submission failed with status {child.rep.status}')
+        failed = [child.rep.status for child in children
+                  if isinstance(child, HTTPStreamMessenger) and not 200 <= child.rep.status < 300]
+        if failed:
+            raise HttpSubmissionError(failed)
     finally:
         owner.remove([transport])
