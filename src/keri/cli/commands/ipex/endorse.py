@@ -10,6 +10,7 @@ issuing.options(parser)
 parser.add_argument('--alias', '-a', required=True)
 parser.add_argument('--said', required=True, help='exact Grant SAID')
 parser.add_argument('--grant', required=True, help='one native Grant frame; nested bodies and proofs are preserved')
+parser.add_argument('--contribution', action='append', default=[], help='group issuer contribution to this exact --grant; repeat for additional members')
 parser.add_argument('--sender', required=True, help='actual discloser AID')
 parser.add_argument('--recipient', required=True, help='selected verifier AID')
 

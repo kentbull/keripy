@@ -6,7 +6,9 @@ from .credentialing import load, recipient
 from .presenting import admitted, selected, xid
 from ... import Kinds, Vrsn_2_0
 from ...acdc import chaining, ipexing
+from ...app import GroupHab
 from ...core import Parser, Prefixer, SealEvent, messagize
+from ...core.eventing import verifySigs
 from ...help import nowUTC
 from ...kering import ConfigurationError
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
@@ -156,6 +158,7 @@ class SelectedPreparation:
 
 
 def endorse(owner):
+    """Add issuer authentication; partial group files confer no completed endorsement."""
     args = owner.args
     item = frame(Path(args.grant).read_bytes())
     message = item.serder
@@ -174,14 +177,48 @@ def endorse(owner):
     if saved.serder.raw != message.raw or nodes(saved) != nodes(item):
         raise ConfigurationError('native retention differs from the selected Grant')
     owner.check()
+    group = isinstance(owner.hab, GroupHab)
+    contributions = getattr(args, 'contribution', ())
+    if contributions and not group:
+        raise ConfigurationError('member contributions require a group registry issuer')
+    original = factors(item)
+    for filename in contributions:
+        candidate = frame(Path(filename).read_bytes())
+        extra = factors(candidate) - original
+        if (candidate.serder.raw != message.raw or nodes(candidate) != nodes(item)
+                or not original.issubset(factors(candidate))
+                or any(factor[:2] != ('tsg', owner.hab.pre) for factor in extra)):
+            raise ConfigurationError('contribution permits issuer signatures on the exact prepared Grant only')
+        item.tsgs.extend(tsg for tsg in candidate.tsgs if tsg[0].qb64 == owner.hab.pre)
     addition = frame(owner.hab.endorse(message, framed=False, gvrsn=Vrsn_2_0))
     item.tsgs.extend(addition.tsgs)
     item.cigars.extend(addition.cigars)
+    endorsed = True
+    if group:
+        # Combine only the selected current establishment; native verifiers and
+        # Tholder own cryptographic validity and the actual signing threshold.
+        pre, number, diger, _ = addition.tsgs[0]
+        signatures = {}
+        others = []
+        for signer, sn, dig, sigers in item.tsgs:
+            if signer.qb64 != pre.qb64:
+                others.append((signer, sn, dig, sigers))
+                continue
+            if sn.sn != number.sn or dig.qb64 != diger.qb64:
+                raise ConfigurationError('issuer contributions name different establishment events')
+            signatures.update((siger.qb64, siger) for siger in sigers)
+        tholder, verfers = owner.hby.db.resolveVerifiers(pre=pre.qb64, sn=number.sn, dig=diger.qb64)
+        verified, indices = verifySigs(message.raw, list(signatures.values()), verfers)
+        if len(verified) != len(signatures):
+            raise ConfigurationError('invalid group issuer contribution')
+        item.tsgs = [*others, (pre, number, diger, verified)]
+        endorsed = tholder.satisfy(indices)
     raw = wire(item)
-    protected(owner, raw)
-    saved, _ = retained(owner, message.said)
-    context(owner, saved)
+    if endorsed:
+        protected(owner, raw)
+        saved, _ = retained(owner, message.said)
+        context(owner, saved)
     owner.check()
     with Path(args.output).open('xb') as output:
         output.write(raw)
-    return message
+    return message, endorsed
