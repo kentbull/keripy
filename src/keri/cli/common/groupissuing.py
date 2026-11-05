@@ -12,6 +12,7 @@ from ...kering import ConfigurationError, KeriError
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from .credentialing import recipient
 from .negotiating import NativeNegotiation
+from .witnessing import witnessAuths
 from . import nativeanchoring
 
 
@@ -63,8 +64,10 @@ class GroupIssuance:
             raise ConfigurationError('only the existing elected custodian may create the group issuance proposal')
         if not self.lead and args.output:
             raise ConfigurationError('only the issuer custodian writes completed public issuance evidence')
-        if args.authenticate or args.code or args.code_time is not None:
-            raise ConfigurationError('group issuer witness authentication requires its group receipt owner')
+        if not self.lead and (args.authenticate or args.code or args.code_time is not None):
+            raise ConfigurationError('supply contributor witness authorization to the subsequent multisig join')
+        self.auths = witnessAuths(owner.hab.kever.wits, authenticate=args.authenticate,
+                                  codes=args.code, codeTime=args.code_time)
         if args.proposal_output and (Path(args.proposal_output).exists()
                 or args.output and Path(args.output).resolve() == Path(args.proposal_output).resolve()):
             raise ConfigurationError('proposal output already exists or conflicts with --output')
@@ -244,7 +247,7 @@ class GroupIssuance:
         _, event = Registrar(owner.rgy).issue(self.registry, acdc=self.body,
             salt=owner.hab.mgr.getRegistryRoot(owner.hab.pre, self.registry.regk).qb64)
         yield from nativeanchoring.groupAnchor(owner, self.registry, event, self.mux, background,
-                                               grant=self.grant.said)
+                                               grant=self.grant.said, auths=self.auths)
         owner.finish(self.xid, self.grant.said)
         published = owner.public(self.registry.regk)
         owner.record(published)

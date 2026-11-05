@@ -225,8 +225,6 @@ class NativeRegistryInceptor(doing.DoDoer):
             if isinstance(self.hab, GroupHab) and (self.hab.mhab is None or self.hab.mhab.pre not in
                                                    self.hby.db.signingMembers(pre=self.hab.pre)):
                 raise ConfigurationError("native registry CLI requires a local group signing member")
-            if isinstance(self.hab, GroupHab) and (authenticate or codes or codeTime is not None):
-                raise ConfigurationError('group registry witness authentication requires its group receipt owner')
             self.auths = witnessAuths(self.hab.kever.wits, authenticate=authenticate,
                                       codes=codes, codeTime=codeTime)
             self.rgy = NativeRegery(hby=self.hby, name=name, base=base)
@@ -290,7 +288,7 @@ class NativeRegistryInceptor(doing.DoDoer):
             proposal, attachments = multisigRipExn(self.hab, tel, signed, usage=usage)
             # Persist exact authenticated local consent before any member submission.
             self.mbx.parser.parseOneBare(ims=bytearray(proposal.raw + attachments), local=True)
-            self.counselor.start(self.hab, self.hab.kever.prefixer, number, diger)
+            self.counselor.start(self.hab, self.hab.kever.prefixer, number, diger, auths=self.auths)
             for member in self.hby.db.signingMembers(pre=self.hab.pre):
                 if member != self.hab.mhab.pre:
                     self.postman.send(src=self.hab.mhab.pre, dest=member, topic='multisig',

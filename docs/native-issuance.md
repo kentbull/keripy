@@ -159,6 +159,16 @@ Grant `--prior` selects an exact accepted native Apply or Agree and preserves
 the original transaction XID. The agreed plan must match the disclosed body.
 Issuer witness authorization uses the same `--authenticate`, repeated
 `--code AID:code`, and `--code-time` options as native registry inception.
+For a group RIP or BUP, supply these options to the proposing command and to
+`kli multisig join --version 2.0` in the member store that may be elected to
+collect receipts. The ordinary group witness election is independent of the DH
+custodian. A noncustodian Grant contributor supplies its codes to its subsequent
+join command. Group registry state updates accept these options too.
+
+Codes authorize only the selected event's witnesses, remain local to the receipt
+operation, and are never included in member proposals. A restarted operation
+requires supplying them again. With these options, `multisig join` selects only
+RIP/BUP approvals; other notifications remain pending.
 
 Optional `--output` exclusively creates a public evidence file and appends
 completed public evidence during the live operation. It never exports roots

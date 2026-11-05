@@ -58,12 +58,13 @@ class Counselor(doing.DoDoer):
         self.proxy = proxy
         self.witDoer = Receiptor(hby=self.hby)
         self.witq = WitnessInquisitor(hby=hby)
+        self._witnessAuths = {}  # Ephemeral caller authorization for exact pending events.
 
         doers = [self.swain, self.witq, self.witDoer, doing.doify(self.escrowDo)]
 
         super(Counselor, self).__init__(doers=doers, **kwa)
 
-    def start(self, ghab, prefixer, number, diger):
+    def start(self, ghab, prefixer, number, diger, auths=None):
         """ Begin processing of escrowed group multisig identifier
 
         Escrow identifier for multisigs, witness receipts and delegation anchor
@@ -73,6 +74,9 @@ class Counselor(doing.DoDoer):
             prefixer (Prefixer): prefixer of group identifier
             number (Number): number of event of group identifier
             diger (Diger): diger of event of group identifier
+            auths (dict | None): explicit witness headers for this exact event.
+                None preserves previously supplied headers; a map replaces them.
+                Headers remain in memory and are discarded on completion or exit.
 
         Returns:
             bool: True if the escrow record was added
@@ -82,9 +86,29 @@ class Counselor(doing.DoDoer):
         evt = ghab.msgOwnEvent(sn=number.sn, allowPartiallySigned=True, framed=True,
                                gvrsn=self.version if self.version is not None else Version)
         serder = SerderKERI(raw=evt)  # used just for the log message
+        if auths is not None:
+            if (serder.pre, serder.sn, serder.said) != (prefixer.qb64, number.sn, diger.qb64):
+                raise ValidationError('witness authorization must name the exact local group event')
+            headers = dict(auths)
+            retained = self._witnessAuths.setdefault((prefixer.qb64, number.sn, diger.qb64), {})
+            retained.clear()
+            retained.update(headers)
         logger.info("Waiting for other signatures on %s for %s:%s...",
                     serder.ilk, prefixer.qb64, number.sn)
         return self.hby.db.gpse.add(keys=(prefixer.qb64,), val=(number, diger))
+
+    def _clearWitnessAuths(self, pre, sn, dig):
+        headers = self._witnessAuths.pop((pre, sn, dig), None)
+        if headers is not None:
+            headers.clear()  # Receipt queues/cues borrow this same dictionary.
+
+    def exit(self, deeds=None):
+        try:
+            super().exit(deeds=deeds)
+        finally:
+            if deeds is None:
+                for key in list(self._witnessAuths):
+                    self._clearWitnessAuths(*key)
 
     def complete(self, prefixer, number, diger=None):
         """ Check for completed multsig protocol for the specific event
@@ -104,6 +128,7 @@ class Counselor(doing.DoDoer):
             if diger and (cdiger.qb64 != diger.qb64):
                 raise ValidationError(f"invalid multisig protocol escrowed event {cdiger.qb64}-{diger.qb64}")
 
+        self._clearWitnessAuths(prefixer.qb64, number.sn, cdiger.qb64)
         return True
 
     def escrowDo(self, tymth, tock=1.0, **kwa):
@@ -163,7 +188,8 @@ class Counselor(doing.DoDoer):
                     # We are a delegated identifier, must wait for delegator approval for dip and drt
                     if witered:  # We are elected to perform delegation and witnessing messaging
                         logger.info("AID %s...%s: We are the witnesser, sending %s to delegator", pre[:4], pre[-4:], pre)
-                        self.swain.delegation(pre=pre, sn=number.sn)
+                        self.swain.delegation(pre=pre, sn=number.sn,
+                            auths=self._witnessAuths.get((pre, number.sn, diger.qb64), {}))
                     else:
                         anchor = dict(i=pre, s=number.snh, d=diger.qb64)
                         kwa = dict(version=self.version, gvrsn=self.version, kind=self.kind) if self.version is not None else {}
@@ -181,7 +207,8 @@ class Counselor(doing.DoDoer):
                         logger.info(
                             "AID %s...%s: We are the fully signed witnesser %s, sending to witnesses",
                             pre[:4], pre[-4:], number.sn)
-                        self.witDoer.msgs.append(dict(pre=pre, sn=number.sn))
+                        self.witDoer.msgs.append(dict(pre=pre, sn=number.sn,
+                            auths=self._witnessAuths.get((pre, number.sn, diger.qb64))))
 
                     # Move to escrow waiting for witness receipts
                     logger.info("AID %s...%s: Waiting for fully signed witness receipts for %s",
@@ -207,6 +234,7 @@ class Counselor(doing.DoDoer):
                     logger.info("AID %s...%s: Delegation approval for %s received.", pre[:4], pre[-4:], pre)
 
                     self.hby.db.cgms.put(keys=(pre, number.qb64), val=diger)
+                    self._clearWitnessAuths(pre, number.sn, diger.qb64)
 
             else:  # Not witnesser, we need to look for the anchor and then wait for receipts
                 if serder := self.hby.db.fetchLastSealingEventByEventSeal(kever.delpre,
@@ -248,6 +276,7 @@ class Counselor(doing.DoDoer):
                 logger.info("AID %s...%s: Witness receipts complete, %s confirmed.", pre[:4], pre[-4:], pre)
                 self.hby.db.gpwe.rem(keys=(pre,))
                 self.hby.db.cgms.put(keys=(pre, number.qb64), val=diger)
+                self._clearWitnessAuths(pre, number.sn, diger.qb64)
             elif not witer:
                 self.witDoer.gets.append(dict(pre=pre, sn=number.sn))
 

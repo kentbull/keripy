@@ -177,8 +177,6 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
     # Root possession is explicit capability; group membership alone cannot stage a successor.
     refused = kli(tmp_path, *update_args, succeeds=False)
     assert 'existing issuer-owned registry root' in refused and not destination.exists()
-    refused = kli(tmp_path, *update_args, '--code', 'unsupported:code', succeeds=False)
-    assert 'group receipt owner' in refused and not destination.exists()
     hby = setupHby(name=lead['name'], base=lead['base'], bran=PASSCODE, noPrompt=True, version=V2)
     rgy = Regery(hby, name=lead['name'], base=lead['base'])
     notifier = Notifier(hby)
@@ -189,7 +187,7 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
         held = tmp_path / 'issuer-held-opening.cesr'
         held.write_bytes(proof.qb64b)
         unrelated = {keys: notice.attrs for keys, notice in notifier.noter.notes.getTopItemIter()
-                     if notice.attrs['r'].startswith('/exn/ipex/')}
+                     if notice.attrs['r'].startswith(('/xip/ipex/', '/exn/ipex/'))}
         assert {attrs['d'] for attrs in unrelated.values()} >= {selected['grant'], before[0][2]}
     finally:
         notifier.noter.close()
@@ -217,6 +215,10 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
     assert root == before[0][0] and encrypted != root
     assert Blinder.unblind(first.sad['b'], salt=root, sn=1, acdc=body.said, states=('issued',)).qb64 == proof.qb64
     assert all(root.encode() not in p.read_bytes() for p in (partial, proposal, contribution, held))
+
+    # With the root present, wrong-witness authorization still fails before staging.
+    refused = kli(tmp_path, *update_args, '--authenticate', '--code', 'unsupported:code', succeeds=False)
+    assert 'selected witness' in refused and not destination.exists()
 
     # The formerly rootless member authors BUP2; the other member must approve its exact controller anchor.
     log = tmp_path / 'nonlead-update.log'

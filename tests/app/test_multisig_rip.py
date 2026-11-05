@@ -1,25 +1,30 @@
 """Native RIP group proposal integration probes."""
 
 from contextlib import ExitStack, contextmanager
+from time import monotonic, sleep
 from uuid import uuid4
 
+import falcon
 import pytest
+from hio.base import doing
+from hio.core import http
 
 from keri import Kinds, Vrsn_2_0
 from keri.acdc import messaging
 from keri.acdc.registraring import Regery
 from keri.app import Counselor, Multiplexor, Notifier, openHby
 from keri.app.grouping import loadHandlers, multisigRipExn
+from keri.app.indirecting import ReceiptEnd
 from keri.cli.commands.multisig.join import JoinDoer
 from keri.cli.commands.vc.registry.incept import NativeRegistryInceptor
 from keri.kering import ValidationError
-from keri.core import Diger, Number, Parser, SealSource, SerderACDC, SerderKERI, exchange, interact, messagize
+from keri.core import Diger, Number, Parser, Prefixer, SealSource, SerderACDC, SerderKERI, exchange, interact, messagize
 from keri.peer import Exchanger
 from keri.peer.exchanging import serializeParsedSubstream
 
 
 @contextmanager
-def participant_stores(*, temp=True, base="", est_only=False):
+def participant_stores(*, temp=True, base="", est_only=False, wits=()):
     with ExitStack() as stack:
         hbys = [stack.enter_context(openHby(name=f'rip-{uuid4().hex}-{i}', temp=temp, base=base,
                                            version=Vrsn_2_0)) for i in range(3)]
@@ -31,7 +36,8 @@ def participant_stores(*, temp=True, base="", est_only=False):
                     ims=bytearray(member.msgOwnInception(gvrsn=Vrsn_2_0)), local=True)
         mids = [member.pre for member in members]
         groups = [hby.makeGroupHab(group='issuer', mhab=member, smids=mids,
-                                   isith='2', nsith='2', estOnly=est_only, version=Vrsn_2_0, kind=Kinds.json)
+                                   isith='2', nsith='2', estOnly=est_only, wits=list(wits), toad=len(wits),
+                                   version=Vrsn_2_0, kind=Kinds.json)
                   for hby, member in zip(hbys, members)]
         inception = hbys[0].db.evts.get((groups[0].pre, groups[0].pre))
         inception_stream = messagize(inception, sigers=[hby.db.sigs.get((groups[0].pre, inception.said))[0]
@@ -83,11 +89,11 @@ def processors(hby, rgy):
 
 
 @contextmanager
-def restart_join(hby, rgy):
+def restart_join(hby, rgy, **options):
     name, base = hby.name, hby.base
     rgy.close()
     hby.close()
-    joined = JoinDoer(name=name, base=base, bran=None, group='issuer', version=Vrsn_2_0)
+    joined = JoinDoer(name=name, base=base, bran=None, group='issuer', version=Vrsn_2_0, **options)
     try:
         yield joined
     finally:
@@ -123,6 +129,135 @@ def test_existing_owners_accept_exact_rip_after_normal_group_threshold(participa
         assert counselor.complete(group.kever.prefixer, number, diger)
         assert rgy.store.seqEvent(rip.said, 0).raw == rip.raw
         assert rgy.store.anchor(rip.said)[1].qb64 == anchor.said
+
+
+def test_group_registry_auth_reaches_elected_witnesser_and_accepts_exact_tel(unused_tcp_port):
+    class AuthorizationGate:
+        def __init__(self):
+            self.expected = None
+            self.received = []
+
+        def process_request(self, req, rep):
+            if req.method == 'POST':
+                header = req.get_header('Authorization')
+                self.received.append(header)
+                if header != self.expected:
+                    raise falcon.HTTPUnauthorized(description='Witness authorization required')
+
+    with openHby(name='auth-witness', version=Vrsn_2_0) as whby:
+        witness = whby.makeHab(name='witness', transferable=False, version=Vrsn_2_0)
+        endpoint = ReceiptEnd(hab=witness, version=Vrsn_2_0)
+        gate = AuthorizationGate()
+        app = falcon.App(middleware=[gate])
+        app.add_route('/receipts', endpoint)
+        server = http.Server(host='127.0.0.1', port=unused_tcp_port, app=app)
+        with participant_stores(wits=[witness.pre]) as (hbys, groups, rgys):
+            counselors = [Counselor(hby=hby, version=Vrsn_2_0) for hby in hbys[:2]]
+            scheduler = doing.Doist(doers=[http.ServerDoer(server=server), endpoint, *counselors], tock=.03125)
+            scheduler.enter()
+            try:
+                server.servant.eha = server.servant.ha
+                introduction = witness.replay(gvrsn=Vrsn_2_0) + witness.makeLocScheme(
+                    url=f'http://127.0.0.1:{server.servant.ha[1]}', scheme='http', gvrsn=Vrsn_2_0)
+                for hby in hbys:
+                    hby.psr.parse(ims=bytearray(introduction))
+
+                def witness_event(anchor, tel=None):
+                    # The proposer is member 1; the verified lowest signer, member 0, sends receipts.
+                    assert groups[0].witnesser(sn=anchor.sn, dig=anchor.said)
+                    assert not groups[1].witnesser(sn=anchor.sn, dig=anchor.said)
+                    gate.expected = f'code-{anchor.sn}#2026-11-04T00:00:00+00:00'
+                    key = (anchor.pre, anchor.sn, anchor.said)
+                    borrowed = []
+                    for counselor, group in zip(counselors, groups):
+                        assert not counselor._witnessAuths
+                        counselor.start(group, Prefixer(qb64=anchor.pre), Number(num=anchor.sn),
+                                        Diger(qb64=anchor.said), auths={witness.pre: gate.expected})
+                        counselor.processEscrows()
+                        borrowed.append(counselor._witnessAuths[key])
+                    assert counselors[0].witDoer.msgs[0]['auths'] is borrowed[0]
+                    assert not counselors[1].witDoer.msgs
+                    before = len(gate.received)
+                    cutoff = monotonic() + 20
+                    while not all(counselor.complete(Prefixer(qb64=anchor.pre), Number(num=anchor.sn),
+                                                     Diger(qb64=anchor.said)) for counselor in counselors):
+                        assert monotonic() < cutoff, gate.received
+                        scheduler.recur()
+                        for hby, rgy in zip(hbys, rgys):
+                            hby.kvy.processEscrows()
+                            rgy.processEscrows()
+                        sleep(.002)
+                    assert gate.received[before:] == [gate.expected]
+                    for counselor, hby, rgy, headers in zip(counselors, hbys, rgys, borrowed):
+                        assert not counselor._witnessAuths and not headers
+                        assert hby.db.fullyWitnessed(anchor)
+                        receipt, = hby.db.wigs.get((anchor.pre, anchor.said))
+                        assert receipt.index == 0
+                        assert witness.kever.verfers[0].verify(receipt.raw, anchor.raw)
+                        if tel is not None:
+                            accepted = rgy.store.seqEvent(
+                                tel.said if tel.ilk == 'rip' else tel.sad['rd'], Number(numh=tel.sad['n']).num)
+                            assert accepted is not None and accepted.raw == tel.raw
+                            assert rgy.store.anchor(tel.said)[1].qb64 == anchor.said
+
+                # Bootstrap the witnessed group, then require fresh event-specific headers for RIP and BUP.
+                witness_event(groups[0].kever.serder)
+                rip = messaging.regcept(israid=groups[0].pre)
+                bup = messaging.blindate(regid=rip.said, prior=rip.said,
+                                         blid=Diger(ser=b'opaque authorized update').qb64)
+                for tel in (rip, bup):
+                    regid = rip.said
+                    partial = groups[1].interact(data=[dict(i=regid, s=tel.sad['n'], d=tel.said)],
+                                                 version=Vrsn_2_0, gvrsn=Vrsn_2_0)
+                    anchor = SerderKERI(raw=partial)
+                    complete = messagize(anchor, sigers=[group.sign(anchor.raw)[0] for group in groups[:2]],
+                                          gvrsn=Vrsn_2_0)
+                    for hby, rgy in zip(hbys[:2], rgys[:2]):
+                        hby.psr.parse(ims=bytearray(complete), local=True)
+                        hby.kvy.processEscrows()
+                        assert not rgy.processEvent(tel, sscs=[(Number(num=anchor.sn), Diger(qb64=anchor.said))])
+                        assert rgy.store.seqEvent(regid, Number(numh=tel.sad['n']).num) is None
+                    witness_event(anchor, tel)
+                # Closing an unfinished event also destroys its borrowed header dictionary.
+                pending = SerderKERI(raw=groups[1].interact(version=Vrsn_2_0, gvrsn=Vrsn_2_0))
+                counselors[1].start(groups[1], groups[1].kever.prefixer, Number(num=pending.sn),
+                                     Diger(qb64=pending.said), auths={witness.pre: 'exit-only'})
+                abandoned = counselors[1]._witnessAuths[(pending.pre, pending.sn, pending.said)]
+            finally:
+                scheduler.exit()
+            assert all(not counselor._witnessAuths for counselor in counselors)
+            assert not abandoned
+
+
+def test_real_join_supplies_elected_members_exact_witness_authorization():
+    with openHby(name='join-auth-witness', version=Vrsn_2_0) as whby:
+        witness = whby.makeHab(name='witness', transferable=False, version=Vrsn_2_0)
+        with participant_stores(temp=False, base=f'join-auth-{uuid4().hex}', wits=[witness.pre]) as participants:
+            hbys, groups, rgys = participants
+            # Member 1 proposes; member 0 becomes the elected witnesser only after explicit approval.
+            rip, anchor, wrapper, attachments = proposal(
+                [hbys[1], hbys[0], hbys[2]], [groups[1], groups[0], groups[2]])
+            notifier, _, receiver = processors(hbys[0], rgys[0])
+            receiver.parse(ims=bytearray(wrapper.raw + attachments))
+            attrs = next(notifier.noter.notes.getTopItemIter())[1].attrs
+            notifier.noter.close()
+            stamp = '2026-11-04T00:00:00+00:00'
+            with restart_join(hbys[0], rgys[0], auto=True, authenticate=True,
+                              codes=[f'{witness.pre}:123456'], codeTime=stamp) as joined:
+                approval = joined.rip(attrs)
+                try:
+                    next(approval)
+                    group = joined.hby.habByName('issuer')
+                    assert group.witnesser(sn=anchor.sn, dig=anchor.said)
+                    assert wrapper.pre != group.mhab.pre
+                    headers = joined.counselor._witnessAuths[(group.pre, anchor.sn, anchor.said)]
+                    assert headers == {witness.pre: f'123456#{stamp}'}
+                    assert joined.counselor.witDoer.msgs[0]['auths'] is headers
+                    assert joined.rgyV2.store.seqEvent(rip.said, 0) is None
+                finally:
+                    approval.close()
+                    joined.counselor.exit()
+                assert not headers
 
 
 def test_authenticated_rip_proposal_reaches_existing_notification_path(participants):

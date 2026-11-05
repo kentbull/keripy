@@ -13,6 +13,7 @@ from hio.help import ogler
 from prettytable import PrettyTable
 
 from ...common import Parsery, setupHby, printIdentifier, parseVersion
+from ...common.witnessing import witnessAuths
 
 from ....kering import (TraitCodex, ConfigurationError,
                         Kinds, MissingAnchorError, ValidationError, Version, Vrsn_1_0, Vrsn_2_0)
@@ -43,6 +44,11 @@ parser.add_argument("--auto", "-Y", help="auto approve any delegation request no
 parser.add_argument('--version', default=None, required=False, type=parseVersion,
                     help='KERI protocol version for mailbox queries while joining, such as 1.0 or 2.0')
 
+parser.add_argument('--authenticate', '-z', action='store_true',
+                    help='Authorize witness receipts for a v2 RIP or BUP approval')
+parser.add_argument('--code', action='append', default=[], help='Selected witness AID:code')
+parser.add_argument('--code-time', default=None, help='ISO8601 capture time for witness codes')
+
 def join(args):
     """ Wait for and provide interactive confirmation of group multisig inception, rotation or interaction events
 
@@ -57,7 +63,8 @@ def join(args):
     group = args.group
     version = args.version
 
-    joinDoer = JoinDoer(name=name, base=base, bran=bran, group=group, auto=auto, version=version)
+    joinDoer = JoinDoer(name=name, base=base, bran=bran, group=group, auto=auto, version=version,
+                        authenticate=args.authenticate, codes=args.code, codeTime=args.code_time)
 
     doers = [joinDoer]
     return doers
@@ -68,7 +75,8 @@ class JoinDoer(doing.DoDoer):
 
     """
 
-    def __init__(self, name, base, bran, group, auto=False, version=None):
+    def __init__(self, name, base, bran, group, auto=False, version=None,
+                 authenticate=False, codes=None, codeTime=None):
         """ Create doer for polling for group multisig events and either approve automatically or prompt user
 
         Parameters:
@@ -79,6 +87,10 @@ class JoinDoer(doing.DoDoer):
             auto (bool): non-interactively auto approve any inception, rotation, interaction, or other event
                          while using the default group of "default-group"
         """
+        self.witnessOptions = dict(authenticate=authenticate, codes=codes, codeTime=codeTime)
+        self.authorizeWitnesses = bool(authenticate or codes or codeTime is not None)
+        if self.authorizeWitnesses and version != Vrsn_2_0:
+            raise ConfigurationError('witness authorization requires v2 RIP or BUP approval')
         self.group = group
         self.version = version
         self.hby = setupHby(name=name, base=base, bran=bran, version=self.version)
@@ -155,6 +167,8 @@ class JoinDoer(doing.DoDoer):
             for keys, notice in self.notifier.noter.notes.getTopItemIter():
                 attrs = notice.attrs
                 route = attrs['r']
+                if self.authorizeWitnesses and route not in ('/multisig/rip', '/multisig/bup'):
+                    continue  # These credentials apply only to registry approvals.
 
                 match route:
                     case '/multisig/icp':
@@ -249,6 +263,15 @@ class JoinDoer(doing.DoDoer):
         elif anchor.sn != group.kever.sn + 1 or anchor.sad['p'] != prior:
             raise ValidationError("registry anchor does not extend the current group event")
 
+        # Credentials follow this exact anchor, including retained historical approvals
+        # and a proposed rotation's witness cuts/additions.
+        if proposal is not None:
+            wits = [wit.qb64 for wit in self.hby.kvy.fetchWitnessState(group.pre, anchor.sn)]
+        else:
+            wits = [wit for wit in group.kever.wits if wit not in anchor.sad.get('br', [])]
+            wits.extend(anchor.sad.get('ba', []))
+        auths = witnessAuths(wits, **self.witnessOptions)
+
         print(f"\nGroup registry {ilk} proposed for {group.name} ({group.pre}):")
         print(f"    Registry: {regid}\n    TEL event: {tel.said} at ordinal {ordinal}\n    Exact group anchor: {anchor.said}")
         if usage := wrapper.sad['a'].get('usage'):
@@ -274,7 +297,7 @@ class JoinDoer(doing.DoDoer):
             # replays remote contributions for the same exact anchor.
             self.psr.parseOneBare(ims=bytearray(proposal.raw + attachments), local=True)
         number, diger = Number(num=anchor.sn), Diger(qb64=anchor.said)
-        self.counselor.start(group, Prefixer(qb64=group.pre), number, diger)
+        self.counselor.start(group, Prefixer(qb64=group.pre), number, diger, auths=auths)
         proposer = wrapper.pre
         others = [mid for mid in self.hby.db.signingMembers(pre=group.pre)
                   if mid != group.mhab.pre]
