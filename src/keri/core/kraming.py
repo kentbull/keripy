@@ -519,6 +519,30 @@ class Kramer:
             return False
         return newMdtMs > cachedMdtMs
 
+    def _retryQuery(self, msg, kwa, cache):
+        """Reauthenticate full incoming query proof within its unchanged cached window.
+
+        Only the explicitly composed auxiliary owner opts in. No partial pool,
+        cache timestamp or lifetime is updated; downstream consent remains required.
+        """
+        mdt = helping.fromIso8601(msg.stamp).timestamp() * 1000
+        if mdt != helping.fromIso8601(cache.mdt).timestamp() * 1000:
+            return None
+        now = helping.nowUTC().timestamp() * 1000
+        if not mdt - cache.d <= now <= mdt + cache.d + cache.ml:
+            return None
+        kever = self.db.kevers.get(msg.pre)
+        if kever is None:
+            return None
+        result = self._verifyAttachedSigs(msg=msg, senderId=msg.pre, kever=kever, kwa=kwa)
+        if not result.verified:
+            return None
+        if result.sigers:
+            if not kever.tholder or not kever.tholder.satisfy(indices=[sig.index for sig in result.sigers]):
+                return None
+            self._setVerifiedSenderTsg(msg.pre, kever, result.sigers, kwa)
+        return msg
+
     def _scrubSameSenderPriorEventTsgs(self, msg, senderId, kever, kwa):
         """Drop sender-matching non-current establishment tsgs from ``kwa``.
 
@@ -1034,13 +1058,15 @@ class Kramer:
             if not kwa.get(name):
                 kwa.pop(name, None)
 
-    def intake(self, serder, kwa=None):
+    def intake(self, serder, kwa=None, *, retryQuery=False):
         """Process message through KRAM denial and cache logic.
 
         Parameters:
             serder (SerderKERI): message instance
             kwa (dict | None): parser exts / attachment dict; mutated in place
                 when KRAM normalizes seals or signature groups.
+            retryQuery (bool): selected auxiliary owner permits reauthentication
+                of a complete repeated query without changing cached timing.
         """
         if kwa is None:
             kwa = {}
@@ -1049,11 +1075,11 @@ class Kramer:
             for d in self.denials:
                 if md.startswith(d):
                     return serder
-            return self.kramit(serder, kwa)
+            return self.kramit(serder, kwa, retryQuery=retryQuery)
         return serder  # KRAM disabled for all messages return message for further processing
 
 
-    def kramit(self, msg, kwa=None):
+    def kramit(self, msg, kwa=None, *, retryQuery=False):
         """Core KRAM processing logic.
 
         Implements timeliness cache checking, auth type detection,
@@ -1068,6 +1094,8 @@ class Kramer:
             msg (SerderKERI): message instance
             kwa (dict | None): parser exts / attachment dict; normalized and
                 otherwise mutated in place (e.g. seal and lsgs folding).
+            retryQuery (bool): opt in to full-query reauthentication within the
+                original cached window; all other duplicate rules are unchanged.
 
         Returns:
             SerderKERI: the message if it passes KRAM
@@ -1125,6 +1153,8 @@ class Kramer:
                 # equal-mdt re-deliveries must be allowed to accumulate sigs.
                 hasPartialEscrow = self.db.kramPMKM.get(key) is not None
                 if (not self._isNewerMdt(mdt, cache.mdt) and not hasPartialEscrow):
+                    if retryQuery and msgType == Ilks.qry:
+                        return self._retryQuery(msg, kwa, cache)
                     return None
 
                 # Determine authentication type (resolve "both attached"

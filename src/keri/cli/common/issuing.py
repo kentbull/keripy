@@ -1,6 +1,7 @@
 """Finite, explicitly selected individual native issuance over existing mailboxes."""
 import json
 import math
+import time
 from pathlib import Path
 
 from hio.base import doing
@@ -194,6 +195,7 @@ class NativeIssuance(doing.DoDoer):
             if len(nests) != 1:
                 raise ConfigurationError('live issuance supports exactly one disclosed registry node')
             xid = self.dh.approve(message.said, coordinator=coordinator, custodian=custodian)
+            self.nativeDeadline = self.hby.db.epsd.get((message.said,)).datetime
             admission = None
             if group:
                 from .groupadmitting import GroupAdmission
@@ -201,11 +203,14 @@ class NativeIssuance(doing.DoDoer):
             print(json.dumps(dict(grant=message.said, xid=xid, recipient=message.sad['ri'],
                                   phase='selected', registry_issued=False)), flush=True)
             self.extend(background)
+            query, retryAt = None, None
             if self.verb == 'grant':
                 initial = self.public(registry.regk) + message.raw + atc
                 self.record(initial, initial=True)
                 yield from self.send(initial, recp)
-                yield from self.send(self.dh.start(message.said), recp)
+                query = self.dh.start(message.said)
+                yield from sending.sendQuery(self, query, recp)
+                retryAt = time.monotonic() + 1.0
             else:
                 tsgs, cigars = verify(self.hby, message)
                 self.record(messagize(message, tsgs=tsgs or None, cigars=cigars or None,
@@ -224,6 +229,12 @@ class NativeIssuance(doing.DoDoer):
                     yield from self.send(cue['msg'], cue['dest'])
                 if self.dh.complete(xid):
                     break
+                if query is not None and time.monotonic() >= retryAt:
+                    # start() is deliberately not called again: bytes, keys and
+                    # the original Grant/KRAM lifetime remain frozen.
+                    self.check()
+                    yield from sending.sendQuery(self, query, recp)
+                    retryAt = time.monotonic() + 1.0
                 yield tock
             print(json.dumps(dict(grant=message.said, xid=xid, phase='dh_complete')), flush=True)
             if self.verb == 'grant':

@@ -4703,7 +4703,13 @@ class Kevery:
         # Step 2: KRAM
         if self.kramer:
             self.kramer.reconcileConfig()
-            result = self.kramer.intake(serder, kwa)
+            # These explicitly composed owners recheck exact scope, consent and
+            # Grant lifetime when a full signed query arrives again after approval.
+            retryQuery = (ilk == Ilks.qry
+                          and serder.route in ('/ipex/dhke', '/ipex/unblind')
+                          and self.qvy is not None
+                          and serder.route == getattr(self.qvy, 'Route', None))
+            result = self.kramer.intake(serder, kwa, retryQuery=retryQuery)
             if result is None:
                 return  # message dropped or pending in KRAM
 

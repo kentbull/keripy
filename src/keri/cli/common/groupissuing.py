@@ -1,5 +1,6 @@
 """Explicit member consent for one fresh group issuance, through verified Admit."""
 import json
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,7 +14,7 @@ from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstr
 from .credentialing import recipient
 from .negotiating import NativeNegotiation
 from .witnessing import witnessAuths
-from . import nativeanchoring
+from . import nativeanchoring, sending
 
 
 class _QueryProposal:
@@ -216,6 +217,7 @@ class GroupIssuance:
             owner.record(initial, initial=True)
             yield from owner.send(initial, self.recipient)
             yield from self.broadcastQuery(owner.dh.start(self.grant.said))
+        query, destination, retryAt = None, None, None
         while not self.lead or not owner.dh.complete(self.xid):
             owner.check()
             for member, (packet, child) in list(self.pending.items()):
@@ -242,7 +244,19 @@ class GroupIssuance:
                 del self.pending[member]
             while owner.dh.cues:
                 cue = owner.dh.cues.popleft()
-                yield from owner.send(cue['msg'], cue['dest'])
+                if cue['kin'] == 'query':
+                    # Only own full-threshold intake emits this cue. A proposal
+                    # or member contribution must never become a peer retry.
+                    query, destination = cue['msg'], cue['dest']
+                    yield from sending.sendQuery(owner, query, destination)
+                    retryAt = time.monotonic() + 1.0
+                else:
+                    yield from owner.send(cue['msg'], cue['dest'])
+            if (query is not None and time.monotonic() >= retryAt
+                    and not owner.dh.complete(self.xid)):
+                owner.check()
+                yield from sending.sendQuery(owner, query, destination)
+                retryAt = time.monotonic() + 1.0
             yield owner.tock
         _, event = Registrar(owner.rgy).issue(self.registry, acdc=self.body,
             salt=owner.hab.mgr.getRegistryRoot(owner.hab.pre, self.registry.regk).qb64)
