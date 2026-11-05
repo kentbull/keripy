@@ -6,6 +6,8 @@ Applications own delivery, ordinary dependency acquisition and final Admit.
 """
 
 from collections import deque
+from copy import deepcopy
+from datetime import timedelta
 
 from ..core import (Blinder, BlindState, BoundState, Diger, Number, Parser,
                     Prefixer, SealSource, messagize, query, reply)
@@ -54,6 +56,7 @@ class Unblind:
         self.group = isinstance(hab, GroupHab)
         self.states = tuple(states)
         self.cues, self._operations = deque(), {}
+        self._queries = {}
 
     def approve(self, grant):
         """Approve one exact authenticated presentation without accepting it."""
@@ -79,6 +82,11 @@ class Unblind:
         op["bodies"] = tuple(nest.serder.raw for nest in nests)
         op["scope"] = scope
         self._operations[xid] = op
+        waiting = self._queries.pop(xid, None)
+        if waiting is not None:
+            from ..help import helping
+            if waiting[0] == grant and helping.nowUTC() < waiting[1]:
+                self.processQuery(waiting[2], **waiting[3])
         return xid
 
     def _live(self, op):
@@ -323,19 +331,67 @@ class Unblind:
                 selected[regid] = list(reversed(suffix))
         return selected, list(openings.values())
 
+    def _deferQuery(self, serder, attachments):
+        """Retain a scoped public request without importing events or disclosing proofs."""
+        from ..help import helping
+        data = serder.sad.get("q")
+        if (not serder.verify() or serder.pvrsn != Vrsn_2_0 or serder.route != self.Route
+                or not isinstance(data, dict) or set(data) != {"x", "re"}
+                or not isinstance(data["x"], str) or not isinstance(data["re"], dict)
+                or not data["re"]):
+            raise ValidationError("invalid unblind query shape")
+        xid = data["x"]
+        if xid in self._operations or serder.pre == self.hab.pre:
+            return False
+        now, db = helping.nowUTC(), self.hab.db
+        self._queries = {x: item for x, item in self._queries.items() if now < item[1]}
+        # Normal KRAM dispatch delivered the full verified query. MSGC supplies
+        # timing only; cache presence alone is not proof of authentication.
+        cache = db.kramMSGC.get((serder.pre, serder.said))
+        if cache is None:
+            raise ValidationError("waiting unblind query requires KRAM admission")
+        expiry = helping.fromIso8601(cache.mdt) + timedelta(milliseconds=cache.d + cache.ml)
+        matches = []
+        for (_, _, said), _ in db.kramTMSC.getTopItemIter(keys=(self.hab.pre, xid)):
+            context = self.exc.presentationContext(said, xid=xid,
+                sender=self.hab.pre, recipient=serder.pre)
+            if context is not None and set(data["re"]).issubset(context[2]):
+                matches.append(context[0])
+        if len(matches) != 1:
+            raise ValidationError("waiting unblind query lacks one exact presentation scope")
+        grant = matches[0]
+        for saids in data["re"].values():
+            if (not isinstance(saids, list) or not saids
+                    or any(not isinstance(said, str) for said in saids)
+                    or len(set(saids)) != len(saids)):
+                raise ValidationError("unblind events must be distinct nonempty lists")
+        expiry = min(expiry, self.exc.exchangeDeadline(grant))
+        if now >= expiry:
+            raise ValidationError("waiting unblind query has expired")
+        previous = self._queries.get(xid)
+        if previous is not None:
+            if previous[0] != grant.said or previous[2].raw != serder.raw:
+                raise ValidationError("conflicting waiting unblind query")
+            return True
+        self._queries[xid] = (grant.said, expiry, serder, deepcopy(attachments))
+        return True
+
     def processQuery(self, serder, *, lsgs=None, tsgs=None, sigers=None, cigars=None, nests=None, **kwa):
         """Authenticate before accepting requested public evidence or disclosing."""
         if serder.ilk != Ilks.qry or serder.sad.get("rr") != self.Route:
             raise ValidationError("invalid unblind query or return route")
         if any(value for key, value in kwa.items() if key not in ("local", "source")):
             raise ValidationError("unblind query carries unsupported attachments")
+        if not verifyQueryAttachments(self.exc.hby, serder, lsgs=lsgs,
+                                       tsgs=tsgs, sigers=sigers, cigars=cigars):
+            raise MissingSignatureError("unblind query lacks the disclosee signature threshold")
+        if self._deferQuery(serder, dict(lsgs=lsgs, tsgs=tsgs, sigers=sigers,
+                                       cigars=cigars, nests=nests)):
+            return
         own = self.group and serder.pre == self.hab.pre
         op, requested, disclosure = self._preflight(serder, "q", 'recipient' if own else 'sender', own=own)
         if own and op['proposal'] != serder.raw:
             raise ValidationError("own unblind query lacks exact local proposal approval")
-        if not verifyQueryAttachments(self.exc.hby, serder, lsgs=lsgs,
-                                       tsgs=tsgs, sigers=sigers, cigars=cigars):
-            raise MissingSignatureError("unblind query lacks the disclosee signature threshold")
         if op["requested"] is not None and requested != op["requested"]:
             raise ValidationError("conflicting unblind request for this operation")
         if own:
@@ -640,6 +696,7 @@ class Unblind:
 
     def abandon(self, xid):
         """Discard live proofs and unsent replies; delivered bytes belong to the caller."""
+        self._queries.pop(xid, None)
         op = self._operation(xid)
         pending = [cue for cue in self.cues
                    if cue['msg'] not in (op['query'], op['reply'], op['contribution'])]

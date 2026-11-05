@@ -79,7 +79,7 @@ def actors(names, *, enabled=False, headDirPath=None):
 
 @contextmanager
 def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDirPath=None,
-                 later_states=('revoked', '', '')):
+                 later_states=('revoked', '', ''), approve_holder=True):
     """Explicit test capability only; no provisioning protocol is claimed."""
     with actors(('issuer', 'holder', 'verifier'), enabled=enabled,
                 headDirPath=headDirPath) as sides:
@@ -152,7 +152,8 @@ def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDir
             assert verifier.hby.db.epse.get((message.said,)) is not None
             assert verifier.hby.db.exns.get((message.said,)) is None
         for side in (holder, verifier):
-            xid = side.route.approve(message.said)
+            if side is verifier or approve_holder:
+                xid = side.route.approve(message.said)
         yield SimpleNamespace(issuer=issuer, holder=holder, verifier=verifier,
             registry=registry, credential=credential, grant=message, xid=xid, root=root,
             proofs=proofs, events=events, later_tel=later_tel, issuance=issued)
@@ -469,17 +470,28 @@ def test_partial_reply_retains_verified_proofs_until_second_signature_without_pr
 
 
 def test_partial_kram_query_retains_nested_public_events():
-    with presentation(True) as h:
+    with presentation(True, approve_holder=False) as h:
         frame = parsed(h.verifier.route.start(h.grant.said))
+        key = (h.verifier.hab.pre, frame.serder.said)
+        deadline = h.holder.exc.exchangeDeadline(h.grant)
         receive(h.holder, signed(h.verifier, frame, indices=[0]))
         assert not h.holder.route.cues
         assert h.holder.rgy.store.head(h.registry.regk).qb64 == h.events[0].said
         frame.nests = []
         receive(h.holder, signed(h.verifier, frame, indices=[1]))
+        cache = deepcopy(h.holder.hby.db.kramMSGC.get(key))
+        assert cache is not None
+        assert not h.holder.route.cues
+        assert h.holder.rgy.store.head(h.registry.regk).qb64 == h.events[0].said
+        h.holder.route.approve(h.grant.said)
         assert h.holder.rgy.store.head(h.registry.regk).qb64 == h.events[-1].said
         response = h.holder.route.cues.popleft()['msg']
         assert parsed(response).serder.sad['a']['re'] == {
             h.registry.regk: [event.said for event in h.events[1:]]}
+        receive(h.holder, signed(h.verifier, frame))
+        assert not h.holder.route.cues
+        assert h.holder.hby.db.kramMSGC.get(key) == cache
+        assert h.holder.exc.exchangeDeadline(h.grant) == deadline
         receive(h.verifier, response)
         assert h.verifier.route.finish(h.xid)
 

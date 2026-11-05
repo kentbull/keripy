@@ -209,7 +209,7 @@ class NativeIssuance(doing.DoDoer):
                 self.record(initial, initial=True)
                 yield from self.send(initial, recp)
                 query = self.dh.start(message.said)
-                yield from sending.sendQuery(self, query, recp)
+                yield from self.send(query, recp)
                 retryAt = time.monotonic() + 1.0
             else:
                 tsgs, cigars = verify(self.hby, message)
@@ -233,7 +233,7 @@ class NativeIssuance(doing.DoDoer):
                     # start() is deliberately not called again: bytes, keys and
                     # the original Grant/KRAM lifetime remain frozen.
                     self.check()
-                    yield from sending.sendQuery(self, query, recp)
+                    yield from self.send(query, recp)
                     retryAt = time.monotonic() + 1.0
                 yield tock
             print(json.dumps(dict(grant=message.said, xid=xid, phase='dh_complete')), flush=True)

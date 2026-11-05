@@ -249,14 +249,14 @@ class GroupIssuance:
                     # Only own full-threshold intake emits this cue. A proposal
                     # or member contribution must never become a peer retry.
                     query, destination = cue['msg'], cue['dest']
-                    yield from sending.sendQuery(owner, query, destination)
+                    yield from owner.send(query, destination)
                     retryAt = time.monotonic() + 1.0
                 else:
                     yield from owner.send(cue['msg'], cue['dest'])
             if (query is not None and time.monotonic() >= retryAt
                     and not owner.dh.complete(self.xid)):
                 owner.check()
-                yield from sending.sendQuery(owner, query, destination)
+                yield from owner.send(query, destination)
                 retryAt = time.monotonic() + 1.0
             yield owner.tock
         _, event = Registrar(owner.rgy).issue(self.registry, acdc=self.body,
