@@ -133,8 +133,6 @@ class NativeStateUpdate(doing.DoDoer):
                         or self.hab.mhab.pre not in self.hby.db.signingMembers(pre=self.hab.pre))):
                 raise ConfigurationError('native state update requires an accepted local signer')
             group = isinstance(self.hab, GroupHab)
-            if group and (args.authenticate or args.code or args.code_time is not None):
-                raise ConfigurationError('group state update witness authentication requires its group receipt owner')
             self.rgy = Regery(self.hby, name=args.name, base=args.base)
             body = SerderACDC(raw=Path(args.credential).read_bytes())
             registry, root, prior = self.selected(body)
@@ -168,7 +166,7 @@ class NativeStateUpdate(doing.DoDoer):
                 self.extend([mailbox])
                 try:
                     if group:
-                        yield from groupAnchor(self, registry, event, mux, background)
+                        yield from groupAnchor(self, registry, event, mux, background, auths=auths)
                     else:
                         yield from anchor(self, registry, event, auths, background)
                 except TimeoutError:

@@ -40,9 +40,10 @@ Run the same update command with that member's store and group alias. Leave it
 running while the other members invoke `kli multisig join --version 2.0` in their
 own stores and explicitly approve the exact proposed BUP and controller anchor.
 `group_bup_proposed` identifies both SAIDs. Ordinary group signature thresholds
-and witnessed controller completion precede `accepted: true`. Explicit witness
-authentication flags are refused for this group profile; its existing group
-receipt owner performs witnessing.
+and witnessed controller completion precede `accepted: true`. Supply witness
+authorization flags to the update command and the joining member that may be
+elected to collect receipts. The existing group receipt owner uses these local,
+event-specific headers; member proposals never contain them.
 
 The issuer's original Grant is not its own admitted presentation. The actual
 holder may receive the new public history and use `ipex present --refresh --derive`

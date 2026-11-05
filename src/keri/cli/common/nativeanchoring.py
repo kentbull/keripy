@@ -37,7 +37,7 @@ def anchor(owner, registry, event, auths, background):
     return signed
 
 
-def groupAnchor(owner, registry, event, mux, background, *, grant=None):
+def groupAnchor(owner, registry, event, mux, background, *, grant=None, auths=None):
     """Propose one BUP; existing join, Multiplexor and Counselor own approval."""
     from ...app import Counselor, multisigBupExn
     from ...core import SealSource, messagize
@@ -56,7 +56,7 @@ def groupAnchor(owner, registry, event, mux, background, *, grant=None):
     counselor = Counselor(hby=owner.hby, version=Vrsn_2_0, kind=Kinds.json)
     background.append(counselor)
     owner.extend([counselor])
-    counselor.start(owner.hab, owner.hab.kever.prefixer, number, diger)
+    counselor.start(owner.hab, owner.hab.kever.prefixer, number, diger, auths=auths)
     for member in owner.hby.db.signingMembers(pre=owner.hab.pre):
         if member != owner.hab.mhab.pre:
             yield from owner.send(proposal.raw + atc, member, topic='multisig')
