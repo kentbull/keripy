@@ -49,7 +49,7 @@ class GroupAdmission:
         self.owner, self.grant, self.xid = owner, grant, xid
         self.hab, self.dh = owner.hab, owner.dh
         self.lead = self.hab.mhab.pre == owner.args.custodian
-        self.deadline = owner.hby.db.epsd.get((grant.said,)).datetime
+        self.deadline = owner.exc.exchangeDeadline(grant)
         owner.nativeDeadline = self.deadline
         self.pending, self.seen = deque(), set()
         self.queued = {}
@@ -123,12 +123,12 @@ class GroupAdmission:
             regeventing.vetAnchor(head, db=self.hab.db, issuer=self.grant.pre)
             if state.said != head.said or state.state != 'issued':
                 raise ConfigurationError('group proof does not verify the current issued registry head')
-        deadline = self.hab.db.epsd.get((self.grant.said,)).dts
+        deadline = self.owner.exc.exchangeDeadline(self.grant)
         self.check()
         protected = Parser(version=Vrsn_2_0, kvy=self.owner.hby.kvy,
             exc=self.owner.exc, rvy=self.owner.hby.rvy, rgy=self.owner.rgy, local=True)
         protected.parse(ims=serializeParsedSubstream(child), local=True)
-        if self.hab.db.epsd.get((self.grant.said,)).dts != deadline:
+        if self.owner.exc.exchangeDeadline(self.grant) != deadline:
             raise ConfigurationError('group proof retry changed the original Grant deadline')
         if not self.owner.exc.complete(self.grant.said):
             raise ConfigurationError('native verification did not accept the selected group Grant')

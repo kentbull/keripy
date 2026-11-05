@@ -208,9 +208,10 @@ class Dhke:
         self._unlocked()
         self._custody(op)
         db = self.exc.hby.db
-        message, deadline = db.epse.get((op["grant"],)), db.epsd.get((op["grant"],))
+        message = db.epse.get((op["grant"],))
+        deadline = self.exc.exchangeDeadline(message) if message is not None else None
         if (op["abandoned"] or message is None or message.raw != op["raw"]
-                or deadline is None or helping.nowUTC() >= deadline.datetime
+                or deadline is None or helping.nowUTC() >= deadline
                 or db.exns.get((op["grant"],)) is not None
                 or db.erpy.get((op["grant"],)) is not None):
             raise ValidationError("DH operation is unavailable, terminated or expired")

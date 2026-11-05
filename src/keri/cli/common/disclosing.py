@@ -9,7 +9,7 @@ from ...acdc import chaining, ipexing
 from ...app import GroupHab
 from ...core import Parser, Prefixer, SealEvent, messagize
 from ...core.eventing import verifySigs
-from ...help import nowUTC
+from ...help import nowUTC, toIso8601
 from ...kering import ConfigurationError
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 
@@ -40,11 +40,12 @@ def protected(owner, raw):
         rvy=owner.hby.rvy, rgy=owner.rgy, local=True).parse(ims=bytearray(raw), local=True)
 
 
-def retained(owner, said):
+def retained(owner, said, *, requireLifetime=True):
     message = owner.hby.db.exns.get((said,)) or owner.hby.db.epse.get((said,))
-    deadline = owner.hby.db.epsd.get((said,))
-    if (message is None or deadline is None or owner.hby.db.erpy.get((said,)) is not None
-            or nowUTC() >= deadline.datetime):
+    deadline = owner.exc.exchangeDeadline(message) if message is not None else None
+    if (message is None or requireLifetime and deadline is None
+            or owner.hby.db.erpy.get((said,)) is not None
+            or deadline is not None and nowUTC() >= deadline):
         raise ConfigurationError('prepared Grant is unavailable, terminated or past its original native deadline')
     tsgs, cigars = verify(owner.hby, message)
     seals = [(Prefixer(qb64=keys[1]), number, diger)
@@ -54,10 +55,21 @@ def retained(owner, said):
     return item, deadline
 
 
-def context(owner, item):
+def context(owner, item, *, live=True):
     """Require native auxiliary authorization for every selected registry-backed node."""
-    result = owner.exc.presentationContext(item.serder.said, xid=xid(item.serder),
-        sender=item.serder.pre, recipient=item.serder.sad['ri'])
+    if live:
+        result = owner.exc.presentationContext(item.serder.said, xid=xid(item.serder),
+            sender=item.serder.pre, recipient=item.serder.sad['ri'])
+    else:
+        # Offline endorsement verifies scope, never grants live auxiliary authority.
+        tsgs, cigars = verify(owner.hby, item.serder)
+        scope = owner.exc.handlerFor(item.serder).presentationContext(
+            item.serder, nests=item.nests,
+            retained=owner.exc.complete(item.serder.said),
+            sscs=[(number, diger) for pre, number, diger in item.ssts
+                  if pre.qb64 == item.serder.pre],
+            evidence=(tsgs, cigars, item.ssts))
+        result = (item.serder, item.nests, scope)
     expected = {}
     for node in item.nests:
         expected.setdefault(node.serder.regid, set()).add(node.serder.said)
@@ -77,7 +89,7 @@ def factors(item):
 
 
 class SelectedPreparation:
-    """No operation ledger: the exact native outgoing body and original epsd must exist."""
+    """No operation ledger: the exact native outgoing body and original authenticated lifetime must exist."""
     def __init__(self, owner):
         self.owner, self.args = owner, owner.args
         self.source, nests = admitted(owner.hby, owner.hab, self.args.from_grant)
@@ -98,9 +110,9 @@ class SelectedPreparation:
                 or message.sad['a'] != dict(m=self.args.message, o=[self.nests[0].serder.said])
                 or nodes(item) != [serializeParsedSubstream(node) for node in self.nests]):
             raise ConfigurationError('prepared Grant differs from the exact selected admitted view and parties')
-        self.owner.nativeDeadline = deadline.datetime
+        self.owner.nativeDeadline = deadline
         self.owner.check()
-        return item, deadline.dts
+        return item, toIso8601(deadline)
 
     def checkSource(self):
         """Allow missing current openings, never a known invalid admitted view."""
@@ -117,7 +129,7 @@ class SelectedPreparation:
             origin=streams[0], artifacts=streams[1:] or None, modifiers=dict(dp=self.plan),
             kind=Kinds.json, gvrsn=Vrsn_2_0)
         raw = message.raw + atc
-        protected(self.owner, raw)
+        self.owner.psr.parse(ims=bytearray(raw), local=True)
         item, deadline = self.capture(message.said)
         if item.serder.raw != message.raw:
             raise ConfigurationError('native retention changed the prepared Grant')
@@ -173,7 +185,7 @@ def endorse(owner):
         if (rip is None or rip.israid != owner.hab.pre or node.serder.israid != owner.hab.pre):
             raise ConfigurationError('mixed-issuer scope is unsupported; every selected registry must belong to this issuer')
     protected(owner, wire(item))
-    saved, _ = retained(owner, message.said)
+    saved, _ = retained(owner, message.said, requireLifetime=False)
     if saved.serder.raw != message.raw or nodes(saved) != nodes(item):
         raise ConfigurationError('native retention differs from the selected Grant')
     owner.check()
@@ -216,8 +228,8 @@ def endorse(owner):
     raw = wire(item)
     if endorsed:
         protected(owner, raw)
-        saved, _ = retained(owner, message.said)
-        context(owner, saved)
+        saved, _ = retained(owner, message.said, requireLifetime=False)
+        context(owner, saved, live=False)
     owner.check()
     with Path(args.output).open('xb') as output:
         output.write(raw)
