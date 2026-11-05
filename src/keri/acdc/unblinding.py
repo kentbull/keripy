@@ -498,12 +498,20 @@ class Unblind:
         # No untrusted reply SAID owns this cache: each entry independently opens
         # one requested accepted event and is bound to the approved disclosure.
         op["openings"].update(verified)
-        if not self.hab.rvy.acceptReply(serder, diger, route, op["sender"], cigars=cigars, tsgs=tsgs):
-            return
         minimum, openings = self._minimum(op, op["requested"], nests,
             lambda event: self._opening(op['openings'], event))
-        if selected != minimum:
-            raise ValidationError("reply is not the minimum current-state suffix")
+        if own:
+            if selected != minimum:
+                raise ValidationError("reply is not the minimum current-state suffix")
+        else:
+            # A requester may receive earlier requested proofs as well as the required suffix.
+            if any(not set(saids).issubset(selected.get(regid, [])) for regid, saids in minimum.items()):
+                raise ValidationError("reply does not cover the required current-state suffix")
+            for saids in selected.values():
+                for said in saids:
+                    self._opening(op['openings'], self.rgy.store.event(said))
+        if not self.hab.rvy.acceptReply(serder, diger, route, op["sender"], cigars=cigars, tsgs=tsgs):
+            return
         op["selected"] = {regid: list(saids) for regid, saids in selected.items()}
         if own:
             groups = [group for group in fetchTsgs(db=self.hab.db.tsgs, diger=diger)
