@@ -10,8 +10,9 @@ from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, admit, agree, blindate, chaining, grant, loadHandlers, offer
 from keri.acdc.salting import RegistrySalt
 from keri.acdc.unblinding import Unblind
+from keri.cli.common.sending import messageParts
 from keri.app import openCF, openHby
-from keri.core import (Blinder, BlindState, BoundState, Diger, Kevery, Kramer, Labeler, Number, Parser,
+from keri.core import (Blinder, BlindState, BoundState, Counter, Diger, Kevery, Kramer, Labeler, Number, Parser,
                        Salter, SealSource, SerderKERI, Signer, Texter, messagize)
 from keri.kering import MissingOpeningError, ValidationError
 from keri.peer import Exchanger
@@ -291,7 +292,14 @@ def test_unblind_exact_minimum_suffix_repairs_same_grant(enabled):
         assert [nest.serder.raw for nest in request.nests] == [event.raw for event in h.events[1:]]
         assert not request.bsqs and not request.bsss
         assert h.holder.rgy.store.headEvent(h.registry.regk).said == h.events[0].said
-        receive(h.holder, query)
+        # The finite CLI sender detaches counted Unblind bodies, preserving the
+        # exact nested public events and ordinary query signature evidence.
+        (body, attachments), = messageParts(query)
+        assert (body.raw == request.serder.raw
+                and query.endswith(attachments[Counter(qb64b=attachments, version=V2).fullSize:]))
+        bare_query = body.raw + attachments
+        assert list(messageParts(bare_query))[0][1] == attachments
+        receive(h.holder, bare_query)
         assert h.holder.rgy.store.headEvent(h.registry.regk).said == h.events[-1].said
         response = h.holder.route.cues.popleft()
         assert response['dest'] == h.verifier.hab.pre
@@ -301,7 +309,12 @@ def test_unblind_exact_minimum_suffix_repairs_same_grant(enabled):
         assert {data[0].qb64 for data in reply.bsqs} == {proof.said for proof in h.proofs[1:]}
         assert h.proofs[0].qb64b not in response['msg']
         assert h.root.qb64b not in response['msg'] and h.credential.raw not in response['msg']
-        receive(h.verifier, response['msg'])
+        (body, attachments), = messageParts(response['msg'])
+        assert (body.raw == reply.serder.raw
+                and response['msg'].endswith(attachments[Counter(qb64b=attachments, version=V2).fullSize:]))
+        bare_reply = body.raw + attachments
+        assert list(messageParts(bare_query + bare_reply))[1][1] == attachments
+        receive(h.verifier, bare_reply)
         assert h.verifier.route.finish(h.xid) is True
         assert h.verifier.hby.db.exns.get((h.grant.said,)).raw == h.grant.raw
         assert h.verifier.hby.db.exrs.get((h.grant.said, h.credential.said)).state == 'revoked'
