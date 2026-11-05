@@ -55,8 +55,10 @@ def history(side, body, grant):
             assert admission is not None, 'pending Grant accepted without its selected Admit'
             verify(hby, message)
             verify(hby, hby.db.exns.get((admission.qb64,)))
+        # Accepted proofs are durable history; expired pending scratch evidence may be removed.
+        proofs = tuple(hby.db.enst.get((grant,))) if message is not None else None
         return (hashlib.sha256(root.qb64b).hexdigest() if root else None, message.raw if message else None,
-                tuple(hby.db.enst.get((grant,))), admission.qb64 if admission else None,
+                proofs, admission.qb64 if admission else None,
                 hby.db.epsd.get((grant,)).dts)
     finally:
         hby.close()
