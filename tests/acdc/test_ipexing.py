@@ -3666,8 +3666,8 @@ def test_ipex_v2_di2i_climbs_delegation_and_escrows_a_missing_anchor():
 
         def approve(delegator, delegate):
             kever = delegate.kever
-            seal = SealEvent(i=kever.prefixer.qb64, s=kever.serder.snh,
-                             d=kever.serder.said)._asdict()
+            seal = SealEvent(i=kever.prefixer.qb64, s=f"{kever.lastEst.s:x}",
+                             d=kever.lastEst.d)._asdict()
             delegator.interact(data=[seal])
 
         sub = hby.makeHab(name="sub", delpre=qvi.pre)
@@ -3720,8 +3720,36 @@ def test_ipex_v2_di2i_climbs_delegation_and_escrows_a_missing_anchor():
         assert hby.db.exns.get(keys=(exn.said,)) is None
         assert hby.db.epse.get(keys=(exn.said,)) is not None
 
-        # ...and the delegator's anchoring event alone releases it.
-        approve(qvi, late)
+        # A fresh RIP cannot make the same unresolved DI2I edge authorize DH.
+        rgy = Regery(hby=hby, name="pending-di2i", temp=True)
+        try:
+            registrar = Registrar(rgy=rgy)
+            registry = registrar.makeRegistry(name="fresh", prefix=late.pre)
+            _anchor(late, registry, rgy.store.event(registry.regk))
+            fresh = acdcmap(israid=late.pre, iseaid=recipient.pre, regid=registry.regk,
+                            attribute=dict(d="", claim="pending delegation"),
+                            edge=_edge("qvi", far, op="DI2I"))
+            pending, atc = ipexGrant(hab=late, recp=recipient.pre, message="fresh DI2I",
+                origin=fresh.raw, artifacts=[_signed(far, gar)], modifiers=dict(dp=[[
+                    [fresh.schema["$id"], "/", []],
+                    [far.schema["$id"], "/e/qvi/_/", []],
+                ]]))
+            pendingExc = Exchanger(hby=hby, handlers=[])
+            loadHandlers(hby=hby, exc=pendingExc, notifier=Recorder(), rgy=rgy)
+            _receive_ipex(pendingExc, pending, atc)
+            scope = dict(xid=pending.said, sender=late.pre, recipient=recipient.pre)
+            assert hby.db.epse.get((pending.said,)) is not None
+            assert pendingExc.pendingGrant(pending.said, **scope) is None
+
+            # Real delegation approval permits DH, but supplies no issued opening.
+            approve(qvi, late)
+            assert pendingExc.pendingGrant(pending.said, **scope)[1] == (registry.regk,)
+            pendingExc.processEscrow()
+            assert hby.db.exns.get((pending.said,)) is None
+            assert hby.db.epse.get((pending.said,)) is not None
+            assert list(hby.db.exrs.getTopItemIter(keys=(pending.said,))) == []
+        finally:
+            rgy.close()
         exc.processEscrow()
         assert hby.db.exns.get(keys=(exn.said,)) is not None
         assert hby.db.epse.get(keys=(exn.said,)) is None

@@ -700,16 +700,18 @@ class IpexHandler:
         if serder.ked["r"] != "/ipex/grant":
             return ()
         context = self._verifyContext(serder, nests=nests, sscs=sscs, evidence=evidence)
-        return self._pendingIssuance(serder, *context) if context else ()
+        return self._pendingIssuance(serder, *context, authorize=True) if context else ()
 
-    def _pendingIssuance(self, serder, nodes, order):
+    def _pendingIssuance(self, serder, nodes, order, *, authorize=False):
         """Classify proofless fresh registries without inventing an issued state.
 
         Pending-root authorization is deliberately stricter than final graph
         acceptance: every other supplied issuer proof must authenticate, even on
         an optional edge. Its state vocabulary remains the application's policy.
         None refuses the context, () means no fresh issuance, and a nonempty tuple
-        names eligible registries. All candidates stay unknown during reductions.
+        names eligible registries. Candidates stay unknown during ordinary Grant
+        classification. With authorize=True, assume only their own registry
+        obligations satisfied and require the remaining graph to be valid.
         """
         if self.rgy is None:
             return ()
@@ -749,8 +751,14 @@ class IpexHandler:
             acdc = nest["serder"] if isinstance(nest, dict) else nest.serder
             if self._verifyIssuerAuthNode(acdc, nest).verdict != chaining.Verdicts.valid:
                 return None
-        verdict = self._evaluateNode(order[0], nodes=nodes, memo={}, pending=pending)
-        if verdict is None or not verdict.retryable:
+        verdict = self._evaluateNode(order[0], nodes=nodes, memo={}, pending=pending,
+                                     pendingValid=authorize)
+        if verdict is None:
+            return None
+        if authorize:
+            if verdict.verdict != chaining.Verdicts.valid:
+                return None
+        elif not verdict.retryable:
             return None
         # Even if OR reduced to valid, absent issuance must not enter accepted stores.
         return tuple(dict.fromkeys(pending.values()))
@@ -1537,7 +1545,8 @@ class IpexHandler:
 
         return nodes, order
 
-    def _evaluateNode(self, said, *, nodes, memo, records=None, pending=()):
+    def _evaluateNode(self, said, *, nodes, memo, records=None, pending=(),
+                      pendingValid=False):
         """Evaluate one disclosed node to a verdict, recursing through its edges.
 
         A node is valid when its own issuer-auth proof vets and its Edge Section
@@ -1561,6 +1570,8 @@ class IpexHandler:
             pending (Collection): Node SAIDs whose issuer registry state is
                 unresolved. Their edges are still evaluated in full; no state
                 record is produced for them. Empty for final verification.
+            pendingValid (bool): For fresh-DH authorization only, assume eligible
+                pending node-own obligations valid while still evaluating all edges.
 
         Returns:
             EdgeVerdict | None: the node's verdict, or ``None`` when some shape
@@ -1581,9 +1592,11 @@ class IpexHandler:
         # Both what authenticates the node and what its registry says about it,
         # as one verdict. A verdict rather than a raise, so an Operator that does
         # not need this node is not made to wait on it.
-        auth = (chaining.unknown("registry awaits authenticated state", retryable=True)
-                if said in pending else self._verifyIssuerAuthNode(
-                    serder=nserder, nest=nest, records=records))
+        if said in pending:
+            auth = (chaining.valid("fresh registry authorized for DH") if pendingValid
+                    else chaining.unknown("registry awaits authenticated state", retryable=True))
+        else:
+            auth = self._verifyIssuerAuthNode(serder=nserder, nest=nest, records=records)
 
         edges = nserder.sad.get("e")
         if not edges:
@@ -1609,7 +1622,7 @@ class IpexHandler:
                                                      nserder=nserder,
                                                      memo=memo,
                                                      records=records,
-                                                     pending=pending,
+                                                     pending=pending, pendingValid=pendingValid,
                                                      inheritedPins=())
                 else:
                     verdict = self._evaluateGroupEdge(edge,
@@ -1618,7 +1631,7 @@ class IpexHandler:
                                                       nested=False,
                                                       memo=memo,
                                                       records=records,
-                                                      pending=pending,
+                                                      pending=pending, pendingValid=pendingValid,
                                                       inheritedPins=())
                 if verdict is None:
                     return None
@@ -1630,7 +1643,7 @@ class IpexHandler:
         return memo[said]
 
     def _evaluateLeafEdge(self, group, *, nodes, nserder, memo, records=None,
-                          inheritedPins=(), pending=()):
+                          inheritedPins=(), pending=(), pendingValid=False):
         """Evaluate one disclosed leaf edge against its referenced far node.
 
         Parameters:
@@ -1747,7 +1760,8 @@ class IpexHandler:
             behind an Operator this verifier could not evaluate.
             """
             farVerdict = self._evaluateNode(edgeSaid, nodes=nodes, memo=memo,
-                                            records=records, pending=pending)
+                                            records=records, pending=pending,
+                                            pendingValid=pendingValid)
             if farVerdict is None:
                 return None
             return chaining.reduceAnd([own, farVerdict])
@@ -1890,7 +1904,7 @@ class IpexHandler:
         return withFarNode(own)
 
     def _evaluateGroupEdge(self, group, *, nodes, nserder, nested, memo,
-                           records=None, inheritedPins=(), pending=()):
+                           records=None, inheritedPins=(), pending=(), pendingValid=False):
         """Evaluate one disclosed edge group and reduce its child results.
 
         Parameters:
@@ -1962,7 +1976,7 @@ class IpexHandler:
                                                  nserder=nserder,
                                                  memo=memo,
                                                  records=records,
-                                                 pending=pending,
+                                                 pending=pending, pendingValid=pendingValid,
                                                  inheritedPins=nextPins)
             else:
                 verdict = self._evaluateGroupEdge(node,
@@ -1971,7 +1985,7 @@ class IpexHandler:
                                                   nested=True,
                                                   memo=memo,
                                                   records=records,
-                                                  pending=pending,
+                                                  pending=pending, pendingValid=pendingValid,
                                                   inheritedPins=nextPins)
             if verdict is None:
                 return None
