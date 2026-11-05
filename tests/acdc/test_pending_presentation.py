@@ -26,7 +26,8 @@ def anchor(hab, registry, event):
 
 @pytest.fixture
 def history():
-    with openHby(name="pending-presentation", base="test", version=V2) as hby:
+    with (openHby(name="pending-presentation", base="test", version=V2) as hby,
+          openCF(name="pending-presentation", base="test") as cf):
         issuer = hby.makeHab(name="issuer")
         holder = hby.makeHab(name="holder", icount=2, isith="2", ncount=2, nsith="2")
         verifier = hby.makeHab(name="verifier")
@@ -47,9 +48,13 @@ def history():
             exc = Exchanger(hby=hby, handlers=[])
             loadHandlers(hby=hby, exc=exc, rgy=rgy,
                          notifier=SimpleNamespace(add=lambda **_: None))
+            # Live auxiliary authority requires accepted KRAM exchange evidence.
+            cf.put(dict(kram=dict(enabled=True, denials=[],
+                caches={"~": [1000, 5000, 60000, 300000, 5000, 60000, 300000]})))
+            kvy = Kevery(db=hby.db, kramer=Kramer(db=hby.db, cf=cf), exc=exc)
             yield SimpleNamespace(hby=hby, issuer=issuer, holder=holder, verifier=verifier,
                 rgy=rgy, registrar=registrar, acdc=acdc, proofs=proofs, events=events,
-                registry=registry, exc=exc)
+                registry=registry, exc=exc, kvy=kvy)
         finally:
             rgy.close()
 
@@ -61,7 +66,8 @@ def present(h, proofs=(), **kwa):
 
 
 def receive(h, message, atc):
-    Parser(version=V2).parse(ims=bytearray(message.raw + atc), framed=False, exc=h.exc)
+    Parser(version=V2).parse(ims=bytearray(message.raw + atc), framed=False,
+                             kvy=h.kvy, exc=h.exc)
 
 
 def context(h, message, **kwa):
@@ -87,7 +93,8 @@ def test_missing_current_openings_retry_same_grant_after_minimal_suffix(history,
     retained, nests, scope = context(h, message)
     assert retained.raw == message.raw and scope == {h.registry.regk: (h.acdc.said,)}
     assert nests[0].serder.raw == h.acdc.raw
-    deadline = h.hby.db.epsd.get((message.said,)).dts
+    deadline = h.exc.exchangeDeadline(message)
+    assert deadline is not None
     # Only append node-local openings; body and sender signature remain exact.
     nests[0].bsqs.extend(tuple(proof.data) for proof in h.proofs[1:])
     tsgs, cigars = verify(h.hby, retained)
@@ -95,7 +102,7 @@ def test_missing_current_openings_retry_same_grant_after_minimal_suffix(history,
     assert h.hby.db.exns.get((message.said,)).raw == message.raw
     assert h.hby.db.exrs.get((message.said, h.acdc.said)).state == "revoked"
     assert h.hby.db.epse.get((message.said,)) is None
-    assert h.hby.db.epsd.get((message.said,)).dts == deadline
+    assert h.exc.exchangeDeadline(message) == deadline
     assert context(h, message) is not None
     reply, ratc = admit(hab=h.verifier, message="received", grant=message)
     receive(h, reply, ratc)
@@ -119,7 +126,6 @@ def test_first_accepted_grant_keeps_original_auxiliary_deadline(history, fakeHel
             prior["apply"] = request
             fakeHelpingClock.advance(seconds=30)
         message, atc = present(h, h.proofs[1:], **prior)
-        now = helping.nowUTC()
         Parser(version=V2).parse(ims=bytearray(message.raw + atc), kvy=kvy)
     assert h.hby.db.exns.get((message.said,)) is not None
     if opener == "apply":
@@ -131,14 +137,16 @@ def test_first_accepted_grant_keeps_original_auxiliary_deadline(history, fakeHel
         h.hby.db.erpy.pin((request.said,), Diger(qb64=other.said))
         assert context(h, message) is None
         h.hby.db.erpy.pin((request.said,), Diger(qb64=message.said))
-    if enabled:
-        key = (h.holder.pre, message.ked.get("x") or message.said, message.said)
-        cache = h.hby.db.kramTMSC.get(key)
-        deadline = helping.fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
-        h.hby.db.kramTMSC.rem(key)
-    else:
-        deadline = now + timedelta(seconds=h.exc.TimeoutPSE)
-    assert h.hby.db.epsd.get((message.said,)).datetime == deadline
+    key = (h.holder.pre, message.ked.get("x") or message.said, message.said)
+    if not enabled:
+        # KRAM-off intake records no exchange lifetime, so it grants no live authority.
+        assert h.hby.db.kramTMSC.get(key) is None
+        assert h.exc.exchangeDeadline(message) is None
+        assert context(h, message) is None
+        return
+    cache = h.hby.db.kramTMSC.get(key)
+    deadline = helping.fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
+    assert h.exc.exchangeDeadline(message) == deadline
     fakeHelpingClock.set(helping.toIso8601(deadline - timedelta(milliseconds=1)))
     result = context(h, message)
     assert result is not None
@@ -149,13 +157,14 @@ def test_first_accepted_grant_keeps_original_auxiliary_deadline(history, fakeHel
                                   nests=result[1]) is False
         assert h.hby.db.enst.get((message.said,)) == original
     receive(h, message, atc)
-    assert h.hby.db.epsd.get((message.said,)).datetime == deadline
+    assert h.exc.exchangeDeadline(message) == deadline
     fakeHelpingClock.advance(milliseconds=1)
     assert context(h, message) is None
     receive(h, message, atc)
     assert context(h, message) is None
-    h.hby.db.epsd.rem((message.said,))  # Legacy accepted rows cannot acquire new lifetime.
+    h.hby.db.kramTMSC.rem(key)  # Pruned KRAM evidence cannot acquire new lifetime.
     receive(h, message, atc)
+    assert h.exc.exchangeDeadline(message) is None
     assert context(h, message) is None
 
 
@@ -304,18 +313,18 @@ def test_expired_evicted_grant_cannot_acquire_a_new_lifetime(history, fakeHelpin
     scope = dict(xid=message.said, sender=h.holder.pre, recipient=h.verifier.pre)
     assert (h.exc.pendingGrant(message.said, **scope) is not None) == fresh
     assert (context(h, message) is not None) == (not fresh)
-    deadline = h.hby.db.epsd.get((message.said,)).dts
-    fakeHelpingClock.set(deadline)
+    deadline = h.exc.exchangeDeadline(message)
+    fakeHelpingClock.set(helping.toIso8601(deadline))
     h.exc.processEscrow()
     assert h.hby.db.epse.get((message.said,)) is None
     receive(h, message, atc)
-    assert h.hby.db.epsd.get((message.said,)).dts == deadline
+    assert h.exc.exchangeDeadline(message) == deadline
     assert h.exc.pendingGrant(message.said, **scope) is None
     assert context(h, message) is None
     newer, natc = present(h)
     assert newer.said != message.said
     receive(h, newer, natc)
-    assert h.hby.db.epsd.get((newer.said,)).datetime > helping.fromIso8601(deadline)
+    assert h.exc.exchangeDeadline(newer) > deadline
 
 
 @pytest.mark.parametrize("partial", [False, True])
@@ -339,17 +348,19 @@ def test_original_grant_deadline_survives_schema_and_signature_escrows(history, 
         with pytest.raises(MissingSignatureError):
             h.exc.processEvent(serder=message, tsgs=[(pre, number, diger, sigers[:1])],
                                nests=parsed.nests)
-    else:
-        receive(h, message, atc)
-    deadline = h.hby.db.epsd.get((message.said,)).dts
+        # A below-threshold proposal has no authenticated exchange lifetime yet.
+        assert h.exc.exchangeDeadline(message) is None
+    receive(h, message, atc)
+    deadline = h.exc.exchangeDeadline(message)
+    assert deadline is not None
     fakeHelpingClock.advance(seconds=1)
     receive(h, message, atc)
     assert h.hby.db.emse.get((message.said, schemer.said)) is not None
     h.exc.processEscrowPartialSigned()
-    assert h.hby.db.epsd.get((message.said,)).dts == deadline
+    assert h.exc.exchangeDeadline(message) == deadline
     assert context(h, message) is None
     h.hby.db.schema.pin(schemer.said, schemer)
     h.exc.processEscrowMissingSchema()
     assert h.hby.db.exns.get((message.said,)) is not None
-    assert h.hby.db.epsd.get((message.said,)).dts == deadline
+    assert h.exc.exchangeDeadline(message) == deadline
     assert context(h, message) is not None

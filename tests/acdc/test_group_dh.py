@@ -42,7 +42,7 @@ def signed(message, members, *, nests=None, last=False):
 
 
 @contextmanager
-def groups(enabled=False, size=2, lead=0, count=1):
+def groups(enabled=True, size=2, lead=0, count=1, approve=True):
     with ExitStack() as stack:
         parties, allmembers = [], []
         for role in ('issuer', 'issuee'):
@@ -136,8 +136,9 @@ def groups(enabled=False, size=2, lead=0, count=1):
             for side in members:
                 receive(side, wire)
                 assert side.hby.db.epse.get((message.said,)) is not None
-                side.dh.approve(message.said, coordinator=(coord.sn, coord.said),
-                                custodian=members[lead].member.pre)
+                if approve:  # Live DH authority requires accepted KRAM evidence.
+                    side.dh.approve(message.said, coordinator=(coord.sn, coord.said),
+                                    custodian=members[lead].member.pre)
         yield SimpleNamespace(issuers=issuers, issuees=issuees, members=allmembers,
             lead=lead, registrar=registrar, registry=registry, registries=registries, credential=credential,
             grant=message, xid=message.said, anchor=anchor, coordinators=(coordinator, own))
@@ -147,7 +148,7 @@ def root(side, setup):
     return side.hab.mgr.getRegistryRoot(side.hab.pre, setup.registry.regk)
 
 
-def exchange(setup, enabled):
+def exchange(setup):
     issuers, issuees = setup.issuers, setup.issuees
     left, right = issuers[setup.lead], issuees[setup.lead]
     query = left.dh.start(setup.grant.said)
@@ -158,10 +159,7 @@ def exchange(setup, enabled):
     for side in (left, voter):
         receive(side, query)
         assert side.dh._operations[setup.xid]['query'] is None
-        if enabled:
-            receive(side, other)
-        else:
-            receive(side, signed(parsed(query).serder, [left, voter], last=True))
+        receive(side, other)
     query = left.dh.start(setup.grant.said)
     for side in issuees:
         receive(side, query)
@@ -188,10 +186,9 @@ def exchange(setup, enabled):
             assert (root(side, setup) is not None) == (index == setup.lead)
 
 
-@pytest.mark.parametrize('enabled', [False, True])
-def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelpingClock):
-    with groups(enabled) as h:
-        exchange(h, enabled)
+def test_two_groups_issue_same_grant_then_explicitly_copy_root(fakeHelpingClock):
+    with groups() as h:
+        exchange(h)
         issuer, issuee = h.issuers[0], h.issuees[0]
         opening, event = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
         h.anchor(event)
@@ -289,7 +286,7 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelp
                 side.kvy.qvy = side.unblind
                 side.hby.rtr.addRoute(Unblind.Route, side.unblind, blinders=True, attachments=True)
                 side.unblind.approve(presentation.said)
-            deadlines = [side.hby.db.epsd.get((presentation.said,)).dts for side in [*h.issuees, verifier]]
+            deadlines = [side.exc.exchangeDeadline(presentation) for side in [*h.issuees, verifier]]
             # Group support cannot reopen the already admitted issuance.
             with pytest.raises(ValidationError, match='unavailable, terminated or expired'):
                 issuee.unblind.approve(h.grant.said)
@@ -349,7 +346,7 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelp
             assert verdict.verdict == chaining.Verdicts.valid
             assert observations[h.credential.said].said == event3.said
             assert repaired[0].serder.raw == h.credential.raw
-            assert [side.hby.db.epsd.get((presentation.said,)).dts
+            assert [side.exc.exchangeDeadline(presentation)
                     for side in [*h.issuees, verifier]] == deadlines
             assert not list(hby.ks.rroots.getTopItemIter())
             assert all(tuple(side.hby.db.enst.get((h.grant.said,))) == held for side in h.issuees)
@@ -401,7 +398,7 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelp
                     side.hby.rtr.addRoute(Unblind.Route, side.unblind, blinders=True, attachments=True)
                 if side is not requesters[0]:
                     side.unblind.approve(group_grant.said)
-            group_deadlines = [side.hby.db.epsd.get((group_grant.said,)).dts
+            group_deadlines = [side.exc.exchangeDeadline(group_grant)
                                for side in [*h.issuees, *requesters]]
             proof4, event4 = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
             kel4 = h.anchor(event4)
@@ -447,14 +444,12 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelp
             with pytest.raises(ValidationError, match='already frozen'):
                 requesters[0].unblind.contribute(group_grant.said,
                     requesters[1].hab.endorse(altered, last=False, gvrsn=V2))
-            combined = parsed(qproposal)
-            combined.lsgs[0][1].extend(parsed(qcontribution).lsgs[0][1])
             for side in requesters:
                 receive(side, qproposal)
                 receive(side, qproposal)
                 assert not side.unblind.cues and not side.unblind.complete(group_grant.said)
-                # KRAM accumulates query factors; without it, supply the ordinary combined threshold.
-                receive(side, qcontribution if enabled else serializeParsedSubstream(combined))
+                # KRAM accumulates the query factors into the exact threshold.
+                receive(side, qcontribution)
                 assert not side.unblind.complete(group_grant.said)  # Query readiness is not reply readiness.
             assert not requesters[1].unblind.cues
             qcue = requesters[0].unblind.cues.popleft()
@@ -489,7 +484,7 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(enabled, fakeHelp
                 assert observations[h.credential.said].said == event4.said
                 assert repaired[0].serder.raw == h.credential.raw
                 assert not list(side.hby.ks.rroots.getTopItemIter())
-            assert [side.hby.db.epsd.get((group_grant.said,)).dts
+            assert [side.exc.exchangeDeadline(group_grant)
                     for side in [*h.issuees, *requesters]] == group_deadlines
             assert tuple(verifier.hby.db.enst.get((presentation.said,))) == individual_view
             assert all(tuple(side.hby.db.enst.get((h.grant.said,))) == held for side in h.issuees)
@@ -518,7 +513,7 @@ def test_frozen_nonzero_custodian_is_not_reelected_by_later_signatures():
             with pytest.raises(ValidationError, match='custodian'):
                 members[0].dh.start(h.grant.said) if members is h.issuers else members[0].dh._custody(
                     members[0].dh._operations[h.xid], lead=True)
-        exchange(h, False)
+        exchange(h)
 
 
 @pytest.mark.parametrize('fault', ['nonlead', 'forged', 'changed', 'scope', 'abandoned',
@@ -572,7 +567,7 @@ def test_member_rotations_keep_frozen_historical_contributions():
             for side in h.members:
                 if side is not member:
                     receive(side, wire)
-        exchange(h, False)
+        exchange(h)
 
 
 def rotate_group(h, members, order):
@@ -600,7 +595,7 @@ def test_group_rotation_preserves_authorized_custodian_without_reelection():
     with groups() as h:
         for members in (h.issuers, h.issuees):
             rotate_group(h, members, [1, 0])
-        exchange(h, False)
+        exchange(h)
 
 
 @pytest.mark.parametrize('role', ['issuers', 'issuees'])
@@ -679,7 +674,8 @@ def test_restarted_lead_cannot_accept_old_threshold_reply():
 
 
 def test_native_ipex_proposals_replay_only_after_local_approval_with_native_verification():
-    with groups() as h, ExitStack() as stack:
+    # Native multisig proposal replay needs no DH; KRAM-off retransmission repairs openings.
+    with groups(enabled=False, approve=False) as h, ExitStack() as stack:
         opening, event = h.registrar.issue(h.registry, h.credential, salt=Salter().qb64)
         h.anchor(event)
         message, atc = grant(hab=h.issuers[0].hab, recp=h.issuees[0].hab.pre,
@@ -773,15 +769,20 @@ def test_native_ipex_proposals_replay_only_after_local_approval_with_native_veri
 def test_nonzero_dh_custodian_and_native_admit_transmitter_are_independent():
     # Native election proof only: installed CLI transport is separately exercised with two members.
     with groups(size=3, lead=1) as h:
-        exchange(h, False)
+        exchange(h)
         issuer, custodian = h.issuers[1], h.issuees[1]
-        _, event = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
+        opening, event = h.registrar.issue(h.registry, h.credential, salt=root(issuer, h).qb64)
         h.anchor(event)
         issuer.dh.finish(h.xid)
         custodian.dh.finish(h.xid)
-        original = serializeMessage(issuer.hby, h.grant.said)
+        # KRAM refuses duplicate Grant delivery; other members verify the real
+        # issued opening with the original sender proofs.
         for side in h.members:
-            receive(side, original)
+            if side not in (issuer, custodian):
+                nests = loadParsedNestedSubstreams(side.hby, h.grant.said)
+                nests[0].bsqs.append(opening.data)
+                tsgs, cigars = verify(side.hby, h.grant)
+                side.exc.processEvent(h.grant, tsgs=tsgs, cigars=cigars, nests=nests)
             assert side.exc.complete(h.grant.said)
         admission, _ = admit(custodian.hab, message='one retained body', grant=h.grant)
         # The coordinator had signatures 1+2; this Admit reaches threshold with 0+1.
