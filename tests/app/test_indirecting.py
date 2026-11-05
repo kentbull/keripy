@@ -4,15 +4,14 @@ tests.app.indirecting module
 
 """
 import json
-import platform
+import subprocess
 import time
 
 import falcon
 from falcon import testing
-import hio
 import pytest
 
-from hio.core import http
+from hio.core import http, tcp
 from hio.base import doing
 from hio.help import decking
 
@@ -378,32 +377,28 @@ class QueryTestDoer(doing.Doer):
         return True
 
 
-class MockServerTls:
-    def __init__(self,  certify, keypath, certpath, cafilepath, port):
-        pass
-
-
-class MockHttpServer:
-    def __init__(self, host, port, app, servant=None):
-        self.servant = servant
-
-
-def test_createHttpServer(monkeypatch):
-    host = "0.0.0.0"
-    if platform.system() == "Windows":
-        host = "127.0.0.1"
-    port = 5632
+def test_createHttpServer(tmp_path):
+    """Retain the requested interface, including the actual TLS listening socket."""
     app = falcon.App()
-    server = createHttpServer(host, port, app)
+    server = createHttpServer('127.0.0.1', 0, app)
     assert isinstance(server, http.Server)
+    assert server.servant.ha[0] == '127.0.0.1'
 
-    monkeypatch.setattr(hio.core.tcp, 'ServerTls', MockServerTls)
-    monkeypatch.setattr(hio.core.http, 'Server', MockHttpServer)
-
-    server = createHttpServer(host, port, app, keypath='keypath', certpath='certpath', cafilepath='cafilepath')
-
-    assert isinstance(server, MockHttpServer)
-    assert isinstance(server.servant, MockServerTls)
+    # Generate test-only TLS material; no network trust or host keys are needed.
+    key, cert = tmp_path / 'key.pem', tmp_path / 'cert.pem'
+    subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes',
+                    '-keyout', str(key), '-out', str(cert), '-days', '1',
+                    '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost'],
+                   check=True, capture_output=True, timeout=15)
+    server = createHttpServer('127.0.0.1', 0, app, keypath=str(key),
+                              certpath=str(cert), cafilepath=str(cert))
+    try:
+        assert isinstance(server.servant, tcp.ServerTls)
+        assert server.reopen()
+        # The TLS servant owns the socket; passing host only to HTTP is too late.
+        assert server.servant.ss.getsockname()[0] == '127.0.0.1'
+    finally:
+        server.close()
 
 
 def test_receipt_end_returns_bytes_for_v1_receipt():
