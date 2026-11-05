@@ -15,15 +15,6 @@ class HttpSubmissionError(ConfigurationError):
         super().__init__(f'HTTP submission failed with statuses {self.statuses}')
 
 
-def sendQuery(owner, raw, dest):
-    """An exact approved query may await remote consent; other delivery failures remain fatal."""
-    try:
-        yield from owner.send(raw, dest)
-    except HttpSubmissionError as ex:
-        if not ex.statuses or any(status != 403 for status in ex.statuses):
-            raise
-
-
 def messageParts(raw):
     """Yield v2 bodies and unchanged attachments from bare or counted messages.
 

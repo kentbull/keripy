@@ -252,7 +252,12 @@ def test_kram_query_and_reply_accumulate_real_partial_signatures(fakeHelpingCloc
         issuer, issuee = setup.issuer, setup.issuee
         stream = issuer.dh.start(setup.grant.said)
         qry = SerderKERI(raw=stream)
-        deadlines = [side.hby.db.epsd.get((setup.grant.said,)).dts for side in (issuer, issuee)]
+        deadlines = [side.exc.exchangeDeadline(setup.grant) for side in (issuer, issuee)]
+        key = (issuer.hab.pre, qry.said)
+        issuee.kvy.qvy = None
+        receive(issuee, stream)
+        assert issuee.hby.db.kramMSGC.get(key) is None
+        issuee.kvy.qvy = issuee.dh
         receive(issuee, resign(issuer, qry, 0))
         receive(issuee, resign(issuer, qry, 0))
         assert not issuee.dh.cues and roots(issuee, setup) == [None]
@@ -262,26 +267,26 @@ def test_kram_query_and_reply_accumulate_real_partial_signatures(fakeHelpingCloc
         assert not issuee.dh.cues and roots(issuee, setup) == [None]
         originalCache = deepcopy(issuee.hby.db.kramMSGC.get(key))
         assert originalCache is not None
+        # Approval replays retained authenticated input locally, never through KRAM.
         assert issuee.dh.approve(setup.grant.said) == setup.xid
-        # A cached marker cannot authenticate a new partial contribution.
-        receive(issuee, resign(issuer, qry, 0))
-        assert not issuee.dh.cues and roots(issuee, setup) == [None]
-        assert issuee.hby.db.kramPMKM.get(key) is None
-        # The exact full query now reaches the independently approved real owner.
-        receive(issuee, stream)
         rpy = SerderKERI(raw=issuee.dh.cues.popleft()["msg"])
+        assert roots(issuee, setup)[0] is not None
+        receive(issuee, resign(issuer, qry, 0))
+        receive(issuee, stream)
+        assert not issuee.dh.cues
+        assert issuee.hby.db.kramPMKM.get(key) is None
         receive(issuer, resign(issuee, rpy, 0))
         assert roots(issuer, setup) == [None]
         receive(issuer, resign(issuee, rpy, 1))
         assert roots(issuer, setup)[0].qb64 == roots(issuee, setup)[0].qb64
         assert issuee.hby.db.kramMSGC.get(key) == originalCache
-        assert [side.hby.db.epsd.get((setup.grant.said,)).dts for side in (issuer, issuee)] == deadlines
+        assert [side.exc.exchangeDeadline(setup.grant) for side in (issuer, issuee)] == deadlines
         # Cache timing, not a renewed approval or successful retry, limits later delivery.
         fakeHelpingClock.advance(seconds=62)
         receive(issuee, stream)
         assert not issuee.dh.cues
         assert issuee.hby.db.kramMSGC.get(key) == originalCache
-        assert [side.hby.db.epsd.get((setup.grant.said,)).dts for side in (issuer, issuee)] == deadlines
+        assert [side.exc.exchangeDeadline(setup.grant) for side in (issuer, issuee)] == deadlines
 
 
 def test_same_operation_conflict_and_local_approval(fakeHelpingClock):

@@ -6,6 +6,8 @@ primitives. Ephemeral private keys belong to that live operation, not Keeper.
 """
 
 import hashlib
+from copy import deepcopy
+from datetime import timedelta
 import struct
 
 import pysodium
@@ -114,6 +116,7 @@ class Dhke:
         self.group = isinstance(hab, GroupHab)
         self.cues = deque()
         self._operations = {}
+        self._queries = {}
 
     def _unlocked(self):
         from ..kering import AuthError
@@ -169,6 +172,11 @@ class Dhke:
         op["registries"] = context[1]
         self._roots(op)
         self._operations[xid] = op
+        waiting = self._queries.pop(xid, None)
+        if waiting is not None:
+            from ..help import helping
+            if waiting[0] == grant and helping.nowUTC() < waiting[1]:
+                self.processQuery(waiting[2], **waiting[3])
         return xid
 
     def _custody(self, op, *, lead=False):
@@ -349,6 +357,47 @@ class Dhke:
         op["completed"] = True
         op["private"].clear()
 
+    def _deferQuery(self, serder, attachments):
+        """Retain public authenticated input only; approval still owns all DH effects."""
+        from ..help import helping
+        from ..kering import ValidationError, Vrsn_2_0
+        data = serder.ked.get("q")
+        if (not serder.verify() or serder.pvrsn != Vrsn_2_0 or serder.route != self.Route
+                or not isinstance(data, dict) or set(data) != {"x", "pk"}
+                or not isinstance(data["x"], str) or not isinstance(data["pk"], dict)):
+            raise ValidationError("invalid DH query shape")
+        xid = data["x"]
+        if xid in self._operations or serder.pre == self.hab.pre:
+            return False
+        now, db = helping.nowUTC(), self.hab.db
+        self._queries = {x: item for x, item in self._queries.items() if now < item[1]}
+        # Normal KRAM dispatch delivered the full verified query. MSGC supplies
+        # timing only; cache presence alone is not proof of authentication.
+        cache = db.kramMSGC.get((serder.pre, serder.said))
+        if cache is None:
+            raise ValidationError("waiting DH query requires KRAM admission")
+        expiry = helping.fromIso8601(cache.mdt) + timedelta(milliseconds=cache.d + cache.ml)
+        matches = []
+        for (_, _, said), _ in db.kramTMSC.getTopItemIter(keys=(serder.pre, xid)):
+            context = self.exc.pendingGrant(said, xid=xid, sender=serder.pre, recipient=self.hab.pre)
+            if context is not None and set(context[1]) == set(data["pk"]):
+                matches.append(context[0])
+        if len(matches) != 1:
+            raise ValidationError("waiting DH query lacks one exact pending Grant scope")
+        grant = matches[0]
+        for public in data["pk"].values():
+            decodePublicKey(public)
+        expiry = min(expiry, self.exc.exchangeDeadline(grant))
+        if now >= expiry:
+            raise ValidationError("waiting DH query has expired")
+        previous = self._queries.get(xid)
+        if previous is not None:
+            if previous[0] != grant.said or previous[2].raw != serder.raw:
+                raise ValidationError("conflicting waiting DH query")
+            return True
+        self._queries[xid] = (grant.said, expiry, serder, deepcopy(attachments))
+        return True
+
     def processQuery(self, serder, *, lsgs=None, tsgs=None, sigers=None, cigars=None, **kwa):
         """Authenticate the issuer independently of optional KRAM acceptance."""
         from ..core import messagize, reply
@@ -356,13 +405,15 @@ class Dhke:
         from ..peer.exchanging import verifyQueryAttachments
         if serder.ilk != Ilks.qry or serder.ked.get("rr") != self.Route:
             raise ValidationError("invalid DH query or return route")
+        if not verifyQueryAttachments(self.exc.hby, serder, lsgs=lsgs,
+                                       tsgs=tsgs, sigers=sigers, cigars=cigars):
+            raise MissingSignatureError("DH query lacks the issuer signature threshold")
+        if self._deferQuery(serder, dict(lsgs=lsgs, tsgs=tsgs, sigers=sigers, cigars=cigars)):
+            return
         own = self.group and serder.pre == self.hab.pre
         op, peer = self._preflight(serder, "q", 'issuer' if own else 'issuee', own=own)
         if own and op['proposal'] != serder.raw:
             raise ValidationError("own DH query lacks exact local proposal approval")
-        if not verifyQueryAttachments(self.exc.hby, serder, lsgs=lsgs,
-                                       tsgs=tsgs, sigers=sigers, cigars=cigars):
-            raise MissingSignatureError("DH query lacks the issuer signature threshold")
         if own:
             groups = [group for group in tsgs or [] if group[0].qb64 == self.hab.pre]
             lasts = [group for group in lsgs or [] if group[0].qb64 == self.hab.pre]
@@ -482,6 +533,7 @@ class Dhke:
 
     def abandon(self, xid):
         """Drop ephemeral private keys and refuse further use of this operation."""
+        self._queries.pop(xid, None)
         op = self._operations[xid]
         op["private"].clear()
         op["abandoned"] = True
