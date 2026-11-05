@@ -2399,8 +2399,9 @@ class IpexHandler:
         origin = nodes[originSaid]
         origin = origin["serder"] if isinstance(origin, dict) else origin.serder
 
+        recipient = serder.ked.get("ri", "")
         issuance = (serder.pre == origin.israid
-                    and serder.ked.get("ri", "") == origin.iseaid)
+                    and recipient == origin.iseaid)
 
         required = []
 
@@ -2420,13 +2421,13 @@ class IpexHandler:
             if declarations is None:
                 return None
 
-            # Only the origin being issued is exempt. Linked credentials are
-            # existing disclosures whose presentation requirements still apply.
-            if issuance and said == originSaid:
-                continue
-
             # Keep each declaration with its node-local proof stream.
             for issuee, regk in declarations:
+                # A direct issuance does not present recipient-targeted nodes
+                # to an unknown third party.
+                if issuance and issuee == recipient:
+                    continue
+
                 required.append((issuee, regk, nest))
 
         # Load the receiver timestamp that freezes registry history.
@@ -2554,7 +2555,7 @@ class IpexHandler:
         """
         attrs = serder.ked["a"]
         self.notifier.add(attrs=dict(
-            r=f"/exn{serder.ked['r']}",
+            r=f"/{serder.ilk}{serder.ked['r']}",
             d=serder.said,
             m=attrs["m"],
         ))
