@@ -11,7 +11,7 @@ from ... import Kinds, Vrsn_1_0, Vrsn_2_0
 from ...acdc import ipexing
 from ...app.agenting import HTTPStreamMessenger
 from ...app import GroupHab, SignifyHab, SignifyGroupHab, Notifier, StreamPoster
-from ...core import Parser
+from ...core import Kevery, Kramer, Parser
 from ...kering import ConfigurationError
 from ...peer import Exchanger
 from ...peer.exchanging import serializeMessage, verify
@@ -61,7 +61,11 @@ class NativeNegotiation(doing.DoDoer):
             notifier = Notifier(hby)
             exc = Exchanger(hby=hby, handlers=[])
             ipexing.loadHandlers(hby=hby, exc=exc, notifier=notifier)
-            psr = Parser(kvy=hby.kvy, exc=exc, rvy=hby.rvy, version=Vrsn_2_0)
+            # The Habery's ordinary Kevery plus its configured KRAM: locally authored openers
+            # must reach KRAM so later replies join their thread. KRAM-off config is unchanged.
+            kvy = Kevery(db=hby.db, rvy=hby.rvy, exc=exc, lax=False, local=True,
+                         kramer=Kramer(db=hby.db, cf=hby.cf))
+            psr = Parser(kvy=kvy, exc=exc, rvy=hby.rvy, version=Vrsn_2_0)
             for filename in args.input:
                 self.intake(psr, exc, Path(filename).read_bytes())
             plan = None
@@ -148,4 +152,10 @@ class NativeNegotiation(doing.DoDoer):
                             xid=message.serder.said if message.serder.ilk == 'xip' else message.serder.sad['x'],
                             sender=message.serder.pre, recipient=message.serder.sad['ri']) is not None):
                     continue
+                if ((issuance or presentation) and message.serder.route == '/ipex/grant'
+                        and exc.exchangeDeadline(message.serder) is None):
+                    # Diagnosis only: authorization above already refused this Grant.
+                    raise ConfigurationError(
+                        'live DH/Unblind requires KRAM enabled in the Habery config '
+                        '(kram.enabled) and an accepted KRAM transaction for this Grant')
                 raise ConfigurationError('input exchange did not pass native IPEX verification')
