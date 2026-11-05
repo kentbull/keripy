@@ -112,7 +112,8 @@ def test_durable_recheck_keeps_exact_partial_view_after_fuller_section_arrival(t
         with openHby(name='current-partial', temp=False, headDirPath=str(tmp_path), version=V2) as hby:
             exc = Exchanger(hby, handlers=[])
             loadHandlers(hby, exc, SimpleNamespace(add=lambda **_: None))
-            h = SimpleNamespace(hby=hby, exc=exc)
+            # Durable recheck needs no live auxiliary authority; keep plain intake.
+            h = SimpleNamespace(hby=hby, exc=exc, kvy=None)
             if phase == 0:
                 issuer = hby.makeHab(name='issuer')
                 holder = hby.makeHab(name='holder')

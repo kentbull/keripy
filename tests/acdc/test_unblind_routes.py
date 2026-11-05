@@ -43,7 +43,7 @@ def transfer(issuer, recipients, registry, event):
 
 
 @contextmanager
-def actors(names, *, enabled=False, headDirPath=None):
+def actors(names, *, enabled=True, headDirPath=None):
     """Bootstrap independent encrypted two-key actors through real KEL intake."""
     with ExitStack() as stack:
         sides = []
@@ -78,8 +78,9 @@ def actors(names, *, enabled=False, headDirPath=None):
 
 
 @contextmanager
-def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDirPath=None,
-                 later_states=('revoked', '', ''), approve_holder=True):
+def presentation(enabled=True, *, bound=False, known=1, accepted=False, headDirPath=None,
+                 later_states=('revoked', '', ''), approve_holder=True,
+                 approve_verifier=True):
     """Explicit test capability only; no provisioning protocol is claimed."""
     with actors(('issuer', 'holder', 'verifier'), enabled=enabled,
                 headDirPath=headDirPath) as sides:
@@ -151,8 +152,9 @@ def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDir
             assert holder.hby.db.exns.get((message.said,)) is not None
             assert verifier.hby.db.epse.get((message.said,)) is not None
             assert verifier.hby.db.exns.get((message.said,)) is None
+        xid = None
         for side in (holder, verifier):
-            if side is verifier or approve_holder:
+            if approve_verifier if side is verifier else approve_holder:
                 xid = side.route.approve(message.said)
         yield SimpleNamespace(issuer=issuer, holder=holder, verifier=verifier,
             registry=registry, credential=credential, grant=message, xid=xid, root=root,
@@ -228,7 +230,8 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         local.parse(ims=bytearray(message.raw + atc), framed=False)
         assert not discloser.exc.complete(message.said)
         assert discloser.hby.db.epse.get((message.said,)).raw == message.raw
-        deadline = discloser.hby.db.epsd.get((message.said,)).dts
+        # A below-threshold proposal has no authenticated exchange lifetime.
+        assert discloser.exc.exchangeDeadline(message) is None
         with pytest.raises(ValidationError):
             discloser.route.approve(message.said)
 
@@ -238,10 +241,12 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         original.tsgs.extend(endorsement.tsgs)
         authorized = bytes(serializeParsedSubstream(original))
         local.parse(ims=bytearray(authorized), framed=False)
-        assert discloser.hby.db.epsd.get((message.said,)).dts == deadline
-        # Register the final outbound frame with its conversation owner before delivery.
+        assert discloser.exc.exchangeDeadline(message) is None
+        # Register the final outbound frame with its conversation owner before delivery;
+        # accepted KRAM intake fixes the exchange lifetime once.
         receive(discloser, authorized)
-        assert discloser.hby.db.epsd.get((message.said,)).dts == deadline
+        deadline = discloser.exc.exchangeDeadline(message)
+        assert deadline is not None
         receive(verifier, authorized)  # First remote delivery already carries issuer consent.
         assert verifier.hby.db.epse.get((message.said,)).raw == message.raw
         assert verifier.hby.db.exns.get((message.said,)) is None
@@ -268,7 +273,7 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         assert discloser.exc.complete(message.said)
         assert discloser.hby.db.epse.get((message.said,)) is None
         assert discloser.route.finish(xid) is True  # The same frozen reply may be retried.
-        assert discloser.hby.db.epsd.get((message.said,)).dts == deadline
+        assert discloser.exc.exchangeDeadline(message) == deadline
         receive(verifier, response)
         assert verifier.route.finish(xid) is True
         body, _, verdict, records = verifier.exc.reverifyGrant(message.said)
@@ -285,9 +290,8 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
             assert side.hab.mgr.getRegistryRoot(side.hab.pre, registry.regk) is None
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
-def test_unblind_exact_minimum_suffix_repairs_same_grant(enabled):
-    with presentation(enabled) as h:
+def test_unblind_exact_minimum_suffix_repairs_same_grant():
+    with presentation() as h:
         query = h.verifier.route.start(h.grant.said)
         request = parsed(query)
         assert request.serder.sad['q']['re'] == {h.registry.regk: [event.said for event in h.events[1:]]}
@@ -347,7 +351,7 @@ def test_accepted_live_grant_retains_unblind_proofs_without_changing_admitted_hi
         assert observed.state == 'issued'
         original = db.enst.get((h.grant.said,))
         historical = h.holder.hby.db.enst.get((h.issuance.said,))
-        deadline = db.epsd.get((h.grant.said,)).dts
+        deadline = h.verifier.exc.exchangeDeadline(h.grant)
         assert h.verifier.exc.reverifyGrant(h.grant.said)[2].verdict == chaining.Verdicts.unknown
         with pytest.raises(ValidationError):
             h.holder.route.approve(h.issuance.said)
@@ -373,7 +377,7 @@ def test_accepted_live_grant_retains_unblind_proofs_without_changing_admitted_hi
         assert records[h.credential.said].state == 'revoked'
         assert body.raw == h.grant.raw and nests[0].serder.raw == h.credential.raw
         assert {data[0].qb64 for data in nests[0].bsqs} == {proof.said for proof in h.proofs}
-        assert db.epsd.get((h.grant.said,)).dts == deadline
+        assert h.verifier.exc.exchangeDeadline(h.grant) == deadline
         assert db.erpy.get((prior.said,)).qb64 == responseLink
         assert db.kramTMSC.get((h.grant.pre, h.xid, h.grant.said)) == cache
         current = db.exrs.get((h.grant.said, h.credential.said))
@@ -402,6 +406,16 @@ def test_accepted_live_grant_retains_unblind_proofs_without_changing_admitted_hi
         assert db.enst.get((h.grant.said,)) == retained
 
 
+def test_kram_off_grant_has_no_live_unblind_authority():
+    """Without an accepted KRAM transaction, a pending Grant cannot start Unblind."""
+    with presentation(False, approve_holder=False, approve_verifier=False) as h:
+        for side in (h.holder, h.verifier):
+            assert side.exc.exchangeDeadline(h.grant) is None
+        with pytest.raises(ValidationError, match='unavailable, terminated or expired'):
+            h.verifier.route.approve(h.grant.said)
+        assert not h.verifier.route.cues
+
+
 def signed(side, frame, *, indices=None):
     """Real signatures, optionally partial, preserving the supplied attachment view."""
     message = frame.serder
@@ -426,9 +440,8 @@ def restart(side):
             route.resource = side.route
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
-def test_rootless_holder_replies_only_with_explicit_held_bound_proofs(enabled):
-    with presentation(enabled, bound=True) as h:
+def test_rootless_holder_replies_only_with_explicit_held_bound_proofs():
+    with presentation(bound=True) as h:
         assert h.holder.hab.mgr.getRegistryRoot(h.holder.hab.pre, h.registry.regk) is None
         for event, proof, tel in zip(h.events[1:], h.proofs[1:], h.later_tel):
             receive(h.holder, tel)
@@ -451,7 +464,7 @@ def test_rootless_holder_replies_only_with_explicit_held_bound_proofs(enabled):
 
 
 def test_partial_reply_retains_verified_proofs_until_second_signature_without_proofs(fakeHelpingClock):
-    with presentation(False) as h:
+    with presentation() as h:
         receive(h.holder, h.verifier.route.start(h.grant.said))
         frame = parsed(h.holder.route.cues.popleft()['msg'])
         receive(h.verifier, signed(h.holder, frame, indices=[0]))
@@ -496,13 +509,12 @@ def test_partial_kram_query_retains_nested_public_events():
         assert h.verifier.route.finish(h.xid)
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
 @pytest.mark.parametrize('fault', ['scope', 'xid', 'sender', 'recipient', 'forged', 'insufficient',
     'duplicate-signature', 'unknown', 'unaccepted', 'swapped', 'trailing', 'source',
     'nested-credential', 'essr-extra', 'source-extra', 'expired', 'abandoned', 'restarted',
     'missing-unrequested-proof', 'huge-ordinal'])
-def test_query_refusals_do_not_disclose_or_advance_public_state(enabled, fault, fakeHelpingClock):
-    with presentation(enabled) as h:
+def test_query_refusals_do_not_disclose_or_advance_public_state(fault, fakeHelpingClock):
+    with presentation() as h:
         frame = parsed(h.verifier.route.start(h.grant.said))
         sad = deepcopy(frame.serder.sad)
         signing, target, indices = h.verifier, h.holder, None
@@ -569,13 +581,12 @@ def test_query_refusals_do_not_disclose_or_advance_public_state(enabled, fault, 
             h.verifier.route.finish(h.xid)
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
 @pytest.mark.parametrize('fault', ['scope', 'xid', 'sender', 'recipient', 'forged', 'insufficient',
     'duplicate-signature', 'unknown', 'wrong-proof', 'excess-proof', 'missing-proof',
     'unnecessary-history', 'nested-credential', 'essr-extra', 'source-extra',
     'expired', 'abandoned', 'restarted'])
-def test_reply_refusals_do_not_finish_presentation(enabled, fault, fakeHelpingClock):
-    with presentation(enabled) as h:
+def test_reply_refusals_do_not_finish_presentation(fault, fakeHelpingClock):
+    with presentation() as h:
         receive(h.holder, h.verifier.route.start(h.grant.said))
         frame = parsed(h.holder.route.cues.popleft()['msg'])
         sad = deepcopy(frame.serder.sad)
@@ -628,9 +639,8 @@ def test_reply_refusals_do_not_finish_presentation(enabled, fault, fakeHelpingCl
             h.verifier.route.finish(h.xid)
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
-def test_no_held_new_proofs_refuses_reply_without_root(enabled):
-    with presentation(enabled, bound=True) as h:
+def test_no_held_new_proofs_refuses_reply_without_root():
+    with presentation(bound=True) as h:
         receive(h.holder, h.verifier.route.start(h.grant.said))
         assert h.holder.rgy.store.head(h.registry.regk).qb64 == h.events[-1].said
         assert h.holder.hab.mgr.getRegistryRoot(h.holder.hab.pre, h.registry.regk) is None
@@ -639,9 +649,8 @@ def test_no_held_new_proofs_refuses_reply_without_root(enabled):
             h.verifier.route.finish(h.xid)
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
-def test_abandon_discards_cached_unsent_proof_reply(enabled):
-    with presentation(enabled) as h:
+def test_abandon_discards_cached_unsent_proof_reply():
+    with presentation() as h:
         query = h.verifier.route.start(h.grant.said)
         receive(h.holder, query)
         assert len(h.holder.route.cues) == 1
@@ -653,9 +662,8 @@ def test_abandon_discards_cached_unsent_proof_reply(enabled):
             h.holder.route.approve(h.grant.said)
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
-def test_known_nonplaceholder_needs_only_later_placeholder_proofs(enabled):
-    with presentation(enabled, known=2) as h:
+def test_known_nonplaceholder_needs_only_later_placeholder_proofs():
+    with presentation(known=2) as h:
         query = h.verifier.route.start(h.grant.said)
         assert parsed(query).serder.sad['q']['re'] == {
             h.registry.regk: [event.said for event in h.events[2:]]}
@@ -671,9 +679,8 @@ def test_known_nonplaceholder_needs_only_later_placeholder_proofs(enabled):
         assert h.verifier.hby.db.exrs.get((h.grant.said, h.credential.said)).state == 'revoked'
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
-def test_overbroad_query_discloses_only_minimum_missing_proofs(enabled):
-    with presentation(enabled, later_states=('revoked', '', 'issued')) as h:
+def test_overbroad_query_discloses_only_minimum_missing_proofs():
+    with presentation(later_states=('revoked', '', 'issued')) as h:
         query = h.verifier.route.start(h.grant.said)
         requested = {h.registry.regk: [event.said for event in h.events[1:]]}
         assert parsed(query).serder.sad['q']['re'] == requested
@@ -693,11 +700,10 @@ def test_overbroad_query_discloses_only_minimum_missing_proofs(enabled):
 
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
-def test_authenticated_request_retries_locally_when_exact_held_proofs_arrive(enabled, fakeHelpingClock):
-    with presentation(enabled, bound=True) as h:
+def test_authenticated_request_retries_locally_when_exact_held_proofs_arrive(fakeHelpingClock):
+    with presentation(bound=True) as h:
         request = h.verifier.route.start(h.grant.said)
-        deadline = h.holder.hby.db.epsd.get((h.grant.said,)).dts
+        deadline = h.holder.exc.exchangeDeadline(h.grant)
         receive(h.holder, request)
         assert not h.holder.route.cues
         # Missing held evidence may arrive later; it is not an invalid proof.
@@ -708,7 +714,7 @@ def test_authenticated_request_retries_locally_when_exact_held_proofs_arrive(ena
         response = h.holder.route.respond(h.xid)
         assert h.holder.route.cues.popleft()['msg'] == response
         assert h.holder.route.respond(h.xid) == response
-        assert h.holder.hby.db.epsd.get((h.grant.said,)).dts == deadline
+        assert h.holder.exc.exchangeDeadline(h.grant) == deadline
         receive(h.verifier, response)
         assert h.verifier.route.finish(h.xid)
         fakeHelpingClock.advance(seconds=301)
@@ -716,9 +722,8 @@ def test_authenticated_request_retries_locally_when_exact_held_proofs_arrive(ena
             h.holder.route.respond(h.xid)
 
 
-@pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
-def test_query_for_already_carried_old_proof_returns_empty_not_a_current_verdict(enabled):
-    with presentation(enabled) as h:
+def test_query_for_already_carried_old_proof_returns_empty_not_a_current_verdict():
+    with presentation() as h:
         frame = parsed(h.verifier.route.start(h.grant.said))
         first = h.events[0]
         number, diger = h.verifier.rgy.store.anchor(first.said)

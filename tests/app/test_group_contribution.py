@@ -98,7 +98,7 @@ def test_counselor_keeps_historical_elected_member(contributed_group, stage):
     if stage == 'signed':
         counselor.start(ghab=group, prefixer=group.kever.prefixer, number=number, diger=diger)
         counselor.processPartialSignedEscrow()
-        assert list(counselor.witDoer.msgs) == [dict(pre=group.pre, sn=number.sn)]
+        assert list(counselor.witDoer.msgs) == [dict(pre=group.pre, sn=number.sn, auths=None)]
     else:
         hby.db.gpwe.add(keys=(group.pre,), val=(number, diger))
         counselor.processPartialWitnessEscrow()
@@ -120,7 +120,7 @@ def test_counselor_election_uses_escrow_event_after_later_rotation(contributed_g
     if stage == 'signed':
         counselor.start(ghab=group, prefixer=group.kever.prefixer, number=number, diger=diger)
         counselor.processPartialSignedEscrow()
-        assert list(counselor.witDoer.msgs) == [dict(pre=group.pre, sn=number.sn)]
+        assert list(counselor.witDoer.msgs) == [dict(pre=group.pre, sn=number.sn, auths=None)]
     else:
         hby.db.gpwe.add(keys=(group.pre,), val=(number, diger))
         counselor.processPartialWitnessEscrow()

@@ -19,7 +19,7 @@ from keri.peer import Exchanger
 
 
 @contextmanager
-def parties(enabled=False, count=1, opener="grant", approve_issuee=True):
+def parties(enabled=True, count=1, opener="grant", approve_issuee=True, approve_issuer=True):
     """Two isolated encrypted Haberies; TEL crosses authenticated parser intake."""
     with ExitStack() as stack:
         sides = []
@@ -78,7 +78,7 @@ def parties(enabled=False, count=1, opener="grant", approve_issuee=True):
             receive(side, message.raw + atc)
             assert side.hby.db.epse.get((message.said,)) is not None
             assert side.hby.db.exns.get((message.said,)) is None
-            if side is issuer or approve_issuee:
+            if approve_issuer if side is issuer else approve_issuee:
                 assert side.dh.approve(message.said) == xid
         yield SimpleNamespace(issuer=issuer, issuee=issuee, registrar=registrar,
                               registries=registries, nodes=nodes, grant=message,
@@ -107,9 +107,8 @@ def roots(side, setup):
     return [side.hab.mgr.getRegistryRoot(side.hab.pre, reg.regk) for reg in setup.registries]
 
 
-@pytest.mark.parametrize("enabled", [False, True])
-def test_pending_dh_issue_and_admit(enabled):
-    with parties(enabled, count=2) as setup:
+def test_pending_dh_issue_and_admit():
+    with parties(count=2) as setup:
         issuer, issuee, message = setup.issuer, setup.issuee, setup.grant
         stream = issuer.dh.start(message.said)
         assert issuer.dh.start(message.said) == stream
@@ -122,9 +121,6 @@ def test_pending_dh_issue_and_admit(enabled):
         assert not issuee.dh._operations[message.said]["private"]
         # KRAM may suppress duplicate delivery; the owner still returns exact bytes.
         assert issuer.dh.start(message.said) == stream
-        if not enabled:
-            receive(issuee, stream)
-            assert issuee.dh.cues.popleft()["msg"] == response
         early, atc = admit(hab=issuee.hab, message="premature", grant=message)
         receive(issuee, early.raw + atc)
         assert issuee.hby.db.exns.get((early.said,)) is None
@@ -140,10 +136,9 @@ def test_pending_dh_issue_and_admit(enabled):
             nests.append(_normalizeNodeStream(messagize(serder=node, bonds=[recovered.data], gvrsn=V2)))
         issued = _sign(hab=issuer.hab, serder=message, nests=nests)
         for side in (issuer, issuee):
-            if enabled:
-                # KRAM still refuses duplicate wire delivery with new openings.
-                receive(side, issued)
-                assert side.hby.db.exns.get((message.said,)) is None
+            # KRAM still refuses duplicate wire delivery with new openings.
+            receive(side, issued)
+            assert side.hby.db.exns.get((message.said,)) is None
             assert side.dh.finish(message.said) is True
             assert side.hby.db.exns.get((message.said,)).raw == message.raw
             assert side.hby.db.epse.get((message.said,)) is None
@@ -154,6 +149,16 @@ def test_pending_dh_issue_and_admit(enabled):
         assert issuer.hby.db.exns.get((final.said,)) is not None
         with pytest.raises(ValidationError):
             issuer.dh.start(message.said)
+
+
+def test_kram_off_grant_has_no_live_dh_authority():
+    """Without an accepted KRAM transaction, an approved Grant cannot start DH."""
+    with parties(False, approve_issuee=False, approve_issuer=False) as setup:
+        for side in (setup.issuer, setup.issuee):
+            assert side.exc.exchangeDeadline(setup.grant) is None
+            with pytest.raises(ValidationError, match="unavailable, terminated or expired"):
+                side.dh.approve(setup.grant.said)
+            assert roots(side, setup) == [None]
 
 
 def resign(side, message, index=None):
@@ -168,11 +173,10 @@ def resign(side, message, index=None):
         [signatures[index]])], gvrsn=V2)
 
 
-@pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("fault", ["sender", "scope", "shape", "return-route", "forged",
     "partial", "low-order-last", "malformed-last", "expired", "abandoned", "restarted", "root", "xid", "recipient"])
-def test_query_refusals_write_no_roots(enabled, fault, fakeHelpingClock):
-    with parties(enabled, count=2) as setup:
+def test_query_refusals_write_no_roots(fault, fakeHelpingClock):
+    with parties(count=2) as setup:
         issuer, issuee = setup.issuer, setup.issuee
         original = SerderKERI(raw=issuer.dh.start(setup.grant.said))
         sad = deepcopy(original.sad)
@@ -215,11 +219,10 @@ def test_query_refusals_write_no_roots(enabled, fault, fakeHelpingClock):
             assert all(root is None for root in roots(issuee, setup))
 
 
-@pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("fault", ["sender", "scope", "forged", "partial", "low-order-last",
                                     "expired", "abandoned", "restarted"])
-def test_reply_refusals_write_no_roots(enabled, fault, fakeHelpingClock):
-    with parties(enabled, count=2) as setup:
+def test_reply_refusals_write_no_roots(fault, fakeHelpingClock):
+    with parties(count=2) as setup:
         issuer, issuee = setup.issuer, setup.issuee
         receive(issuee, issuer.dh.start(setup.grant.said))
         original = SerderKERI(raw=issuee.dh.cues.popleft()["msg"])
@@ -303,8 +306,10 @@ def test_same_operation_conflict_and_local_approval(fakeHelpingClock):
         changed["q"]["pk"][setup.registries[0].regk] = generateKeyPair()[1]
         receive(issuee, resign(issuer, SerderKERI(sad=changed, makify=True)))
         assert not issuee.dh.cues and roots(issuee, setup)[0].qb64 == previous
+        # KRAM suppresses the exact duplicate; the owner keeps its first reply.
         receive(issuee, resign(issuer, qry))
-        assert issuee.dh.cues.popleft()["msg"] == response
+        assert not issuee.dh.cues and roots(issuee, setup)[0].qb64 == previous
+        assert issuee.dh._operations[grantSaid]["reply"] == response
         fakeHelpingClock.advance(seconds=301)
         receive(issuee, resign(issuer, qry))
         assert not issuee.dh.cues

@@ -3736,7 +3736,12 @@ def test_ipex_v2_di2i_climbs_delegation_and_escrows_a_missing_anchor():
                 ]]))
             pendingExc = Exchanger(hby=hby, handlers=[])
             loadHandlers(hby=hby, exc=pendingExc, notifier=Recorder(), rgy=rgy)
-            _receive_ipex(pendingExc, pending, atc)
+            # Live auxiliary lifetime comes only from accepted KRAM intake.
+            with openCF(name="pending-di2i", base="test", temp=True) as cf:
+                cf.put(dict(kram=dict(enabled=True, denials=[],
+                    caches={"~": [1000, 5000, 60000, 300000, 5000, 60000, 300000]})))
+                kvy = Kevery(db=hby.db, kramer=Kramer(db=hby.db, cf=cf), exc=pendingExc)
+                _receive_ipex(pendingExc, pending, atc, kvy)
             scope = dict(xid=pending.said, sender=late.pre, recipient=recipient.pre)
             assert hby.db.epse.get((pending.said,)) is not None
             assert pendingExc.pendingGrant(pending.said, **scope) is None
@@ -6250,7 +6255,7 @@ def test_ipex_v2_escrows_registry_backed_grant_until_tel_evidence_arrives(sender
             assert ims == bytearray()
             assert recipientHby.db.exns.get(keys=(grantExn.said,)) is None
             assert recipientHby.db.epse.get(keys=(grantExn.said,)) is not None
-            deadline = recipientHby.db.epsd.get(keys=(grantExn.said,)).dts
+            assert recipientHby.db.epsd.get(keys=(grantExn.said,)) is not None
             assert len(recipientHby.db.ests.get(
                 keys=(grantExn.said, anchorHab.pre))) == 1
             assert recorder.items == []
@@ -6283,12 +6288,12 @@ def test_ipex_v2_escrows_registry_backed_grant_until_tel_evidence_arrives(sender
 
             if not validProof:
                 # Once TEL evidence is available, the proof for a different
-                # credential is a permanent refusal. Evict its evidence while
-                # preserving the first Grant lifetime against retransmission.
+                # credential is a permanent refusal. Evict its evidence with its
+                # escrow cleanup timing; exchange lifetime belongs to KRAM.
                 assert recipientHby.db.exns.get(keys=(grantExn.said,)) is None
                 assert list(recipientHby.db.erpy.getTopItemIter()) == []
                 assert recipientHby.db.epse.get(keys=(grantExn.said,)) is None
-                assert recipientHby.db.epsd.get(keys=(grantExn.said,)).dts == deadline
+                assert recipientHby.db.epsd.get(keys=(grantExn.said,)) is None
                 assert list(recipientHby.db.esigs.getTopItemIter(
                     keys=(grantExn.said, ""))) == []
                 assert recipientHby.db.ecigs.get(keys=(grantExn.said,)) == []
@@ -10236,8 +10241,13 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
 
 @pytest.fixture
 def fresh_issuance():
-    """Accepted RIP and real threshold-signing actors, with no BUP yet."""
-    with openHby(name="pending-issuance", base="test", version=Vrsn_2_0) as hby:
+    """Accepted RIP and real threshold-signing actors, with no BUP yet.
+
+    The yielded Kevery admits exchanges through KRAM; only accepted KRAM
+    transaction evidence gives a pending Grant live auxiliary lifetime.
+    """
+    with (openHby(name="pending-issuance", base="test", version=Vrsn_2_0) as hby,
+          openCF(name="pending-issuance", base="test", temp=True) as cf):
         issuer = hby.makeHab(name="issuer", icount=2, isith="2", ncount=2, nsith="2")
         issuee = hby.makeHab(name="issuee")
         rgy = Regery(hby=hby, name="pending-issuance", temp=True)
@@ -10249,15 +10259,21 @@ def fresh_issuance():
                            attribute=dict(d="", role="member"))
             exc = Exchanger(hby=hby, handlers=[])
             loadHandlers(hby=hby, exc=exc, notifier=Recorder(), rgy=rgy)
-            yield hby, issuer, issuee, rgy, registrar, registry, acdc, exc
+            cf.put(dict(kram=dict(enabled=True, denials=[],
+                caches={"~": [1000, 5000, 60000, 300000, 5000, 60000, 300000]})))
+            kvy = Kevery(db=hby.db, kramer=Kramer(db=hby.db, cf=cf), exc=exc)
+            yield hby, issuer, issuee, rgy, registrar, registry, acdc, exc, kvy
         finally:
             rgy.close()
 
 
-def _receive_ipex(exc, message, atc):
-    """Exercise the real parser/exchanger boundary with complete signed bytes."""
+def _receive_ipex(exc, message, atc, kvy=None):
+    """Exercise the real parser/exchanger boundary with complete signed bytes.
+
+    Pass a KRAM-enabled Kevery to record accepted exchange lifetime evidence.
+    """
     ims = bytearray(message.raw + atc)
-    Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
+    Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, kvy=kvy, exc=exc)
     assert not ims
 
 
@@ -10266,24 +10282,24 @@ def _receive_ipex(exc, message, atc):
 def test_pending_grant_finishes_only_after_issued_proof(fresh_issuance, opener, anchored):
     """Keep the original Grant pending through each opener until real state verifies."""
     from keri.acdc.ipexing import _normalizeNodeStream, _sign
-    hby, issuer, issuee, rgy, registrar, registry, acdc, exc = fresh_issuance
+    hby, issuer, issuee, rgy, registrar, registry, acdc, exc, kvy = fresh_issuance
     prior = {}
     plan = [[[acdc.schema["$id"], "/", []]]]
     if opener == "apply":
         apply, atc = ipexApply(hab=issuee, recp=issuer.pre, message="apply",
                                modifiers=dict(dp=plan), ax=[anchored])
-        _receive_ipex(exc, apply, atc)
+        _receive_ipex(exc, apply, atc, kvy)
         prior["apply"] = apply
     elif opener == "offer":
         offer, atc = ipexOffer(hab=issuer, recp=issuee.pre, message="offer",
                                origin=acdc.raw, modifiers=dict(dp=plan), ax=[anchored])
-        _receive_ipex(exc, offer, atc)
+        _receive_ipex(exc, offer, atc, kvy)
         agree, atc = ipexAgree(hab=issuee, message="agree", offer=offer)
-        _receive_ipex(exc, agree, atc)
+        _receive_ipex(exc, agree, atc, kvy)
         prior["agree"] = agree
     message, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="issue", origin=acdc.raw,
                               ax=[anchored], **prior)
-    _receive_ipex(exc, message, atc)
+    _receive_ipex(exc, message, atc, kvy)
     xid = message.said if message.ilk == Ilks.xip else message.ked["x"]
     scope = dict(xid=xid, sender=issuer.pre, recipient=issuee.pre)
     assert hby.db.epse.get((message.said,)) is not None
@@ -10318,9 +10334,9 @@ def test_pending_grant_finishes_only_after_issued_proof(fresh_issuance, opener, 
     assert hby.db.exns.get((admit.said,)) is not None
 
 
-def test_pending_grant_reauthenticates_threshold_and_lifetime(fresh_issuance):
+def test_pending_grant_reauthenticates_threshold_and_lifetime(fresh_issuance, fakeHelpingClock):
     """An epse row with one signature never authorizes DH; lookup writes nothing."""
-    hby, issuer, issuee, _, _, registry, acdc, exc = fresh_issuance
+    hby, issuer, issuee, _, _, registry, acdc, exc, kvy = fresh_issuance
     message, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="issue", origin=acdc.raw)
     parsed = Parser(version=Vrsn_2_0).parse(
         ims=bytearray(message.raw + atc), framed=False, processive=False)[0]
@@ -10331,22 +10347,22 @@ def test_pending_grant_reauthenticates_threshold_and_lifetime(fresh_issuance):
     scope = dict(xid=message.said, sender=issuer.pre, recipient=issuee.pre)
     assert hby.db.epse.get((message.said,)) is not None
     assert exc.pendingGrant(message.said, **scope) is None
-    _receive_ipex(exc, message, atc)
+    assert exc.exchangeDeadline(message) is None
+    _receive_ipex(exc, message, atc, kvy)
     assert exc.pendingGrant(message.said, **scope)[1] == (registry.regk,)
     # Rechecking, rather than trusting a previously sufficient row, catches lost evidence.
     hby.db.esigs.trim(keys=(message.said,))
     assert exc.pendingGrant(message.said, **scope) is None
     _receive_ipex(exc, message, atc)
-    from keri.core import Dater
-    expired = helping.nowUTC() - timedelta(milliseconds=1)
-    hby.db.epsd.pin((message.said,), Dater(dts=helping.toIso8601(expired)))
+    assert exc.pendingGrant(message.said, **scope) is not None
+    fakeHelpingClock.set(helping.toIso8601(exc.exchangeDeadline(message)))
     assert exc.pendingGrant(message.said, **scope) is None
 
 
 @pytest.mark.parametrize("opener", ["grant", "apply"])
 def test_pending_grant_preserves_original_kram_deadline(fresh_issuance, fakeHelpingClock, opener):
     """Human-scale pending time survives retries, but never cache pruning or expiry."""
-    hby, issuer, issuee, _, _, _, acdc, exc = fresh_issuance
+    hby, issuer, issuee, _, _, _, acdc, exc, _ = fresh_issuance
     with openCF(name="pending-kram", base="test", temp=True) as cf:
         cf.put(dict(kram=dict(enabled=True, denials=[],
                              caches={"~": [1000, 5000, 60000, 120000, 5000, 60000, 240000]})))
@@ -10390,7 +10406,7 @@ def test_pending_grant_preserves_original_kram_deadline(fresh_issuance, fakeHelp
 def test_partial_exchange_deadline_preserves_timeout(fresh_issuance, fakeHelpingClock, legacy):
     """Ordinary partials retain their timeout; old receipt rows expire conservatively."""
     from keri.core import Dater
-    hby, issuer, issuee, _, _, _, _, exc = fresh_issuance
+    hby, issuer, issuee, _, _, _, _, exc, _ = fresh_issuance
     message, atc = ipexApply(hab=issuer, recp=issuee.pre, message="partial",
                              modifiers=dict(dp=[[]]))
     parsed = Parser(version=Vrsn_2_0).parse(
@@ -10415,7 +10431,7 @@ def test_partial_exchange_deadline_preserves_timeout(fresh_issuance, fakeHelping
 @pytest.mark.parametrize("fault", ["wrong-issuee", "invalid-proof", "missing-rip", "missing-schema"])
 def test_pending_grant_refuses_missing_authority(fresh_issuance, fault):
     """A schema, issuer/issuee binding or supplied invalid proof cannot be bypassed."""
-    hby, issuer, issuee, _, _, registry, acdc, exc = fresh_issuance
+    hby, issuer, issuee, _, _, registry, acdc, exc, _ = fresh_issuance
     if fault != "invalid-proof":
         acdc = acdcmap(israid=issuer.pre,
                        iseaid=issuer.pre if fault == "wrong-issuee" else issuee.pre,
@@ -10437,7 +10453,7 @@ def test_pending_grant_refuses_missing_authority(fresh_issuance, fault):
 @pytest.mark.parametrize("fault", [None, "dangling", "invalid-proof"])
 def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault):
     """OR cannot accept a fresh registry, and a pending node cannot hide bad edges."""
-    hby, issuer, issuee, rgy, registrar, registry, acdc, exc = fresh_issuance
+    hby, issuer, issuee, rgy, registrar, registry, acdc, exc, kvy = fresh_issuance
     if fault == "dangling":
         acdc = acdcmap(israid=issuer.pre, iseaid=issuee.pre, regid=registry.regk,
                        attribute=dict(d="", role="member"),
@@ -10464,7 +10480,7 @@ def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault):
     message, atc = ipexGrant(hab=issuer, recp=issuee.pre, message="OR pending",
                               origin=_signed(origin, issuer), artifacts=[acdc.raw, readyNest],
                               modifiers=dict(dp=[plan]))
-    _receive_ipex(exc, message, atc)
+    _receive_ipex(exc, message, atc, kvy)
     context = exc.pendingGrant(message.said, xid=message.said,
                                sender=issuer.pre, recipient=issuee.pre)
     assert (context is None) == (fault is not None)
@@ -10492,7 +10508,7 @@ def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault):
 @pytest.mark.parametrize("authority", ["missing", "foreign"])
 def test_pending_discovery_preserves_optional_missing_registry(fresh_issuance, fresh, authority):
     """An optional missing/foreign RIP preserves final OR but cannot authorize DH."""
-    hby, issuer, issuee, rgy, registrar, _, acdc, exc = fresh_issuance
+    hby, issuer, issuee, rgy, registrar, _, acdc, exc, _ = fresh_issuance
     regk = Diger(ser=b"missing optional RIP").qb64
     if authority == "foreign":
         foreign = registrar.makeRegistry(name="foreign", prefix=issuee.pre)
