@@ -78,7 +78,8 @@ def actors(names, *, enabled=False, headDirPath=None):
 
 
 @contextmanager
-def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDirPath=None):
+def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDirPath=None,
+                 later_states=('revoked', '', '')):
     """Explicit test capability only; no provisioning protocol is claimed."""
     with actors(('issuer', 'holder', 'verifier'), enabled=enabled,
                 headDirPath=headDirPath) as sides:
@@ -126,7 +127,7 @@ def presentation(enabled=False, *, bound=False, known=1, accepted=False, headDir
             for side in (holder, verifier):
                 receive(side, message.raw + atc)
                 assert side.exc.complete(message.said)
-        for state in ('revoked', '', ''):
+        for state in later_states:
             proof, event = (registrar.issue(registry, credential, state=state, salt=root.qb64, **binding)
                             if state else registrar.vacate(registry, salt=root.qb64,
                                 **(dict(bound=True, bsn=0, bd='') if bound else {})))
@@ -660,22 +661,24 @@ def test_known_nonplaceholder_needs_only_later_placeholder_proofs(enabled):
 
 @pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
 def test_overbroad_query_discloses_only_minimum_missing_proofs(enabled):
-    with presentation(enabled) as h:
-        frame = parsed(h.verifier.route.start(h.grant.said))
-        first = h.events[0]
-        number, diger = h.verifier.rgy.store.anchor(first.said)
-        frame.nests.insert(0, parsed(messagize(first, nested=True,
-            bonds=[SealSource(s=number.snh, d=diger.qb64)], gvrsn=V2)))
-        sad = deepcopy(frame.serder.sad)
-        sad['q']['re'][h.registry.regk].insert(0, first.said)
-        frame.serder = SerderKERI(sad=sad, makify=True)
-        receive(h.holder, signed(h.verifier, frame))
+    with presentation(enabled, later_states=('revoked', '', 'issued')) as h:
+        query = h.verifier.route.start(h.grant.said)
+        requested = {h.registry.regk: [event.said for event in h.events[1:]]}
+        assert parsed(query).serder.sad['q']['re'] == requested
+        receive(h.holder, query)
         response = h.holder.route.cues.popleft()['msg']
-        assert parsed(response).serder.sad['a']['re'] == {
-            h.registry.regk: [event.said for event in h.events[1:]]}
-        assert h.proofs[0].qb64b not in response
-        receive(h.verifier, response)
+        frame = parsed(response)
+        assert frame.serder.sad['a']['re'] == {h.registry.regk: [h.events[-1].said]}
+        assert {data[0].qb64 for data in frame.bsqs} == {h.proofs[-1].said}
+        # A valid peer may return other requested proofs without changing the request.
+        sad = deepcopy(frame.serder.sad)
+        sad['a']['re'] = requested
+        frame.serder = SerderKERI(sad=sad, makify=True)
+        frame.bsqs = [proof.data for proof in h.proofs[1:]]
+        receive(h.verifier, signed(h.holder, frame))
         assert h.verifier.route.finish(h.xid)
+        assert h.verifier.hby.db.exrs.get((h.grant.said, h.credential.said)).state == 'issued'
+
 
 
 @pytest.mark.parametrize('enabled', [False, True], ids=['kram-off', 'kram-on'])
