@@ -380,12 +380,16 @@ def test_every_member_holds_every_root_after_group_dh():
             others = [side for side in members if side is not custodian]
             assert {side.member.pre for side in others} | {custodian.member.pre} == set(
                 custodian.hby.db.signingMembers(pre=custodian.hab.pre))
+            # KEL-derived current members, the default send recipients.
+            assert set(custodian.root.members(custodian.hab.pre)) == {
+                side.member.pre for side in members}
             for side in others:
                 for registry in h.registries:
                     deliver(side, custodian.root.prepare(custodian.member, side.member.pre,
                         custodian.hab.pre, registry.regk, td=hints[registry.regk]))
                 for item in side.root.pending():
                     assert side.root.receive(item['said']) is True
+                assert side.root.held(side.hab.pre) == sorted(regks)
         for registry in h.registries:
             for members in (h.issuers, h.issuees):
                 roots = {side.hby.mgr.getRegistryRoot(side.hab.pre, registry.regk).qb64
