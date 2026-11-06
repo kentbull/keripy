@@ -91,7 +91,10 @@ class Dhke:
     The caller injects this instance as Kevery.qvy and registers it at
     /ipex/dhke on Revery's existing router. ``cues`` carries immutable signed
     bytes as {kin: 'query'|'reply'|'sign', dest: aid, msg: bytes}; 'sign' asks
-    local members to review a proposal. The application owns delivery.
+    local members to review a proposal. A group custodian's retention also
+    cues {kin: 'replicate', gid: aid, registries: [said]} so the application
+    sends each root to every other current member (salting.RegistryRoot).
+    The application owns delivery.
     JSON bodies preserve registry-keyed maps (native strict map labels cannot
     encode every registry ID). Attachments use the normal V2 CESR framing.
     Operations and retry bytes are process-local. A new instance authorizes
@@ -384,6 +387,9 @@ class Dhke:
         op["peer"] = dict(peer)
         op["completed"] = True
         op["private"].clear()
+        if self.group:
+            # Every current member must hold every root; the custodian replicates.
+            self.cues.append(dict(kin='replicate', gid=self.hab.pre, registries=list(roots)))
 
     def _deferQuery(self, serder, attachments):
         """Retain public authenticated input only; approval still owns all DH effects."""

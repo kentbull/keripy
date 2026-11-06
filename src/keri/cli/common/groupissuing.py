@@ -244,6 +244,8 @@ class GroupIssuance:
                 del self.pending[member]
             while owner.dh.cues:
                 cue = owner.dh.cues.popleft()
+                if cue['kin'] == 'replicate':
+                    continue  # Root replication is a separate explicit command.
                 if cue['kin'] == 'query':
                     # Only own full-threshold intake emits this cue. A proposal
                     # or member contribution must never become a peer retry.

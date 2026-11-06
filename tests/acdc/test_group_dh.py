@@ -173,7 +173,7 @@ def exchange(setup):
         receive(side, proposal['msg'])
         assert root(side, setup) is None
         receive(side, other)
-    response = right.dh.cues.popleft()['msg']
+    response = next(cue for cue in right.dh.cues if cue['kin'] == 'reply')['msg']
     for side in (left, issuers[setup.lead + 1]):
         receive(side, response)
     assert left.dh.complete(setup.xid) and right.dh.complete(setup.xid)

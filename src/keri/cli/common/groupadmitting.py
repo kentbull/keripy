@@ -223,6 +223,8 @@ class GroupAdmission:
             self.check()
             while self.dh.cues:
                 cue = self.dh.cues.popleft()
+                if cue['kin'] == 'replicate':
+                    continue  # Root replication is a separate explicit command.
                 if cue['kin'] == 'sign':
                     owner.psr.parse(ims=bytearray(cue['msg']), local=True)
                     yield from self.broadcast(cue['msg'], reply=True)
