@@ -7,6 +7,7 @@ import time
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -16,10 +17,12 @@ from keri import Kinds, Vrsn_2_0 as V2
 from keri.acdc import Regery
 from keri.app import Habery, Receiptor, StreamPoster
 from keri.cli.common import setupHby
-from keri.core import Parser, SerderACDC, exchange
+from keri.acdc.ipexing import loadHandlers as loadIpexHandlers
+from keri.core import Kevery, Kramer, Parser, SerderACDC, exchange
 from keri.cli.common.groupadmitting import ProofRoute
 from keri.db import Baser
 from keri.app import Keeper
+from keri.peer import Exchanger
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from keri.kering import KeriError
 from keri.help import fromIso8601
@@ -249,6 +252,20 @@ def group_parties(tmp_path, live_parties, data='{"role":"group reader"}'):
     return issuer, holders, body, bodyfile, grantfile, public, coordinator
 
 
+def receive_grant(hby, side, raw, grant):
+    """Take in a delivered Grant stream like installed kli, through the store's configured KRAM."""
+    rgy = Regery(hby=hby, name=side['name'], base=side['base'])
+    try:
+        exc = Exchanger(hby=hby, handlers=[])
+        loadIpexHandlers(hby, exc, SimpleNamespace(add=lambda **_: None), rgy=rgy)
+        kvy = Kevery(db=hby.db, rvy=hby.rvy, exc=exc, lax=True, local=False, direct=False,
+                     kramer=Kramer(db=hby.db, cf=hby.cf))
+        Parser(kvy=kvy, rvy=hby.rvy, rgy=rgy, exc=exc, version=V2).parse(ims=bytearray(raw))
+        return exc.exchangeDeadline(grant)
+    finally:
+        rgy.close()
+
+
 def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
     issuer, holders, body, bodyfile, grantfile, public, coordinator = group_parties(tmp_path, live_parties, data)
     group_pre = holders[0]['pre']
@@ -293,7 +310,28 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
                     break
                 assert time.monotonic() < deadline
                 time.sleep(0.03)
+            # Members receive the issuer's single-signer Grant through their mailboxes within KRAM short
+            # lag. Take it in for both members now and keep the peer live before any member proposal
+            # exists, so short-lag member messages never wait on a later command startup.
+            assert receive_grant(signing, holders[0], grantfile.read_bytes(), frames[-1].serder) is not None
+            peer = setupHby(name=holders[1]['name'], base=holders[1]['base'], bran=PASSCODE,
+                            noPrompt=True, version=V2)
+            try:
+                assert receive_grant(peer, holders[1], grantfile.read_bytes(), frames[-1].serder) is not None
+            finally:
+                peer.close()
             common = ['--said', selected['grant'], '--input', str(grantfile), '--deliver', '--timeout', '30']
+            start(['ipex', 'admit', *holders[1]['args'], *common, '--coordinator', coordinator,
+                '--custodian', holders[0]['member'], '--output', str(tmp_path / 'group-peer.cesr')], logs[2])
+            phase(logs[2], 'selected')
+            store = Baser(name=holders[1]['name'], base=holders[1]['base'], readonly=True, reopen=True)
+            try:
+                original_deadline = exchange_deadline(store, selected['grant'])
+                cache = store.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
+                assert cache is not None and cache.rdt and cache.xl == 300000
+                assert original_deadline == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
+            finally:
+                store.close()
             # A signed wrong-Grant envelope must not alter the selected pending disclosure or block its completion.
             member = signing.habByName('holder-group').mhab
             wrong = exchange(sender=member.pre, route=ProofRoute,
@@ -307,31 +345,19 @@ def group_issue(tmp_path, live_parties, data='{"role":"group reader"}'):
             doing.Doist(real=True, tock=0.03125, limit=5).do(doers=[delivery])
             assert delivery.done
             signing.close()
-            # The original short-lag query is live: start members promptly; unrelated refusal startup is separate.
             start(['ipex', 'admit', *holders[0]['args'], *common, '--coordinator', coordinator,
                 '--custodian', holders[0]['member'], '--output', str(tmp_path / 'group-lead.cesr')], logs[1])
             phase(logs[1], 'group_dh_proposed')
-            # A lone lead proposal cannot retain a root or accept the pending issuer Grant.
+            # A lone lead proposal cannot retain a root or accept the pending issuer Grant. The peer's
+            # contribution and the issuer's DH reply need further mailbox round trips before either can.
             store = Baser(name=holders[0]['name'], base=holders[0]['base'], readonly=True, reopen=True)
             keeper = Keeper(name=holders[0]['name'], base=holders[0]['base'], readonly=True, reopen=True)
             try:
                 assert store.exns.get((selected['grant'],)) is None
                 assert not list(keeper.rroots.getTopItemIter())
-                lead_deadline = exchange_deadline(store, selected['grant'])
+                assert exchange_deadline(store, selected['grant']) == original_deadline
             finally:
                 keeper.close()
-                store.close()
-            start(['ipex', 'admit', *holders[1]['args'], *common, '--coordinator', coordinator,
-                '--custodian', holders[0]['member'], '--output', str(tmp_path / 'group-peer.cesr')], logs[2])
-            phase(logs[2], 'selected')
-            store = Baser(name=holders[1]['name'], base=holders[1]['base'], readonly=True, reopen=True)
-            try:
-                original_deadline = exchange_deadline(store, selected['grant'])
-                cache = store.kramTMSC.get((issuer['pre'], selected['xid'], selected['grant']))
-                assert original_deadline == lead_deadline
-                assert cache is not None and cache.rdt and cache.xl == 300000
-                assert original_deadline == fromIso8601(cache.xdt) + timedelta(milliseconds=cache.xl)
-            finally:
                 store.close()
             for process in processes:
                 process.wait(timeout=40)
