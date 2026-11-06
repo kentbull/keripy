@@ -611,6 +611,33 @@ class Unblind:
             self._current(op)
         return op['reply'] is not None if self.group and self.hab.pre == op['sender'] else op["received"]
 
+    def openings(self, xid):
+        """Return the verified openings an authenticated reply selected.
+
+        Public read-only accessor for a group member forwarding the completed
+        reply, with its proofs, to the other members. Requires the same
+        readiness as ``complete`` (local approval, live original Grant, an
+        authenticated reply or frozen own group reply). Each opening was
+        checked against its accepted event and the approved disclosure when the
+        reply arrived. This is not a credential-state verdict and authorizes
+        neither Admit nor retention; ``finish`` owns that.
+
+        Parameters:
+            xid (str): exchange identifier of the approved presentation.
+
+        Returns:
+            dict: registry event SAID -> Blinder, in the reply's selected order.
+
+        Raises:
+            ValidationError: no local approval, an expired or abandoned
+                presentation, or no authenticated reply yet.
+        """
+        if not self.complete(xid):
+            raise ValidationError("unblind reply has not been authenticated and verified")
+        op = self._operation(xid)
+        return {said: op["openings"][said]
+                for saids in op["selected"].values() for said in saids}
+
     def finish(self, xid):
         """Retry ordinary Grant verification with the authenticated minimal proofs."""
         op = self._operation(xid)
