@@ -150,7 +150,8 @@ def test_cross_party_file_fallback_lists_then_retains_by_commitment(tmp_path, li
     assert results(kli(tmp_path, *receive)) == []
 
 
-def test_group_member_send_defaults_to_members_through_mailbox(tmp_path, live_parties):
+def group_root(tmp_path, live_parties):
+    """A witnessed 2-of-2 holder group whose lead holds an existing registry root."""
     issuer, holders, public, _ = holder_group(tmp_path, live_parties)
     lead, peer = holders
     group = dict(public=public, pre=lead['pre'])
@@ -164,6 +165,24 @@ def test_group_member_send_defaults_to_members_through_mailbox(tmp_path, live_pa
     finally:
         hby.close()
     assert root(peer, peer['pre'], body.regid) is None
+    return lead, peer, body, expected
+
+
+def test_mailbox_copy_fetched_after_the_kram_window_is_received(tmp_path, live_parties):
+    lead, peer, body, expected = group_root(tmp_path, live_parties)
+    sent = results(kli(tmp_path, 'vc', 'registry', 'root', 'send', *lead['args'],
+        '--registry', body.regid, '--acdc', body.said, '--timeout', '25'))
+    assert [(item['recipient'], item['transmitted']) for item in sent] == [(peer['member'], True)]
+    # The peer is offline past its whole KRAM short-lag window (1 s + 5 s).
+    time.sleep(8)
+    received = results(kli(tmp_path, 'vc', 'registry', 'root', 'receive', *peer['args'],
+        '--registry', body.regid, '--sender', lead['member'], '--listen', '--timeout', '20'))[-1]
+    assert received['received'] and received['said'] == sent[0]['exchange']
+    assert root(peer, peer['pre'], body.regid) == expected
+
+
+def test_group_member_send_defaults_to_members_through_mailbox(tmp_path, live_parties):
+    lead, peer, body, expected = group_root(tmp_path, live_parties)
     log = tmp_path / 'root-receive.log'
     with log.open('w+') as output:
         process = subprocess.Popen([shutil.which('kli'), 'vc', 'registry', 'root', 'receive', *peer['args'],
