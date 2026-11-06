@@ -1067,3 +1067,63 @@ def test_regery_rejects_duplicate_registry_key_creation():
             assert list(rgy.regs.keys()) == [first.regk]
         finally:
             rgy.close()
+
+
+def _framed(serder, openings=()):
+    """Frame one TEL body with its optional disclosed openings."""
+    from keri.core import Codens, Counter
+    attachments = Blinder.enclose(list(openings)) if openings else b""
+    return bytes(serder.raw) + Counter.enclose(qb64=attachments, code=Codens.AttachmentGroup,
+                                               version=Vrsn_2_0)
+
+
+def test_regery_ingest_reports_per_event_outcomes():
+    """Public KEL/TEL intake classifies each frame once; heads stay caller policy."""
+    from keri.acdc import disclosedOpening
+    from keri.core import Kevery
+    with (openHby(name="intake-issuer", temp=True, version=Vrsn_2_0) as issuerHby,
+          openHby(name="intake-receiver", temp=True, version=Vrsn_2_0) as receiverHby):
+        hab = issuerHby.makeHab(name="issuer")
+        source = Regery(hby=issuerHby, name="intake-issuer", temp=True)
+        rgy = Regery(hby=receiverHby, name="intake-receiver", temp=True)
+        try:
+            registrar = Registrar(rgy=source)
+            registry = registrar.makeRegistry(name="intake", prefix=hab.pre)
+            rip = _anchor(hab, registry, source.store.event(registry.regk))
+            acdc = acdcmap(israid=hab.pre, regid=registry.regk,
+                           attribute=dict(d="", LEI="254900OPPU84GM83MG36"), iseaid=hab.pre)
+            opening, bup = registrar.issue(registry, acdc=acdc, state="issued")
+            _anchor(hab, registry, bup)
+            kel = list(issuerHby.db.clonePreIter(pre=hab.pre, gvrsn=Vrsn_2_0))
+            tel = _framed(rip) + _framed(bup, [opening])
+            kvy = Kevery(db=receiverHby.db, lax=False, local=False)
+
+            # TEL before its KEL waits in the ordinary TEL escrows, opening vetted.
+            outcomes, refusal = rgy.ingest(tel, kvy=kvy)
+            assert refusal is None
+            assert [(o.serder.said, o.status) for o in outcomes] == [
+                (rip.said, "pending"), (bup.said, "pending")]
+            assert outcomes[0].opening is None
+            assert outcomes[1].opening.qb64 == opening.qb64
+
+            # A KEL event ahead of its inception is a pending dependency, not a refusal.
+            outcomes, refusal = rgy.ingest(kel[-1], kvy=kvy)
+            assert refusal is None
+            assert [o.status for o in outcomes] == ["pending"]
+
+            # The complete stream accepts every frame, retrying the dependencies.
+            outcomes, refusal = rgy.ingest(b"".join(kel) + tel, kvy=kvy)
+            assert refusal is None
+            assert {o.status for o in outcomes} == {"accepted"}
+            assert rgy.store.headEvent(registry.regk).said == bup.said
+
+            # A rule violation stops the stream; earlier frames keep their outcomes.
+            outcomes, refusal = rgy.ingest(_framed(bup) + _framed(rip, [opening]), kvy=kvy)
+            assert refusal == "only a BUP may carry one disclosed opening"
+            assert [(o.serder.said, o.status) for o in outcomes] == [(bup.said, "accepted")]
+            with pytest.raises(ValidationError):
+                disclosedOpening(bup, bsqs=[opening.data, opening.data])
+            assert disclosedOpening(bup) is None
+        finally:
+            source.close()
+            rgy.close()
