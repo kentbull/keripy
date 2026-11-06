@@ -160,10 +160,10 @@ class Dhke:
                   coordinator=None, custodian=None, election=None,
                   completed=False, abandoned=False)
         if self.group:
-            from ..app.habbing import _groupWitnesserSelection
+            from ..app.habbing import groupElection
             if not isinstance(coordinator, tuple) or len(coordinator) != 2 or not custodian:
                 raise ValidationError("group DH requires its own accepted coordinator and custodian")
-            selection = _groupWitnesserSelection(self.hab, sn=coordinator[0], dig=coordinator[1])
+            selection = groupElection(self.hab, sn=coordinator[0], dig=coordinator[1])
             if selection is None:
                 raise ValidationError("group coordinator event lacks accepted threshold evidence")
             establishment, index = selection
@@ -555,6 +555,30 @@ class Dhke:
         return self.exc.processEvent(serder=message, tsgs=tsgs, cigars=cigars,
             ssts=seals, nests=nests, ptds=db.epath.get((op["grant"],)),
             essrs=db.essrs.get((op["grant"],)))
+
+    def peerQueried(self, xid):
+        """Return whether this operation holds the peer's authenticated DH keys.
+
+        Public read-only accessor. For an issuee, including each group member,
+        this is true once the issuer's authenticated query arrived; a group
+        member needs it before contributing to the custodian's reply. For the
+        issuer's key holder it becomes true when the reply is retained. It says
+        nothing about Grant liveness or completion; ``complete`` owns that.
+
+        Parameters:
+            xid (str): exchange identifier of the approved Grant.
+
+        Returns:
+            bool: True when the peer's public keys are held.
+
+        Raises:
+            ValidationError: no local approval for xid.
+        """
+        from ..kering import ValidationError
+        op = self._operations.get(xid)
+        if op is None:
+            raise ValidationError("DH transaction has no local approval")
+        return op["peer"] is not None
 
     def complete(self, xid):
         """Report readiness for issuance only while the selected Grant is live."""

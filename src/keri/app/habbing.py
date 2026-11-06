@@ -3563,11 +3563,22 @@ class SignifyHab(BaseHab):
         return msgs
 
 
-def _groupWitnesserSelection(hab, *, sn=None, dig=None):
+def groupElection(hab, *, sn=None, dig=None):
     """Return the accepted coordinator's establishment and lowest verified index.
 
-    This is the existing witnesser selection, shared with live group operations
-    that freeze its result. It establishes no member identity or signing consent.
+    Public read-only accessor for the witnesser election, shared with live
+    group operations that freeze its result. It establishes no member identity
+    or signing consent; ``GroupHab.elected`` resolves the index to a member.
+
+    Parameters:
+        hab (GroupHab | SignifyGroupHab): the group habitat.
+        sn (int | None): accepted group event ordinal; defaults to the current event.
+        dig (str | None): exact accepted digest, supplied together with sn.
+
+    Returns:
+        tuple | None: (establishment SerderKERI, lowest verified signing index),
+            or None for an unavailable/mismatched event or insufficient
+            verified signatures.
     """
     if sn is None and dig is None:
         sn, dig = hab.kever.sn, hab.kever.serder.said
@@ -3588,7 +3599,7 @@ def _groupWitnesserSelection(hab, *, sn=None, dig=None):
 
 def _groupWitnesser(hab, *, sn=None, dig=None):
     """Elect from the exact accepted event and historical member contribution."""
-    selection = _groupWitnesserSelection(hab, sn=sn, dig=dig)
+    selection = groupElection(hab, sn=sn, dig=dig)
     if selection is None:
         return False
     establishment, index = selection
@@ -4099,3 +4110,31 @@ class GroupHab(BaseHab):
                 contribution to the selected event's establishment keys.
         """
         return _groupWitnesser(self, sn=sn, dig=dig)
+
+    def elected(self, *, sn=None, dig=None):
+        """Return the current signing member elected by ``groupElection``.
+
+        The elected member contributed the lowest verified signing index to the
+        selected event's establishment keys. ``witnesser`` reports whether that
+        member is this hab's ``mhab``.
+
+        Parameters:
+            sn (int | None): accepted group event ordinal; defaults to the current event.
+            dig (str | None): exact accepted digest, supplied together with sn.
+
+        Returns:
+            str | None: qb64 AID of the elected member, or None when the event
+                has no election or the elected contributor is no longer a
+                current signing member.
+        """
+        selection = groupElection(self, sn=sn, dig=dig)
+        if selection is None:
+            return None
+        establishment, index = selection
+        for member in self.db.signingMembers(pre=self.pre) or []:
+            kever = self.db.kevers.get(member)
+            contribution = (kever.fetchLatestContribTo(verfers=establishment.verfers)
+                            if kever is not None else None)
+            if contribution is not None and contribution[1] == index:
+                return member
+        return None

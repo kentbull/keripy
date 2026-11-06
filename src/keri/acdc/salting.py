@@ -270,16 +270,10 @@ class RegistryRoot:
 
     def witnesser(self, ghab, rotation):
         """True when ``ghab``'s local member is the elected sender for ``rotation``."""
-        from ..app.habbing import _groupWitnesserSelection
         event = self.hby.db.evts.get(keys=(ghab.pre, rotation))
         if event is None:
             return False
-        selection = _groupWitnesserSelection(ghab, sn=event.sn, dig=rotation)
-        if selection is None:
-            return False
-        establishment, index = selection
-        mine = ghab.mhab.kever.fetchLatestContribTo(verfers=establishment.verfers)
-        return mine is not None and mine[1] == index
+        return ghab.witnesser(sn=event.sn, dig=rotation)
 
     # sending
 

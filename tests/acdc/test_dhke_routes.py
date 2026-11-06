@@ -2,6 +2,7 @@
 
 from contextlib import ExitStack, contextmanager
 from copy import deepcopy
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -110,11 +111,16 @@ def roots(side, setup):
 def test_pending_dh_issue_and_admit():
     with parties(count=2) as setup:
         issuer, issuee, message = setup.issuer, setup.issuee, setup.grant
+        assert not issuer.dh.peerQueried(setup.xid) and not issuee.dh.peerQueried(setup.xid)
+        with pytest.raises(ValidationError, match="no local approval"):
+            issuee.dh.peerQueried(Diger(ser=b"unapproved").qb64)
         stream = issuer.dh.start(message.said)
         assert issuer.dh.start(message.said) == stream
         receive(issuee, stream)
+        assert issuee.dh.peerQueried(setup.xid) and not issuer.dh.peerQueried(setup.xid)
         response = issuee.dh.cues.popleft()["msg"]
         receive(issuer, response)
+        assert issuer.dh.peerQueried(setup.xid)
         assert issuer.dh.complete(message.said) and issuee.dh.complete(message.said)
         assert [root.qb64 for root in roots(issuer, setup)] == [root.qb64 for root in roots(issuee, setup)]
         assert not issuer.dh._operations[message.said]["private"]
@@ -149,6 +155,31 @@ def test_pending_dh_issue_and_admit():
         assert issuer.hby.db.exns.get((final.said,)) is not None
         with pytest.raises(ValidationError):
             issuer.dh.start(message.said)
+
+
+def test_chain_deadline_follows_prior_to_the_opener_window():
+    """Every chain message shares its opener's xdt + xl, even after KRAM pruning."""
+    with parties(opener="apply") as setup:
+        application = setup.prior["apply"]
+        expected = (helping.fromIso8601(application.stamp)
+                    + timedelta(milliseconds=300000))  # "~" policy xl
+        for side in (setup.issuer, setup.issuee):
+            assert side.exc.chainDeadline(application) == expected
+            assert side.exc.chainDeadline(setup.grant) == expected
+        # A received opener's accepted row and the configured policy agree.
+        issuer = setup.issuer
+        assert issuer.hby.db.kramTMSC.get(
+            keys=(application.pre, application.said, application.said)).rdt
+        issuer.hby.db.kramTMSC.rem(keys=(application.pre, application.said, application.said))
+        assert issuer.exc.chainDeadline(setup.grant) == expected
+        # A missing prior is a broken chain, not a fresh opener.
+        orphan, _ = admit(hab=setup.issuee.hab, message="orphan", grant=setup.grant)
+        assert issuer.hby.db.exns.get((setup.grant.said,)) is None
+        assert issuer.exc.chainDeadline(orphan) is None
+    with parties() as setup:
+        for side in (setup.issuer, setup.issuee):
+            assert (side.exc.chainDeadline(setup.grant)
+                    == side.exc.exchangeDeadline(setup.grant) is not None)
 
 
 def test_kram_off_grant_has_no_live_dh_authority():

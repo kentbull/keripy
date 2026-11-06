@@ -161,8 +161,11 @@ def exchange(setup):
         assert side.dh._operations[setup.xid]['query'] is None
         receive(side, other)
     query = left.dh.start(setup.grant.said)
+    assert not any(side.dh.peerQueried(setup.xid) for side in issuees)
     for side in issuees:
         receive(side, query)
+    # Every issuee member, not only the custodian, holds the authenticated query.
+    assert all(side.dh.peerQueried(setup.xid) for side in issuees)
     assert all(root(side, setup) is None for side in setup.members)
     proposal = right.dh.cues.popleft()
     assert proposal['kin'] == 'sign'
@@ -505,10 +508,14 @@ def test_frozen_nonzero_custodian_is_not_reelected_by_later_signatures():
     with groups(size=3, lead=1) as h:
         for members, event in zip((h.issuers, h.issuees), h.coordinators):
             assert members[1].hab.witnesser(sn=event.sn, dig=event.said)
+            assert {side.hab.elected(sn=event.sn, dig=event.said)
+                    for side in members} == {members[1].member.pre}
             wire = messagize(event, sigers=members[0].hab.sign(event.raw), gvrsn=V2)
             for side in h.members:
                 receive(side, wire, local=True)
             assert not members[1].hab.witnesser(sn=event.sn, dig=event.said)
+            assert members[0].hab.elected(sn=event.sn, dig=event.said) == members[0].member.pre
+            assert members[0].hab.elected(sn=event.sn, dig=h.grant.said) is None
             with pytest.raises(ValidationError, match='custodian'):
                 members[0].dh.start(h.grant.said) if members is h.issuers else members[0].dh._custody(
                     members[0].dh._operations[h.xid], lead=True)
