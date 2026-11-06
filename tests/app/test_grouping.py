@@ -357,6 +357,56 @@ def test_counselor():
         assert counselor.complete(prefixer=prefixer, number=number, diger=diger)
 
 
+def test_counselor_pending_and_abandon():
+    """Public counseling state follows the escrows; abandon forgets one group only."""
+    salt = b'0123456789abcdef'
+    prefix = "counselor-pending"
+    with openHab(name=f"{prefix}_1", salt=salt, transferable=True, version=Vrsn_1_0, kind=Kinds.json) as (hby1, hab1), \
+            openHab(name=f"{prefix}_2", salt=salt, transferable=True, version=Vrsn_1_0, kind=Kinds.json) as (hby2, hab2):
+        counselor = Counselor(hby=hby1, version=TEST_VERSION, kind=Kinds.json)
+        kev1 = Kevery(db=hab1.db, lax=True, local=False)
+        kev2 = Kevery(db=hab2.db, lax=True, local=False)
+        Parser(version=TEST_VERSION).parse(
+            ims=bytearray(hab1.msgOwnEvent(sn=0, framed=True, gvrsn=TEST_VERSION)), kvy=kev2, local=True)
+        Parser(version=TEST_VERSION).parse(
+            ims=bytearray(hab2.msgOwnEvent(sn=0, framed=True, gvrsn=TEST_VERSION)), kvy=kev1, local=True)
+        smids = [hab1.pre, hab2.pre]
+        inits = dict(isith="2", nsith="2", toad=0, wits=[], version=Vrsn_1_0, kind=Kinds.json)
+        ghab = hby1.makeGroupHab(group=f"{prefix}_group1", mhab=hab1, smids=smids, **inits)
+        other = hby1.makeGroupHab(group=f"{prefix}_other", mhab=hab1, smids=smids,
+                                  isith="1", nsith="2", toad=0, wits=[],
+                                  version=Vrsn_1_0, kind=Kinds.json)
+        prefixer, number, diger = Prefixer(qb64=ghab.pre), Number(sn=0), Diger(qb64=ghab.pre)
+        assert counselor.pending(ghab.pre) is None
+
+        counselor.start(ghab=ghab, prefixer=prefixer, number=number, diger=diger, auths={"a": "b"})
+        counselor.start(ghab=other, prefixer=Prefixer(qb64=other.pre), number=number,
+                        diger=Diger(qb64=other.pre))
+        stage, pnumber, pdiger = counselor.pending(ghab.pre)
+        assert (stage, pnumber.sn, pdiger.qb64) == ("signatures", 0, ghab.pre)
+        assert sorted((pre, stage) for pre, stage, _, _ in counselor.pendingIter()) == sorted(
+            [(ghab.pre, "signatures"), (other.pre, "signatures")])
+
+        # The second member's signature completes inception; nothing stays pending.
+        ghab2 = hby2.makeGroupHab(group=f"{prefix}_group2", mhab=hab2, smids=smids, **inits)
+        evt = ghab2.msgOwnInception(allowPartiallySigned=True, framed=True, gvrsn=TEST_VERSION)
+        Parser(version=TEST_VERSION).parse(ims=bytearray(evt), kvy=kev1, local=True)
+        kev1.processEscrows()
+        counselor.processEscrows()
+        assert counselor.pending(ghab.pre) is None
+        assert counselor.complete(prefixer=prefixer, number=number, diger=diger)
+
+        # Abandon forgets this group's markers, escrows and witness headers only.
+        counselor.abandon(ghab.pre)
+        assert counselor.complete(prefixer=prefixer, number=number) is False
+        assert counselor.pending(ghab.pre) is None
+        assert not [key for key in counselor._witnessAuths if key[0] == ghab.pre]
+        assert counselor.complete(prefixer=Prefixer(qb64=other.pre), number=number)
+        counselor.abandon(other.pre)
+        assert list(counselor.pendingIter()) == []
+        assert ghab.pre in hby1.kevers  # accepted KEL state is untouched
+
+
 def test_the_seven():
     salt = b'0123456789abcdef'
     prefix = "counselor"
