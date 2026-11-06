@@ -37,68 +37,6 @@ root. Ordinary issued/revoked/vacuous proofs are supported. Exact bound proofs
 work when supplied; bound derivation requires a later explicit-coordinate
 interface. Refresh does not alter the source Grant's retained disclosure.
 
-An individual separate discloser can retain a held-proof presentation, obtain
-independent consent from its registry issuer, then resume the same Grant:
-
-```sh
-kli ipex present --name discloser --alias discloser --version 2.0 \
-  --from-grant "$ADMITTED_GRANT" --recipient "$AUDITOR_AID" \
-  --prepare --output prepared.cesr
-# In the independent issuer store, sign the exact reported Grant SAID:
-kli ipex endorse --name issuer --alias issuer --version 2.0 \
-  --said "$PREPARED_GRANT" --grant prepared.cesr \
-  --sender "$DISCLOSER_AID" --recipient "$AUDITOR_AID" --output endorsed.cesr
-kli ipex present --name discloser --alias discloser --version 2.0 \
-  --from-grant "$ADMITTED_GRANT" --recipient "$AUDITOR_AID" \
-  --resume "$PREPARED_GRANT" --input endorsed.cesr --respond-unblind --deliver
-```
-
-For a group registry issuer, each member uses its own store and the same original
-`--grant prepared.cesr`. The first member writes a partial endorsement; subsequent
-members add `--contribution member-1.cesr` (repeat for additional members) and write
-a new output file. Until the ordinary issuer signing threshold is satisfied,
-the result reports `contributed: true, endorsed: false`. Resume only with the
-aggregate reporting `endorsed: true`. Contributions preserve the exact prepared
-body and nested evidence and must use the same issuer establishment event.
-
-Complete public KEL/TEL/schema acquisition and explicit encrypted root
-provisioning before preparation. Preparation exports exactly one public Grant
-frame, approves no Unblind operation and sends nothing. Its original native
-fallback lifetime is **10 seconds**; endorsement, resume and live verification
-must complete within that window. `--timeout` cannot extend it. This bounded path does not
-provide time for leisurely human or multi-person approval.
-
-Use the same recipient, message, disclosure paths and plan at prepare and
-resume. Every selected registry-backed node must belong to the independent
-issuer; mixed-issuer endorsement is explicitly refused. Endorsement changes
-authentication only, preserving the Grant body, timestamp and nested evidence.
-The first staged profile rejects `--refresh`, `--derive` and `--opening`.
-Preparation may retain retryable unknown current state when newer evidence is
-known; that does not claim acceptance. Resume requires the original local
-preparation and unchanged live deadline before importing the endorsed frame.
-It never reconstructs a missing preparation or revives an expired Grant.
-The auditor still independently verifies current issued state before Admit.
-
-A separate discloser group uses the same exact prepare/endorse/resume sequence.
-First complete its accepted group Admit and explicitly provision the existing
-registry root to the selected member's encrypted Keeper. Each member runs
-`--prepare --send-proposal --consent-lifetime 60 --output prepared.cesr`, with
-the creator selecting `--proposal-output proposal.cesr` and contributors selecting
-`--proposal proposal.cesr`. `--send-proposal` authorizes signing-member coordination
-only; `--deliver` remains forbidden during preparation. The finite consent lifetime
-must be selected before the first partial Grant. Existing deadlines are preserved,
-and the configured KRAM original-timestamp policy still applies.
-
-Preparation exports only after ordinary group sender signatures verify; it does
-not claim credential acceptance or issuer authorization. The independent issuer
-endorses the exact aggregate Grant as above. Each member then runs `--resume` with
-that endorsed file and the same explicit `--unblind-proposer MEMBER_AID`, selecting
-the root-bearing member to author the reply. `--respond-unblind --deliver` approves
-that exact live operation. Other members verify and sign the minimum openings
-without needing a root, and native signature indices elect delivery. The installed
-story covers an individual issuer/holder, a separate 2-of-2 discloser group and a
-rootless individual auditor, preserving earlier admitted bodies and proofs.
-
 A holder group uses two finite member processes and explicit proposal consent.
 A provisioned nonlead may create the new presentation from its encrypted group
 root; DH custody does not select the presentation proposer:
