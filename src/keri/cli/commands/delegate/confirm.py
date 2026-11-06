@@ -194,7 +194,7 @@ class ConfirmDoer(doing.DoDoer):
 
                         for recpt in others:  # send notification to other participants as a signalling mechanism
                             self.postman.send(src=hab.mhab.pre, dest=recpt, topic="multisig", serder=exn,
-                                              attachment=atc, gvrsn=Vrsn_1_0)
+                                              attachment=atc, gvrsn=exn.pvrsn)
 
                         prefixer = Prefixer(qb64=hab.pre)
                         sner = Number(num=serder.sn, code=NumDex.Huge)  # maybe serder.sner instead so not Huge

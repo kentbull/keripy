@@ -126,7 +126,7 @@ class RoleDoer(doing.DoDoer):
                                   topic="multisig",
                                   serder=exn,
                                   attachment=atc,
-                                  gvrsn=Vrsn_1_0)
+                                  gvrsn=exn.pvrsn)
 
         while not self.hab.loadEndRole(cid=self.hab.pre, role=self.role, eid=self.eid, gvrsn=self.version):
             yield self.tock
