@@ -12,8 +12,8 @@ from hio.base import doing
 from . import setupHby
 from . import evidencing
 from .credentialing import load, recipient
-from .issuing import NativeIssuance
-from .negotiating import NativeNegotiation
+from .issuing import IpexV2Issuance
+from .negotiating import IpexV2Negotiation
 from ... import Kinds, Vrsn_2_0
 from ...acdc import Regery, chaining, ipexing, regeventing
 from ...acdc.regbasing import RegBaser
@@ -34,9 +34,9 @@ def xid(message):
 
 def admitted(hby, hab, said):
     """Select accepted authenticated history, including this local party's consent."""
-    grant = NativeNegotiation.prior(hby, said, '/ipex/grant')
+    grant = IpexV2Negotiation.prior(hby, said, '/ipex/grant')
     terminal = hby.db.erpy.get((said,))
-    admission = NativeNegotiation.prior(hby, terminal.qb64 if terminal else None, '/ipex/admit')
+    admission = IpexV2Negotiation.prior(hby, terminal.qb64 if terminal else None, '/ipex/admit')
     if (grant.sad['ri'] != hab.pre or admission.pre != hab.pre
             or admission.sad['ri'] != grant.pre or admission.sad['p'] != grant.said
             or xid(admission) != xid(grant)):
@@ -61,7 +61,7 @@ def selected(nests, paths):
     sad['a'] = sector.partials[tuple(paths)].mad
     narrowed = SerderACDC(sad=sad, kind=node.kind, makify=True)
     if narrowed.said != node.said or not narrowed.verify():
-        raise ConfigurationError('native disclosure changed the credential commitment')
+        raise ConfigurationError('v2 ACDC disclosure changed the credential commitment')
     nests[0].serder = narrowed
     return nests
 
@@ -75,7 +75,7 @@ def currentIssued(exc, said):
 
 
 def opening(raw):
-    """Parse exactly one native opening; no salt or event inference from a file."""
+    """Parse exactly one v2 ACDC registry opening; no salt or event inference from a file."""
     wire = raw.decode()
     for clan in (BlindState, BoundState):
         try:
@@ -88,7 +88,7 @@ def opening(raw):
 
 
 def refresh(hab, rgy, nests, *, openings, derive):
-    """Verify explicit current proofs against native accepted history, changing copies only."""
+    """Verify explicit current proofs against accepted v2 ACDC registry history, changing copies only."""
     supplied = [opening(Path(filename).read_bytes()) for filename in openings]
     used = set()
     for nest in nests:
@@ -97,7 +97,7 @@ def refresh(hab, rgy, nests, *, openings, derive):
             continue
         rip, head = rgy.store.seqEvent(node.regid, 0), rgy.store.headEvent(node.regid)
         if rip is None or head is None:
-            raise ConfigurationError('proof refresh requires accepted native registry history')
+            raise ConfigurationError('proof refresh requires accepted v2 ACDC registry history')
         updates = [rgy.store.seqEvent(node.regid, sn)
                    for sn in range(1, Number(numh=head.sad['n']).num + 1)]
         if any(event is None for event in updates):
@@ -138,16 +138,16 @@ def refresh(hab, rgy, nests, *, openings, derive):
     return nests
 
 
-class NativePresentation(NativeIssuance):
-    """Borrow finite transport while native Unblind owns every auxiliary decision."""
+class IpexV2Presentation(IpexV2Issuance):
+    """Borrow finite transport while v2 IPEX Unblind owns every auxiliary decision."""
     def check(self):
         if self.tyme >= self.deadline:
-            raise TimeoutError('native presentation did not complete before --timeout')
-        if getattr(self, 'nativeDeadline', None) is not None and nowUTC() >= self.nativeDeadline:
-            raise TimeoutError('presentation reached its original native Grant deadline')
+            raise TimeoutError('v2 IPEX presentation did not complete before --timeout')
+        if getattr(self, 'grantDeadline', None) is not None and nowUTC() >= self.grantDeadline:
+            raise TimeoutError('presentation reached its original Grant exchange deadline')
 
     def intake(self, raw, *, local=False):
-        NativeNegotiation.intake(self.psr, self.exc, raw, local=local, presentation=True)
+        IpexV2Negotiation.intake(self.psr, self.exc, raw, local=local, presentation=True)
 
     def send(self, raw, dest, *, topic='credential'):
         # Unblind returns a nested stream; StreamPoster accepts body + attachments.
@@ -155,7 +155,7 @@ class NativePresentation(NativeIssuance):
         parsed = Parser(version=Vrsn_2_0).parseOneBare(ims=stream, processive=False)
         if parsed.serder.route == Unblind.Route:
             if stream:
-                raise ConfigurationError('expected one native Unblind stream')
+                raise ConfigurationError('expected one v2 IPEX Unblind stream')
             raw = messagize(parsed.serder, sigers=parsed.sigers or None,
                 tsgs=parsed.tsgs or None, lsgs=parsed.lsgs or None, cigars=parsed.cigars or None,
                 bonds=[*(BlindState(*data) for data in parsed.bsqs),
@@ -171,11 +171,11 @@ class NativePresentation(NativeIssuance):
         args = self.args
         evidenceSource = evidencing.settings(args)
         if not args.deliver:
-            raise ConfigurationError('live native presentation requires explicit --deliver')
+            raise ConfigurationError('live v2 IPEX presentation requires explicit --deliver')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be finite and positive')
         if getattr(args, 'time', None):
-            raise ConfigurationError('live presentation uses the native current timestamp')
+            raise ConfigurationError('live presentation uses the current timestamp')
         if args.output and Path(args.output).exists():
             raise ConfigurationError('output already exists')
         if (self.verb == 'present' and (args.opening or args.derive) and not args.refresh):
@@ -220,7 +220,7 @@ class NativePresentation(NativeIssuance):
                     from .groupunblinding import GroupUnblind
                     message = self.hby.db.exns.get((args.said,)) or self.hby.db.epse.get((args.said,))
                     if message is None or message.route != '/ipex/grant' or message.sad['ri'] != self.hab.pre:
-                        raise ConfigurationError('--said requires the exact native presentation Grant for this recipient')
+                        raise ConfigurationError('--said requires the exact v2 IPEX presentation Grant for this recipient')
                     coordination = GroupUnblind(self, message, args.unblind_proposer, notifier, requester=True)
                     yield from coordination.admit()
                 return
@@ -270,7 +270,7 @@ class NativePresentation(NativeIssuance):
                 message = self.hby.db.exns.get((args.said,)) or self.hby.db.epse.get((args.said,))
                 if (message is None or message.route != '/ipex/grant'
                         or message.sad['ri'] != self.hab.pre):
-                    raise ConfigurationError('--said requires the exact native presentation Grant for this recipient')
+                    raise ConfigurationError('--said requires the exact v2 IPEX presentation Grant for this recipient')
                 if message.sad['a'].get('ax', [False])[0]:
                     raise ConfigurationError('anchored presentation profiles are not supported')
                 operation = self.unblind.approve(message.said)
@@ -295,7 +295,7 @@ class NativePresentation(NativeIssuance):
                         self.check()
                         yield tock
                     if not self.unblind.finish(operation) or not self.exc.complete(message.said):
-                        raise ConfigurationError('native verification has not accepted the selected presentation')
+                        raise ConfigurationError('v2 IPEX verification has not accepted the selected presentation')
                     print(json.dumps(dict(grant=message.said, xid=operation, phase='unblind_verified')),
                           flush=True)
                 self.unblind.complete(operation)
@@ -318,7 +318,7 @@ class NativePresentation(NativeIssuance):
             self.hby.close()
 
 
-class NativeInspection(doing.Doer):
+class IpexV2Inspection(doing.Doer):
     """Open only public evidence stores, with LMDB enforcing read-only access."""
     def __init__(self, args):
         self.args = args
@@ -332,7 +332,7 @@ class NativeInspection(doing.Doer):
             hby = SimpleNamespace(db=db)
             message = db.exns.get((args.said,)) or db.epse.get((args.said,))
             if message is None or message.route != '/ipex/grant' or message.pvrsn != Vrsn_2_0:
-                raise ConfigurationError('--said requires an exact retained native Grant')
+                raise ConfigurationError('--said requires an exact retained v2 IPEX Grant')
             verify(hby, message)
             nests = loadParsedNestedSubstreams(hby, message.said)
             terminal = db.erpy.get((message.said,))

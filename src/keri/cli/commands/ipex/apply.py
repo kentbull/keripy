@@ -22,7 +22,7 @@ parser.add_argument('--plan', help='single-DAG q.dp JSON or @file')
 
 def handler(args):
     if args.version == Vrsn_2_0:
-        return [negotiating.NativeNegotiation(args, 'apply')]
+        return [negotiating.IpexV2Negotiation(args, 'apply')]
     return [doing.doify(nonce)]
 
 

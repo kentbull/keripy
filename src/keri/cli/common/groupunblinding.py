@@ -1,4 +1,4 @@
-"""Finite member transport for one explicitly selected native Unblind operation."""
+"""Finite member transport for one explicitly selected v2 IPEX Unblind operation."""
 import json
 from types import SimpleNamespace
 
@@ -29,11 +29,11 @@ class _Proposal:
 
 
 class GroupUnblind:
-    """The command queues authenticated wrappers; native owners verify every child.
+    """The command queues authenticated wrappers; v2 IPEX owners verify every child.
 
     /multisig/qry is this CLI's coordination extension, not an auxiliary protocol
-    route. Its {gid, qry} commitment covers one ordinary native query substream.
-    The selected proposer authors bytes only; native verified indices elect delivery.
+    route. Its {gid, qry} commitment covers one ordinary v2 query substream.
+    The selected proposer authors bytes only; v2 verified indices elect delivery.
     """
     def __init__(self, owner, grant, proposer, notifier, *, requester=False):
         self.owner, self.hab, self.grant = owner, owner.hab, grant
@@ -41,10 +41,10 @@ class GroupUnblind:
         if proposer not in self.hab.db.signingMembers(pre=self.hab.pre):
             raise ConfigurationError('--unblind-proposer must select an accepted group signing member')
         if grant.route != '/ipex/grant' or grant.sad['a'].get('ax', [False])[0]:
-            raise ConfigurationError('group Unblind requires an unanchored native presentation Grant')
+            raise ConfigurationError('group Unblind requires an unanchored v2 IPEX presentation Grant')
         self.operation = owner.unblind.approve(grant.said)
         self.deadline = owner.exc.exchangeDeadline(grant)
-        owner.nativeDeadline = self.deadline
+        owner.grantDeadline = self.deadline
         self.author = self.hab.mhab.pre == proposer
         self.pending, self.frozen, self.contributed = {}, {}, set()
         self.response, self.finished, self.ready = None, False, False
@@ -59,7 +59,7 @@ class GroupUnblind:
         if self.owner.exc.exchangeDeadline(self.grant) != self.deadline:
             raise ConfigurationError('group Unblind changed the original Grant deadline')
         if self.hab.db.erpy.get((self.grant.said,)) is None:
-            self.owner.unblind.complete(self.operation)  # Rechecks native scope and lifetime, not readiness.
+            self.owner.unblind.complete(self.operation)  # Rechecks Unblind scope and lifetime, not readiness.
 
     def validate(self, wrapper, nests):
         self.check()
@@ -124,11 +124,11 @@ class GroupUnblind:
 
     def pump(self):
         self.check()
-        native = self.owner.unblind
-        # Readiness only schedules native respond/contribute; those methods recheck all authority.
-        requested = native._operations[self.operation]['requestedByPeer']
+        unblind = self.owner.unblind
+        # Readiness only schedules Unblind respond/contribute; those methods recheck all authority.
+        requested = unblind._operations[self.operation]['requestedByPeer']
         if not self.requester and self.author and requested and 'rpy' not in self.contributed:
-            native.respond(self.operation)
+            unblind.respond(self.operation)
         for key, (wrapper, child) in list(self.pending.items()):
             field = child.serder.ilk
             if field not in self.frozen and wrapper.pre != self.proposer:
@@ -148,22 +148,22 @@ class GroupUnblind:
                 if field not in self.contributed:
                     yield from self.broadcast(self.hab.endorse(child.serder, framed=False, gvrsn=Vrsn_2_0))
             else:
-                contribution = native.contribute(self.operation, raw)
+                contribution = unblind.contribute(self.operation, raw)
                 self.owner.psr.parse(ims=bytearray(raw))
                 if field not in self.contributed:
                     yield from self.broadcast(contribution)
             del self.pending[key]
-        if not self.requester and native.complete(self.operation) and not self.finished:
-            native.finish(self.operation)  # Evidence completion never imposes an issued-state reply gate.
+        if not self.requester and unblind.complete(self.operation) and not self.finished:
+            unblind.finish(self.operation)  # Evidence completion never imposes an issued-state reply gate.
             self.finished = True
-        while native.cues:
+        while unblind.cues:
             self.check()
-            cue = native.cues.popleft()
+            cue = unblind.cues.popleft()
             if cue['kin'] == 'sign':
                 yield from self.broadcast(cue['msg'])
             else:
                 if cue['kin'] == 'reply' and not self.finished:
-                    native.finish(self.operation)
+                    unblind.finish(self.operation)
                     self.finished = True
                 yield from self.owner.send(cue['msg'], cue['dest'])
 
@@ -181,7 +181,7 @@ class GroupUnblind:
             self.owner.unblind.abandon(self.operation)
 
     def admit(self):
-        owner, native = self.owner, self.owner.unblind
+        owner, unblind = self.owner, self.owner.unblind
         try:
             needs = not owner.exc.complete(self.grant.said)
             if not needs:
@@ -189,12 +189,12 @@ class GroupUnblind:
                 needs = verdict.verdict == chaining.Verdicts.unknown and verdict.retryable
             if needs:
                 if self.author:
-                    native.start(self.grant.said)
-                while not native.complete(self.operation):
+                    unblind.start(self.grant.said)
+                while not unblind.complete(self.operation):
                     yield from self.pump()
                     yield owner.tock
-                if not native.finish(self.operation) or not owner.exc.complete(self.grant.said):
-                    raise ConfigurationError('native verification has not accepted the selected group presentation')
+                if not unblind.finish(self.operation) or not owner.exc.complete(self.grant.said):
+                    raise ConfigurationError('v2 IPEX verification has not accepted the selected group presentation')
             currentIssued(owner.exc, self.grant.said)
             self.ready = True
             if self.author:
@@ -214,4 +214,4 @@ class GroupUnblind:
             print(json.dumps(dict(grant=self.grant.said, xid=xid(self.grant), admit=self.response.said,
                                   admitted=True, transmitted=transmitted)), flush=True)
         finally:
-            native.abandon(self.operation)
+            unblind.abandon(self.operation)

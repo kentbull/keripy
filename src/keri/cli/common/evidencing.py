@@ -15,7 +15,7 @@ from ...kering import ConfigurationError, ValidationError
 
 
 def options(parser):
-    parser.add_argument('--evidence-url', help='explicit HTTPS observer endpoint for selected native registry evidence')
+    parser.add_argument('--evidence-url', help='explicit HTTPS observer endpoint for selected v2 ACDC registry evidence')
     parser.add_argument('--evidence-ca', help='CA PEM file for --evidence-url')
     parser.add_argument('--evidence-hostname', help='certificate hostname override, allowed only for an IP URL')
 
@@ -50,7 +50,7 @@ def settings(args):
 
 
 def receive(hby, rgy, registry, raw, headers):
-    """Accept only a complete authenticated selected TEL, then compare native heads.
+    """Accept only a complete authenticated selected TEL, then compare accepted v2 ACDC heads.
 
     A valid older prefix is not rollback or readiness. Response headers carry no
     freshness authority. Unsupported frames and conflicts fail before dispatch.
@@ -91,17 +91,17 @@ def receive(hby, rgy, registry, raw, headers):
         event = message.serder
         if isinstance(event, SerderKERI):
             if hby.db.kels.getLast(keys=event.pre, on=event.sn) != event.said:
-                raise ValidationError('public KEL evidence did not reach native acceptance')
+                raise ValidationError('public KEL evidence did not reach local acceptance')
             if event.ilk != 'rct' and not hby.db.fullyWitnessed(event):
                 raise ValidationError('public KEL evidence is not fully witnessed')
         else:
             accepted = rgy.store.seqEvent(registry, Number(numh=event.sad['n']).num)
             if accepted is None or accepted.said != event.said:
-                raise ValidationError('registry evidence did not reach native acceptance')
+                raise ValidationError('registry evidence did not reach local acceptance')
     head = rgy.store.headEvent(registry)
     tip = events[-1]
     if head is None or Number(numh=head.sad['n']).num < Number(numh=tip.sad['n']).num:
-        raise ValidationError('response head did not reach native acceptance')
+        raise ValidationError('response head did not reach local acceptance')
     if Number(numh=head.sad['n']).num == Number(numh=tip.sad['n']).num:
         if head.said != tip.said:
             raise ValidationError('response head conflicts with accepted registry evidence')
@@ -110,7 +110,7 @@ def receive(hby, rgy, registry, raw, headers):
 
 
 def acquire(owner, registries, operation, xid, source):
-    """One in-flight HTTPS request; each cooperative wait rechecks live native authority."""
+    """One in-flight HTTPS request; each cooperative wait rechecks live v2 IPEX authority."""
     if source is None:
         return
     parts, context, hostname = source

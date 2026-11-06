@@ -2,15 +2,15 @@
 import argparse
 
 from ....common import Parsery, parseVersion
-from ....common.provisioning import NativeRootCopy
+from ....common.provisioning import AcdcV2RootCopy
 from ..... import Vrsn_1_0
 
 
 parser = argparse.ArgumentParser(description=__doc__, parents=[Parsery.keystore()])
-parser.set_defaults(handler=lambda args: [NativeRootCopy(args, 'provision')])
+parser.set_defaults(handler=lambda args: [AcdcV2RootCopy(args, 'provision')])
 parser.add_argument('--alias', '-a', required=True)
 parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0)
-parser.add_argument('--registry', required=True, help='exact accepted native registry SAID')
+parser.add_argument('--registry', required=True, help='exact accepted v2 ACDC registry SAID')
 parser.add_argument('--recipient', required=True, help='known recipient individual or group AID')
 parser.add_argument('--target', help='explicit current member encryption AID for a group recipient')
 parser.add_argument('--coordinator', help='exact accepted own group KEL event selecting the root-owning coordinator')

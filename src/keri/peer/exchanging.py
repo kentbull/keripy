@@ -809,7 +809,7 @@ class Exchanger:
     def reverifyGrant(self, said, *, nests=None):
         """Recheck an accepted V2 Grant against current evidence without writes.
 
-        Return (Grant, checked nests, native verdict, observed states).
+        Return (Grant, checked nests, v2 IPEX verdict, observed states).
         Optional proof-augmented nests must preserve every exact retained node
         body, count and order. Candidate checks retain no proofs or observations.
         Saved completion and old exrs are not verification. The ordinary IPEX
@@ -817,7 +817,7 @@ class Exchanger:
         presentation source cutoffs remain the original KRAM acceptance time.
         This is neither historical-prefix verification nor live auxiliary
         authorization: it does not extend a deadline, reopen IPEX, or permit DH.
-        Missing context dependencies retain their normal native exceptions.
+        Missing context dependencies retain their own exceptions.
         """
         serder = self.hby.db.exns.get(keys=(said,))
         if (serder is None or serder.said != said or serder.pvrsn != Vrsn_2_0
@@ -825,7 +825,7 @@ class Exchanger:
             raise ValidationError("current recheck requires an accepted V2 Grant")
         handler = self.handlerFor(serder)
         if not callable(getattr(handler, "_verifyResult", None)):
-            raise ValidationError("current recheck requires the native IPEX handler")
+            raise ValidationError("current recheck requires the v2 IPEX handler")
         tsgs, cigars = verify(self.hby, serder)
         seals = [(Prefixer(qb64=keys[1]), number, diger)
                  for keys, (number, diger) in self.hby.db.ests.getTopItemIter(
@@ -917,7 +917,7 @@ class Exchanger:
 
         Lead is the lowest verified sender signing index at its referenced
         establishment event, resolved through the member's historical contribution.
-        An explicit pending-presentation fallback requires live native context.
+        An explicit pending-presentation fallback requires live v2 IPEX context.
         This determines election eligibility, not standalone send authorization;
         callers must approve their complete selected disclosure scope separately.
 

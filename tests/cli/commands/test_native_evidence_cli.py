@@ -178,7 +178,7 @@ def test_native_expiry_stops_stale_source_despite_longer_cli_timeout(tmp_path, l
     with observer(tmp_path, live_parties, 'stale') as (flags, calls, snapshots):
         selected, _, output = issue(tmp_path, live_parties, admit_options=[*flags, '--timeout', '60'],
                                     succeeds=False)
-    assert 'original native deadline' in output and 'before --timeout' not in output
+    assert 'original exchange deadline' in output and 'before --timeout' not in output
     # Setup plus the 20 s window that starts at the Apply, well before the admit's 60 s CLI timeout.
     assert time.monotonic() - started < 35
     assert len(calls) > 3 and len({snapshot['deadline'] for snapshot in snapshots}) == 1

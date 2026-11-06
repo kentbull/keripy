@@ -50,7 +50,7 @@ class GroupAdmission:
         self.hab, self.dh = owner.hab, owner.dh
         self.lead = self.hab.mhab.pre == owner.args.custodian
         self.deadline = owner.exc.exchangeDeadline(grant)
-        owner.nativeDeadline = self.deadline
+        owner.grantDeadline = self.deadline
         self.pending, self.seen = deque(), set()
         self.queued = {}
         self.response = None
@@ -62,7 +62,7 @@ class GroupAdmission:
             owner.exc.addHandler(_Proposal(self, route))
 
     def validateProof(self, wrapper, nests):
-        """Authenticate coordination scope; native public proof verification happens before retry."""
+        """Authenticate coordination scope; v2 IPEX public proof verification happens before retry."""
         self.check()
         if (self.lead or self.owner.exc.complete(self.grant.said) or wrapper.pvrsn != Vrsn_2_0
                 or wrapper.pre != self.owner.args.custodian
@@ -132,7 +132,7 @@ class GroupAdmission:
         if self.owner.exc.exchangeDeadline(self.grant) != deadline:
             raise ConfigurationError('group proof retry changed the original Grant deadline')
         if not self.owner.exc.complete(self.grant.said):
-            raise ConfigurationError('native verification did not accept the selected group Grant')
+            raise ConfigurationError('v2 IPEX verification did not accept the selected group Grant')
         self.current()
         self.proof = None
 
@@ -185,7 +185,7 @@ class GroupAdmission:
             if key in self.seen:
                 continue
             if wrapper.route == '/multisig/rpy':
-                # Only defer scheduling: native contribute still checks the authenticated query and custodian.
+                # Only defer scheduling: v2 DH contribute still checks the authenticated query and custodian.
                 if self.dh._operations[self.xid]['peer'] is None:
                     self.pending.append(said)
                     continue

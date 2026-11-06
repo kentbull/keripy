@@ -13,7 +13,7 @@ from ....common import Parsery, existingHby, parseVersion
 
 from .....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0
 from .....vdr import Regery
-from .....acdc import Regery as NativeRegery
+from .....acdc import Regery as AcdcV2Regery
 from .....core import SerderACDC
 
 
@@ -23,7 +23,7 @@ parser = argparse.ArgumentParser(description='List credential registry names and
                                  parents=[Parsery.keystore()])
 parser.set_defaults(handler=lambda args: list_registries(args))
 parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0,
-                    help='Registry protocol version: 1.0 (default) or native 2.0')
+                    help='Registry protocol version: 1.0 (default, v1 VDR) or 2.0 (v2 ACDC)')
 parser.add_argument("--verbose", "-V", help="print JSON of all current events", action="store_true")
 
 
@@ -45,15 +45,15 @@ def registries(tymth, tock=0.0, **opts):
 
     try:
         with existingHby(name=name, base=base, bran=bran) as hby:
-            native = getattr(args, 'version', Vrsn_1_0) == Vrsn_2_0
-            rgy = (NativeRegery if native else Regery)(hby=hby, name=name, base=base)
+            acdcV2 = getattr(args, 'version', Vrsn_1_0) == Vrsn_2_0
+            rgy = (AcdcV2Regery if acdcV2 else Regery)(hby=hby, name=name, base=base)
             try:
                 for registry in rgy.regs.values():
                     summary = f"{registry.name} : {registry.regk} : {registry.hab.pre}"
-                    if native:
+                    if acdcV2:
                         summary += f" : {registry.head.qb64 if registry.head else 'pending'}"
                     print(summary)
-                    if native and args.verbose:
+                    if acdcV2 and args.verbose:
                         for raw in rgy.store.cloneTelIter(registry.regk):
                             print(SerderACDC(raw=raw).pretty())
             finally:

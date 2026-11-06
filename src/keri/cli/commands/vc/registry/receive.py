@@ -2,15 +2,15 @@
 import argparse
 
 from ....common import Parsery, parseVersion
-from ....common.provisioning import NativeRootCopy
+from ....common.provisioning import AcdcV2RootCopy
 from ..... import Vrsn_1_0
 
 
 parser = argparse.ArgumentParser(description=__doc__, parents=[Parsery.keystore()])
-parser.set_defaults(handler=lambda args: [NativeRootCopy(args, 'receive')])
+parser.set_defaults(handler=lambda args: [AcdcV2RootCopy(args, 'receive')])
 parser.add_argument('--alias', '-a', required=True)
 parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0)
-parser.add_argument('--registry', required=True, help='exact accepted native registry SAID')
+parser.add_argument('--registry', required=True, help='exact accepted v2 ACDC registry SAID')
 parser.add_argument('--sender', required=True, help='exact authorized sender AID')
 parser.add_argument('--event', required=True, help='exact accepted BUP for this held opening')
 parser.add_argument('--opening', required=True, help='one held CESR state opening, never a root')

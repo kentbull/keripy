@@ -30,7 +30,7 @@ def test_native_witness_options_refuse_bad_scope_before_authoring(tmp_path):
         (['--authenticate', '--code', f'{aid}:123456'], 'selected witness'),
         (['--authenticate', '--code', 'malformed'], 'selected witness'),
         (['--alias', 'group', '--authenticate', '--code', f'{aid}:123456'], 'selected witness'),
-        (['--version', '1.0', '--authenticate'], 'require native --version 2.0'),
+        (['--version', '1.0', '--authenticate'], 'require v2 ACDC --version 2.0'),
     ):
         output = kli(tmp_path, 'vc', 'registry', 'incept', *common, '--version', '2.0',
             '--alias', 'issuer', '--registry-name', 'refused', *options, succeeds=False)

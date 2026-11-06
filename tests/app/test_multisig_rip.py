@@ -16,7 +16,7 @@ from keri.app import Counselor, Multiplexor, Notifier, openHby
 from keri.app.grouping import loadHandlers, multisigRipExn
 from keri.app.indirecting import ReceiptEnd
 from keri.cli.commands.multisig.join import JoinDoer
-from keri.cli.commands.vc.registry.incept import NativeRegistryInceptor
+from keri.cli.commands.vc.registry.incept import AcdcV2RegistryInceptor
 from keri.kering import ValidationError
 from keri.core import Diger, Number, Parser, Prefixer, SealSource, SerderACDC, SerderKERI, exchange, interact, messagize
 from keri.peer import Exchanger
@@ -475,7 +475,7 @@ def test_native_registry_command_proposes_exact_anchor_for_real_join(monkeypatch
         name, base = hbys[0].name, hbys[0].base
         rgys[0].close()
         hbys[0].close()
-        command = NativeRegistryInceptor(name=name, base=base, bran=None, alias='issuer',
+        command = AcdcV2RegistryInceptor(name=name, base=base, bran=None, alias='issuer',
                                            registryName='membership', usage='member credentials')
         operation = command.inceptDo(tymth=lambda: 0.0)
         try:
@@ -539,7 +539,7 @@ def test_native_registry_command_prompt_cancellation_precedes_registry_and_kel_m
         name, base = hbys[0].name, hbys[0].base
         rgys[0].close()
         hbys[0].close()
-        command = NativeRegistryInceptor(name=name, base=base, bran=None, alias='issuer',
+        command = AcdcV2RegistryInceptor(name=name, base=base, bran=None, alias='issuer',
                                            registryName='cancelled')
         operation = command.inceptDo(tymth=lambda: 0.0)
         try:

@@ -20,13 +20,13 @@ parser.set_defaults(handler=lambda args: handler(args))
 negotiating.options(parser)
 parser.add_argument('--recipient', '-r')
 parser.add_argument('--plan', help='single-DAG q.dp JSON or @file')
-parser.add_argument('--prior', help='accepted native Apply SAID')
+parser.add_argument('--prior', help='accepted v2 IPEX Apply SAID')
 parser.add_argument('--origin', help='optional commitment-only ACDC SAID')
 
 
 def handler(args):
     if args.version == Vrsn_2_0:
-        return [negotiating.NativeNegotiation(args, 'offer')]
+        return [negotiating.IpexV2Negotiation(args, 'offer')]
     return [doing.doify(nonce)]
 
 

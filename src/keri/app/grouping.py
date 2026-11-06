@@ -584,7 +584,7 @@ def multisigInteractExn(ghab, aids, ixn, version=None, gvrsn=None, kind=None):
 
 
 def _validateRegistryAnchor(event, anchor, gid, regid, *, sscs=(), ssts=()):
-    """Bind exact native TEL bodies and source coordinates to their group anchor."""
+    """Bind exact v2 ACDC TEL bodies and source coordinates to their group anchor."""
     if (not isinstance(event, SerderACDC) or event.pvrsn != Vrsn_2_0 or not event.verify()
             or anchor.pvrsn != Vrsn_2_0 or not anchor.verify()
             or anchor.pre != gid or anchor.ilk not in (Ilks.ixn, Ilks.rot, Ilks.drt)
@@ -598,7 +598,7 @@ def _validateRegistryAnchor(event, anchor, gid, regid, *, sscs=(), ssts=()):
 
 
 def validateRipProposal(rip, anchor, gid, *, sscs=(), ssts=()):
-    """Check a native RIP and the existing full registry event seal before consent."""
+    """Check a v2 ACDC RIP and the existing full registry event seal before consent."""
     from ..acdc.regeventing import _validateRip
 
     _validateRegistryAnchor(rip, anchor, gid, rip.said, sscs=sscs, ssts=ssts)
@@ -610,12 +610,12 @@ def validateBupProposal(bup, anchor, gid, *, rgy, sscs=(), ssts=()):
 
     This checks public commitments, never deriving state or openings from b.
     Existing accepted events may replay after the head advances; new proposals
-    must extend the accepted head. The native owner alone accepts the TEL.
+    must extend the accepted head. The v2 ACDC Regery alone accepts the TEL.
     """
     from ..acdc.regeventing import _validateRip, _validateUpdate
 
     if not isinstance(bup, SerderACDC) or bup.ilk != Ilks.bup or rgy is None:
-        raise ValidationError("BUP proposal requires a native registry owner and update")
+        raise ValidationError("BUP proposal requires a v2 ACDC registry owner and update")
     rip = rgy.store.seqEvent(bup.sad['rd'], 0)
     if rip is None:
         raise ValidationError("BUP proposal requires accepted registry inception evidence")
@@ -634,14 +634,14 @@ def validateBupProposal(bup, anchor, gid, *, rgy, sscs=(), ssts=()):
 
 
 def sameRegistryProposal(left, right):
-    """Match explicit native consent without treating an anchor bucket as consent."""
+    """Match explicit v2 registry consent without treating an anchor bucket as consent."""
     return (left.route in ('/multisig/rip', '/multisig/bup') and left.route == right.route
             and all(left.sad['a'].get(field) == right.sad['a'].get(field)
                     for field in ('gid', 'tel', 'anc')))
 
 
 def multisigRipExn(ghab, rip, anc, *, usage=None):
-    """Propose one exact native RIP stream and its signed group KEL anchor.
+    """Propose one exact v2 ACDC RIP stream and its signed group KEL anchor.
 
     Parameters:
         ghab (GroupHab): Existing group whose local member endorses the proposal.
@@ -659,10 +659,10 @@ def multisigRipExn(ghab, rip, anc, *, usage=None):
 
 
 def multisigBupExn(ghab, bup, anc, *, rgy, usage=None):
-    """Propose an exact BUP/anchor using the caller's accepted native registry.
+    """Propose an exact BUP/anchor using the caller's accepted v2 ACDC registry.
 
     Parameters: ghab is the existing group; bup and anc are exact child streams;
-        rgy is its native Regery; usage is an optional human-readable purpose.
+        rgy is its v2 ACDC Regery; usage is an optional human-readable purpose.
     Returns: member-endorsed wrapper and detached attachments. No root, opening,
         target or state is inferred from the blind commitment or added here.
     """
@@ -888,7 +888,7 @@ def multisigExn(ghab, exn, version=None, kind=None):
     Parameters:
         ghab (GroupHab): identifier Hab for endorsing the message to send
         exn (bytes): CESR stream of serialized exchange message, with signatures
-        version (Versionage | None): wrapper version; V2 requires native IPEX
+        version (Versionage | None): wrapper version; V2 requires v2 IPEX
         kind (str | None): wrapper serialization kind
 
     Returns:
@@ -911,7 +911,7 @@ def multisigExn(ghab, exn, version=None, kind=None):
                 or serder.ked.get('r') not in (f'/ipex/{verb}' for verb in
                                              ('apply', 'offer', 'agree', 'grant', 'admit', 'spurn'))
                 or serder.pre != ghab.pre):
-            raise ValidationError("multisig exchange requires a native IPEX child authored by the group")
+            raise ValidationError("multisig exchange requires a v2 IPEX child authored by the group")
         wrapper = exchange(sender=ghab.mhab.pre, route='/multisig/exn',
             attributes=dict(gid=ghab.pre, exn=serder.said), version=gvrsn, gvrsn=gvrsn, kind=kind)
         child = serializeParsedSubstream(child, gvrsn=serder.gvrsn or serder.pvrsn)
@@ -980,11 +980,11 @@ class Multiplexor:
         Parameters:
             hby (habbing.Habery): database environment for local Habs
             notifier (notifying.Notifier): stores notices for human consumption
-            rgy (acdc.Regery | None): native TEL owner for explicitly approved RIP/BUP replay
-            replay (Parser | None): caller-owned live parser for native IPEX only,
+            rgy (acdc.Regery | None): v2 ACDC TEL owner for explicitly approved RIP/BUP replay
+            replay (Parser | None): caller-owned live parser for v2 IPEX only,
                 composed with this Habery's Kevery/KRAM, Revery and Regery, and
-                an Exchanger with native IpexHandler routes. Caller owns scheduling
-                and escrows; the legacy private processors never accept native IPEX.
+                an Exchanger with v2 IpexHandler routes. Caller owns scheduling
+                and escrows; the legacy private processors never accept v2 IPEX.
 
         """
         self.hby = hby
@@ -998,8 +998,8 @@ class Multiplexor:
         self.rgy = rgy
         self.replay = replay
 
-    def _nativeReplay(self, child):
-        """Require the native verifier owners before retaining a group proposal."""
+    def _ipexV2Replay(self, child):
+        """Require the v2 IPEX verifier owners before retaining a group proposal."""
         from ..acdc.ipexing import IpexHandler
 
         parser = self.replay
@@ -1013,7 +1013,7 @@ class Multiplexor:
                 or parser.kvy is None or parser.kvy.db is not self.hby.db
                 or parser.kvy.rvy is not parser.rvy or parser.kvy.kramer is None
                 or parser.kvy.kramer.db is not self.hby.db):
-            raise ValidationError("native IPEX requires a caller-owned native verification parser")
+            raise ValidationError("v2 IPEX requires a caller-owned v2 verification parser")
         return parser
 
     def _replayApproved(self, said):
@@ -1030,7 +1030,7 @@ class Multiplexor:
             if wrapper.ked['r'] == '/multisig/exn' and wrapper.pvrsn == Vrsn_2_0:
                 child = Parser(version=Vrsn_2_0).parseOneBare(
                     ims=bytearray(ims), framed=True, processive=False)
-                self._nativeReplay(child.serder).parse(ims=ims, local=True)
+                self._ipexV2Replay(child.serder).parse(ims=ims, local=True)
                 return
 
             # Replay them through normal local event processing
@@ -1139,8 +1139,8 @@ class Multiplexor:
 
             if route == '/multisig/exn':
                 if nserder.pvrsn != Vrsn_2_0 or nserder.pre != payload.get('gid'):
-                    raise ValidationError("native IPEX child must be authored by the selected group")
-                self._nativeReplay(nserder)
+                    raise ValidationError("v2 IPEX child must be authored by the selected group")
+                self._ipexV2Replay(nserder)
 
             # Use the signed child SAID as the V2 proposal identity
             esaid = signed
@@ -1208,7 +1208,7 @@ class Multiplexor:
 
         esaid, sender, route, exnSaid = result
 
-        # A local native proposal is its member's explicit contribution, not a rebuilt child.
+        # A local v2 proposal is its member's explicit contribution, not a rebuilt child.
         if route == '/multisig/exn' and serder.pvrsn == Vrsn_2_0 and sender in self.hby.habs:
             self._replayApproved(exnSaid)
 

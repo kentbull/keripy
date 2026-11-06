@@ -1,4 +1,4 @@
-"""Finite individual native IPEX negotiation; public intake never implies consent."""
+"""Finite individual v2 IPEX negotiation; public intake never implies consent."""
 import json
 import math
 from dataclasses import asdict
@@ -18,7 +18,7 @@ from ...peer.exchanging import serializeMessage, verify
 
 
 def options(parser):
-    """Add opt-in native arguments without requiring them for the released nonce command."""
+    """Add opt-in v2 IPEX arguments without requiring them for the released nonce command."""
     parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0)
     parser.add_argument('--alias', '-a')
     parser.add_argument('--message', '-m', default='')
@@ -28,7 +28,7 @@ def options(parser):
     parser.add_argument('--timeout', type=float, default=30.0, help='finite transport wait; does not change protocol deadlines')
 
 
-class NativeNegotiation(doing.DoDoer):
+class IpexV2Negotiation(doing.DoDoer):
     """Own one explicit apply, offer or agree and its finite transport children.
 
     Incoming files use ordinary KEL/Exchanger acceptance. The selected command
@@ -44,7 +44,7 @@ class NativeNegotiation(doing.DoDoer):
         yield tock
         args = self.args
         if not args.name or not args.alias:
-            raise ConfigurationError('native negotiation requires --name and --alias')
+            raise ConfigurationError('v2 IPEX negotiation requires --name and --alias')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be finite and positive')
         if not args.output and not args.deliver:
@@ -57,7 +57,7 @@ class NativeNegotiation(doing.DoDoer):
             hab = hby.habByName(args.alias)
             if (hab is None or not hab.accepted
                     or isinstance(hab, (GroupHab, SignifyHab, SignifyGroupHab))):
-                raise ConfigurationError('native negotiation requires an accepted individual local signer')
+                raise ConfigurationError('v2 IPEX negotiation requires an accepted individual local signer')
             notifier = Notifier(hby)
             exc = Exchanger(hby=hby, handlers=[])
             ipexing.loadHandlers(hby=hby, exc=exc, notifier=notifier)
@@ -123,7 +123,7 @@ class NativeNegotiation(doing.DoDoer):
         """Read an accepted, authenticated exact prior; pending intake is insufficient."""
         prior = hby.db.exns.get((said,)) if said else None
         if prior is None or prior.route != route or prior.pvrsn != Vrsn_2_0:
-            raise ConfigurationError(f'--prior/--said requires an accepted native {route}')
+            raise ConfigurationError(f'--prior/--said requires an accepted v2 IPEX {route}')
         verify(hby, prior)
         return prior
 
@@ -139,7 +139,7 @@ class NativeNegotiation(doing.DoDoer):
             if issuance or presentation:
                 routes += ('/ipex/grant', '/ipex/admit', '/ipex/spurn')
             if message.serder.ilk in ('xip', 'exn') and message.serder.route not in routes:
-                raise ConfigurationError('input exchange is outside native negotiation')
+                raise ConfigurationError('input exchange is outside v2 IPEX negotiation')
             psr.msgProcess(asdict(message), kvy=psr.kvy, tvy=None, exc=exc, rvy=psr.rvy, vry=None)
             if message.serder.ilk in ('xip', 'exn') and not exc.complete(message.serder.said):
                 if (issuance and message.serder.route == '/ipex/grant'
@@ -158,4 +158,4 @@ class NativeNegotiation(doing.DoDoer):
                     raise ConfigurationError(
                         'live DH/Unblind requires KRAM enabled in the Habery config '
                         '(kram.enabled) and an accepted KRAM transaction for this Grant')
-                raise ConfigurationError('input exchange did not pass native IPEX verification')
+                raise ConfigurationError('input exchange did not pass v2 IPEX verification')

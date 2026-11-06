@@ -17,12 +17,12 @@ parser = argparse.ArgumentParser(description='Reply to IPEX offer message acknow
 parser.set_defaults(handler=lambda args: handler(args))
 
 negotiating.options(parser)
-parser.add_argument('--said', '-s', help='exact accepted native Offer SAID')
+parser.add_argument('--said', '-s', help='exact accepted v2 IPEX Offer SAID')
 
 
 def handler(args):
     if args.version == Vrsn_2_0:
-        return [negotiating.NativeNegotiation(args, 'agree')]
+        return [negotiating.IpexV2Negotiation(args, 'agree')]
     return [doing.doify(nonce)]
 
 

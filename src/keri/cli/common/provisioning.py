@@ -1,4 +1,4 @@
-"""Explicit finite copies of existing registry roots through native RegistrySalt."""
+"""Explicit finite copies of existing registry roots through v2 ACDC RegistrySalt."""
 import json
 import math
 from pathlib import Path
@@ -76,7 +76,7 @@ class _Proposal:
 
 
 class _Receipt:
-    """Observe only native successful receipt, after decryption and Keeper retention."""
+    """Observe only v2 ACDC successful receipt, after decryption and Keeper retention."""
     def __init__(self, owner, check):
         self.owner, self.check, self.said, self.error = owner, check, None, None
         self.waiting = None
@@ -97,8 +97,8 @@ class _Receipt:
                 reply=kwa['serder'].said, phase='awaiting_signatures', received=False)), flush=True)
 
 
-class NativeRootCopy(doing.DoDoer):
-    """Own one approval, native parser and finite transport; retain no live ledger."""
+class AcdcV2RootCopy(doing.DoDoer):
+    """Own one approval, v2 parser and finite transport; retain no live ledger."""
     def __init__(self, args, role):
         self.args, self.role = args, role
         super().__init__(doers=[doing.doify(self.run)])
@@ -108,7 +108,7 @@ class NativeRootCopy(doing.DoDoer):
             raise TimeoutError('registry root copy did not complete before --timeout')
 
     def public(self, raw):
-        """Restrict evidence files to public support; native owners verify acceptance."""
+        """Restrict evidence files to public support; v2 ACDC owners verify acceptance."""
         stream = bytearray(raw)
         parser = Parser(version=Vrsn_2_0)
         if not stream:
@@ -174,7 +174,7 @@ class NativeRootCopy(doing.DoDoer):
             raise ConfigurationError('--timeout must be finite and positive')
         if self.role == 'provision':
             if args.proposal and args.proposal_output:
-                raise ConfigurationError('contributors output native replies; use the original custodian proposal for further contributions')
+                raise ConfigurationError('contributors output v2 replies; use the original custodian proposal for further contributions')
             paths = [args.output] + ([args.proposal_output] if args.proposal_output else [])
             if len({Path(path).resolve() for path in paths}) != len(paths):
                 raise ConfigurationError('reply and proposal outputs must be distinct')
@@ -216,7 +216,7 @@ class NativeRootCopy(doing.DoDoer):
                     frame = Parser(version=Vrsn_2_0).parseOneBare(ims=stream, framed=True, processive=False)
                     if (stream or frame.serder.pvrsn != Vrsn_2_0 or frame.serder.ilk not in ('xip', 'exn')
                             or frame.serder.route != _Proposal.resource):
-                        raise ConfigurationError('--proposal requires one exact native /multisig/rpy envelope')
+                        raise ConfigurationError('--proposal requires one exact v2 /multisig/rpy envelope')
                     approval = _Proposal(self, dest, target, coordinator)
                     exc = Exchanger(hby=self.hby, handlers=[approval])
                     Parser(version=Vrsn_2_0, exc=exc).parse(ims=bytearray(raw))

@@ -9,7 +9,7 @@ from .....app import MailboxDirector, HaberyDoer, Counselor
 from .....core import SerderKERI, SerderACDC
 from .....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0
 from .....vdr import Regery
-from .....acdc import Regery as NativeRegery
+from .....acdc import Regery as AcdcV2Regery
 
 
 logger = ogler.getLogger()
@@ -20,7 +20,7 @@ parser.set_defaults(handler=lambda args: registryStatus(args))
 parser.add_argument('--registry-name', '-r', help='Human readable name for registry, defaults to name of Habitat',
                     default=None, required=True)
 parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0,
-                    help='Registry protocol version: 1.0 (default) or native 2.0')
+                    help='Registry protocol version: 1.0 (default, v1 VDR) or 2.0 (v2 ACDC)')
 parser.add_argument("--verbose", "-V", help="print JSON of all current events", action="store_true")
 
 
@@ -51,14 +51,14 @@ class RegistryStatusor(doing.DoDoer):
         self.name = name
         self.registryName = registryName
         self.verbose = verbose
-        self.native = version == Vrsn_2_0
+        self.acdcV2 = version == Vrsn_2_0
         self.hby = setupHby(name=name, base=base, bran=bran, version=version)
-        self.rgy = (NativeRegery if self.native else Regery)(hby=self.hby, name=name, base=base)
+        self.rgy = (AcdcV2Regery if self.acdcV2 else Regery)(hby=self.hby, name=name, base=base)
         self.hbyDoer = HaberyDoer(habery=self.hby)  # setup doer
-        if not self.native:
+        if not self.acdcV2:
             counselor = Counselor(hby=self.hby)
             mbx = MailboxDirector(hby=self.hby, topics=["/receipt", "/multisig", "/replay"])
-        doers = [self.hbyDoer] if self.native else [self.hbyDoer, counselor, mbx]
+        doers = [self.hbyDoer] if self.acdcV2 else [self.hbyDoer, counselor, mbx]
         self.toRemove = list(doers)
 
         doers.extend([doing.doify(self.statusDo)])
@@ -69,7 +69,7 @@ class RegistryStatusor(doing.DoDoer):
             super().exit(deeds=deeds)
         finally:
             if deeds is None:
-                if self.native and self.rgy.store.opened:
+                if self.acdcV2 and self.rgy.store.opened:
                     self.rgy.close()
                 self.hby.close()
 
@@ -90,7 +90,7 @@ class RegistryStatusor(doing.DoDoer):
         _ = (yield self.tock)
 
         reg = self.rgy.registryByName(self.registryName)
-        if self.native:
+        if self.acdcV2:
             if reg is None:
                 raise ConfigurationError(f"unknown registry {self.registryName}")
             print(f"Registry:  {reg.regk}\nSeq No.  {reg.sn}")

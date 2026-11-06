@@ -39,9 +39,9 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
                                             "send to recipient", required=False, default="")
 parser.add_argument("--time", help="timestamp for the revocation", required=False, default=None)
 issuing.options(parser)
-parser.add_argument('--credential', help='native public raw CESR body file produced by vc create')
-parser.add_argument('--prior', help='exact accepted native Apply or Agree SAID')
-parser.add_argument('--issue', action='store_true', help='authorize live DH and fresh native registry issuance')
+parser.add_argument('--credential', help='v2 ACDC public raw CESR body file produced by vc create')
+parser.add_argument('--prior', help='exact accepted v2 IPEX Apply or Agree SAID')
+parser.add_argument('--issue', action='store_true', help='authorize live DH and fresh v2 ACDC registry issuance')
 parser.add_argument('--authenticate', '-z', action='store_true')
 parser.add_argument('--code', default=[], action='append', help='selected witness AID:code')
 parser.add_argument('--code-time')
@@ -55,7 +55,7 @@ parser.add_argument('--consent-lifetime', type=float,
 
 def handler(args):
     if args.version == Vrsn_2_0:
-        return [issuing.NativeIssuance(args, 'grant')]
+        return [issuing.IpexV2Issuance(args, 'grant')]
     if not args.said:
         raise ConfigurationError('legacy Grant requires --said')
     issuing.legacy(args)

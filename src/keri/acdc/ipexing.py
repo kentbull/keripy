@@ -551,7 +551,7 @@ class IpexHandler:
 
         The Exchanger alone derives ``retained`` from exact accepted membership;
         it permits this Grant's own response link, never an older issuer prefix.
-        Context dependencies still raise their normal native exceptions.
+        Context dependencies still raise their own exceptions.
         """
         context = self._verifyContext(serder, attachments, nests, sscs, evidence,
                                       retained=retained)
