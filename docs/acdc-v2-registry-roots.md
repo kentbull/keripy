@@ -17,10 +17,20 @@ historical signing member of `gid`, the registry issuer or a historical member
 of the issuer group. On arrival the receiver refuses, and stores nothing, a
 copy that can never be retained (bad shape or digest, a recipient that is not
 a local individual habitat, sender equal to recipient, or a membership or
-sender failure against complete local state). A copy whose check fails only
-because local state is missing (the registry TEL, a KEL, the local group
-habitat, or the group rotation that adds the recipient) is stored pending, so
-an offline newcomer never needs a resend; approval re-runs every check.
+sender failure against complete local state).
+
+Received copies are accepted automatically; there is no approval step. A copy
+that verifies on arrival (full authorization, decryption, plaintext `i`/`ri`/
+`gid`/`rd` binding, and the root checked against a held opening or by
+reproducing the accepted BUP `b` commitment with the `td` hint) is retained at
+once. A copy that cannot verify yet because local state is missing (the
+registry TEL, a KEL, the local group habitat, the group rotation that adds the
+recipient, or opening evidence) is stored and escrowed, then retried by the
+ordinary escrow loop (`Exchanger.processEscrow` drives
+`RegistryRoot.processEscrows`) for up to an hour, so an offline newcomer never
+needs a resend. A copy refused on any attempt is dropped from the escrow; the
+signed exchange itself stays in the exchange store. A newly retained root adds
+one informational notification (`/exn/registry/root`).
 
 Delivery defaults to the recipient's mailbox (topic `credential`, normally its
 witness mailbox). `--out FILE` writes the same signed bytes instead, as a
@@ -52,17 +62,18 @@ kli vc registry root newcomers --name lead --alias holder-group --version 2.0 \
   --rotation ROTATION_SAID
 ```
 
-The recipient's copy is stored pending in the ordinary exchange store with a
-notification; nothing is decrypted until explicit approval. Without
-`--registry`/`--said`, `receive` lists pending copies; with one, it approves
-that copy, decrypts it, checks the plaintext binding and verifies the root
-against a held opening or by reproducing the accepted BUP commitment (using
-the `--acdc` hint) before retaining it:
+`receive` ingests copies and lets the handler retain them. `--listen`
+processes the `/credential` mailbox until the root for `--registry` is
+retained; `--message FILE` parses a file copy through the same path. Each run
+then retries escrowed copies once, prints the copies still pending, and fails
+when `--registry` names a root that is not retained:
 
 ```sh
 kli vc registry root receive --name peer --alias holder-group --version 2.0 \
-  --registry REGISTRY_SAID --sender LEAD_MEMBER_AID --listen --timeout 120
+  --registry REGISTRY_SAID --listen --timeout 120
 ```
 
-A copy that cannot yet be verified stays pending. A different retained root is
-never replaced. Roots never appear in output JSON or in plaintext files.
+`--said SAID` with `--event` and `--opening` manually retries one stored copy
+with evidence it lacks, such as a held opening when no `td` hint was sent. A
+different retained root is never replaced. Roots never appear in output JSON
+or in plaintext files.

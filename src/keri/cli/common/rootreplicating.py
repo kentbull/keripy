@@ -5,8 +5,9 @@ registry) through ``salting.RegistryRoot`` and deliver each one to the
 recipient's mailbox (topic ``credential``) with the shared finite sender.
 ``--out`` writes the same bytes to a file instead. ``receive`` ingests copies
 from the ``/credential`` mailbox (or ``--message`` files) through the ordinary
-Parser, Kevery/KRAM and Exchanger path, then explicitly approves one stored
-copy, which verifies the root and retains it.
+Parser, Kevery/KRAM and Exchanger path; the handler retains each verifiable
+root automatically and escrows the rest for retry. ``receive`` then drains
+that escrow once and reports what is retained or still pending.
 """
 import json
 import math
@@ -132,23 +133,16 @@ class RootReplication(doing.DoDoer):
 
     # receiving
 
-    def selected(self):
-        args, local = self.args, self.hab.mhab.pre if isinstance(self.hab, GroupHab) else self.hab.pre
-        sender = recipient(self.hby, args.sender) if args.sender else None
-        items = []
-        for item in self.root.pending():
-            if (item['recipient'] != local or item['gid'] != self.hab.pre
-                    or args.said and item['said'] != args.said
-                    or args.registry and item['registry'] != args.registry
-                    or sender and item['sender'] != sender):
-                continue
-            items.append(item)
-        return items
+    def retained(self, registry):
+        return self.hby.mgr.getRegistryRoot(self.hab.pre, registry) is not None
 
     def receive(self, background):
+        """Ingest copies and let the handler retain them; report what remains."""
         args = self.args
-        if not (args.said or args.registry) and (args.listen or args.message):
-            raise ConfigurationError('receive requires --said or --registry to select a copy')
+        if args.listen and not args.registry:
+            raise ConfigurationError('receive --listen requires --registry')
+        if (args.event or args.opening) and not args.said:
+            raise ConfigurationError('--event and --opening retry one stored copy; add --said')
         proof = opening(Path(args.opening).read_bytes()) if args.opening else None
         exc = Exchanger(hby=self.hby, handlers=[])
         # Other credential-topic traffic stays retained as ordinary IPEX notes.
@@ -156,10 +150,6 @@ class RootReplication(doing.DoDoer):
         exc.addHandler(self.root)
         kvy = Kevery(db=self.hby.db, rvy=self.hby.rvy, exc=exc, lax=True, local=False, direct=False,
                      kramer=Kramer(db=self.hby.db, cf=self.hby.cf))
-        if not (args.said or args.registry):
-            for item in self.selected():
-                print(json.dumps(item), flush=True)
-            return
         if args.message:
             psr = Parser(version=Vrsn_2_0, kvy=kvy, rvy=self.hby.rvy, exc=exc, rgy=self.rgy)
             for filename in args.message:
@@ -170,20 +160,22 @@ class RootReplication(doing.DoDoer):
                                   version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
             background.append(mbx)
             self.extend([mbx])
-            print(json.dumps(dict(registry=args.registry, said=args.said, phase='listening')), flush=True)
-            while not self.selected():
+            print(json.dumps(dict(registry=args.registry, phase='listening')), flush=True)
+            while not self.retained(args.registry):
                 self.check()
                 yield self.tock
-        items = self.selected()
-        if not items:
-            raise ConfigurationError('no matching pending registry root copy')
-        if len(items) > 1 and not args.said:
-            senders = sorted({item['sender'] for item in items})
-            if len(senders) > 1 or len({item['registry'] for item in items}) > 1:
-                raise ConfigurationError('several pending copies match; select one with --said')
-        item = items[0]
-        try:
-            self.root.receive(item['said'], event=args.event, opening=proof)
-        except RootUnverified as error:
-            raise ConfigurationError(f'{error}; the copy stays pending') from None
-        print(json.dumps(dict(item, received=True)), flush=True)
+        # Drain: retry every stored copy whose local state may now be present.
+        self.root.processEscrows()
+        if args.said:
+            try:
+                self.root.receive(args.said, event=args.event, opening=proof)
+            except RootUnverified as error:
+                raise ConfigurationError(f'{error}; the copy stays pending') from None
+        local = self.hab.mhab.pre if isinstance(self.hab, GroupHab) else self.hab.pre
+        for item in self.root.pending():
+            if item['recipient'] == local and item['gid'] == self.hab.pre:
+                print(json.dumps(dict(item, retained=False)), flush=True)
+        if args.registry:
+            if not self.retained(args.registry):
+                raise ConfigurationError('no registry root is retained for this registry')
+            print(json.dumps(dict(gid=self.hab.pre, registry=args.registry, retained=True)), flush=True)
