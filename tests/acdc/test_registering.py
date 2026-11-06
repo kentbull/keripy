@@ -10,7 +10,7 @@ import pytest
 from keri.acdc import messaging
 from keri.acdc.registering import RegistryStore
 from keri.acdc.regbasing import RegBaser
-from keri.core import Diger, Number
+from keri.core import Blinder, Diger, Number
 from keri.db import openLMDB
 from keri.kering import ValidationError
 
@@ -183,3 +183,51 @@ def test_registry_store_escrowed_reports_exact_dependency(registry_events):
         store.clearEscrows(rip.said, 1, bup.said)
         assert store.escrowed(rip.said, 1, bup.said) is False
         assert store.escrowed(rip.said, 0, rip.said) is False
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_registry_store_escrow_opening_requires_exact_escrowed_bup(bound):
+    """A disclosed opening escrows only beside its exact escrowed BUP body."""
+    stamp = "2020-08-22T17:50:09.988921+00:00"
+    extra = dict(bound=True, bsn=1, bd=Diger(ser=b"issuee event").qb64) if bound else {}
+    opening = Blinder.blind(acdc=Diger(ser=b"credential").qb64, state="issued", **extra)
+    other = Blinder.blind(acdc=Diger(ser=b"credential").qb64, state="revoked", **extra)
+    rip = messaging.regcept(israid="EA2X8Lfrl9lZbCGz8cfKIvM_cqLyTYVLSFLhnttezlzQ",
+                            uuid="0AAxyHwW6htOZ_rANOaZb2N2", stamp=stamp)
+    bup = messaging.blindate(regid=rip.said, prior=rip.said, blid=opening.said,
+                             sn=1, stamp=stamp)
+    with openLMDB(cls=RegBaser, name="test-escrow-opening", temp=True) as baser:
+        store = RegistryStore(baser)
+        store.accept(rip.said, 0, rip)
+
+        # Unknown body, then a stored body outside every dependency escrow.
+        with pytest.raises(ValidationError, match="known BUP"):
+            store.escrowOpening(bup.said, opening)
+        store.putEvent(bup)
+        with pytest.raises(ValidationError, match="escrowed BUP"):
+            store.escrowOpening(bup.said, opening)
+
+        store.escrowMissingAnchor(rip.said, 1, bup.said)
+        with pytest.raises(ValidationError):
+            store.escrowOpening(bup.said, opening.qb64)
+        with pytest.raises(ValidationError):
+            store.escrowOpening(bup.said, other)
+        assert store.pendingOpening(bup.said) is None
+        assert store.escrowOpening(bup.said, opening) is True
+        assert store.escrowOpening(bup.said, opening) is False
+        baser.opes.pin(bup.said, other.qb64)
+        with pytest.raises(ValidationError, match="pending opening is immutable"):
+            store.escrowOpening(bup.said, opening)
+        baser.opes.pin(bup.said, opening.qb64)
+
+        pending = store.pendingOpening(bup.said)
+        assert pending.clan is opening.clan and pending.qb64 == opening.qb64
+        assert store.opening(bup.said) is None
+
+        # Acceptance hands the opening to putOpening; escrow refuses it.
+        store.clearEscrows(rip.said, 1, bup.said)
+        store.accept(rip.said, 1, bup)
+        with pytest.raises(ValidationError, match="putOpening"):
+            store.escrowOpening(bup.said, opening)
+        assert store.putOpening(bup.said, opening) is True
+        assert store.opening(bup.said).qb64 == opening.qb64

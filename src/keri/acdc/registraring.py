@@ -11,7 +11,8 @@ from dataclasses import asdict, dataclass
 
 from hio.help import ogler
 
-from ..kering import (ClosedError, ConfigurationError, ValidationError, Vrsn_2_0,
+from ..kering import (ClosedError, ConfigurationError, KeriError,
+                      ValidationError, Vrsn_2_0,
                       Ilks, MissingSignatureError, MissingWitnessSignatureError,
                       MissingDelegationError, OutOfOrderError,
                       MissingDelegableApprovalError, UnverifiedReceiptError,
@@ -242,7 +243,9 @@ class Regery:
         failure stops it, and frames already processed keep their outcomes.
         After one escrow retry each frame is classified once: ``accepted``,
         ``pending`` (``Kevery.escrowed`` / ``RegistryStore.escrowed``) or
-        ``rejected``. Heads, counts and opening retention are caller policy.
+        ``rejected``. Heads and counts are caller policy, and so is opening
+        retention: ``accepted`` -> ``store.putOpening``, ``pending`` ->
+        ``store.escrowOpening``.
 
         Parameters:
             raw (bytes | bytearray): framed CESR evidence stream.
@@ -332,6 +335,42 @@ class Regery:
             eventer = self._eventer(regk)
             if eventer is not None:
                 self._processEventerEscrows(eventer)
+        self.processEscrowOpenings()
+
+    def processEscrowOpenings(self):
+        """Promote or drop escrowed disclosed openings after dependency replay.
+
+        For each .opes entry: BUP accepted at its ordinal -> putOpening and
+        remove; BUP still retained by .maes/.ooes -> keep; otherwise (sibling
+        lost arbitration, body pruned, invalid) -> remove. Runs last in
+        processEscrows so an opening becomes readable in the same pass that
+        accepts its BUP.
+
+        Parameters:
+            None
+
+        Returns:
+            None
+        """
+        for keys, _ in list(self.baser.opes.getTopItemIter()):
+            said = keys[0]
+            try:
+                event = self.store.event(said)
+                if event is None or event.ilk != Ilks.bup:
+                    raise ValidationError("pending opening has no stored BUP")
+                regk, sn = event.sad["rd"], Number(numh=event.sad["n"]).num
+                accepted = self.store.seqSaider(regk, sn)
+                if accepted is not None and accepted.qb64 == said:
+                    self.store.putOpening(said, self.store.pendingOpening(said))
+                elif self.store.escrowed(regk, sn, said):
+                    continue
+                else:
+                    logger.info("Regery: dropped pending opening for unaccepted BUP %s",
+                                said)
+            except (KeriError, ValueError, TypeError) as ex:
+                logger.info("Regery: dropped invalid pending opening for %s: %s",
+                            said, ex)
+            self.baser.opes.rem(said)
 
     def close(self):
         """Close the underlying registry storage backend.
