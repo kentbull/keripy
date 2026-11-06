@@ -192,7 +192,8 @@ class Poster(doing.DoDoer):
         ser = SerderKERI(raw=icp)
         del icp[:ser.size]
 
-        self.send(src=sender.pre, dest=hab.kever.delpre, topic="delegate", serder=ser, attachment=icp)
+        self.send(src=sender.pre, dest=hab.kever.delpre, topic="delegate", serder=ser, attachment=icp,
+                  stream=self.version.major >= 2)
         while True:
             if self.cues:
                 cue = self.cues.popleft()

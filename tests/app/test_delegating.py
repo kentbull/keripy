@@ -227,3 +227,23 @@ def test_delegate_request_default_framing_uses_default_version_with_legacy_speci
         assert special_calls["version"] == Vrsn_1_0
         assert special_calls["kind"] == Kinds.json
         assert endorse_calls["gvrsn"] == Version
+
+
+def test_anchorer_v2_delegation_request_uses_nested_forwarding():
+    # Legacy /fwd envelopes carry a V1 body with V1 pathed attachments, so a V2
+    # Anchorer must queue nested (stream) forwarding to reach the delegator.
+    # No explicit version mirrors `kli rotate` without --version.
+    with openHby(name="del", temp=True, salt=Salter(raw=b'0123456789ghijkl').qb64, version=Version) as hby:
+        delegator = hby.makeHab(name="delegator", transferable=True)
+        proxy = hby.makeHab(name="proxy", transferable=True)
+        delegate = hby.makeHab(name="delegate", transferable=True, delpre=delegator.pre)
+        anchorer = Anchorer(hby=hby, proxy=proxy)
+        sent = []
+        anchorer.postman.send = lambda **kwa: sent.append(kwa)
+
+        anchorer.delegation(pre=delegate.pre, sn=0)
+        anchorer.processPartialWitnessEscrow()
+
+        assert [(kwa["topic"], kwa["dest"], kwa["stream"]) for kwa in sent] == [
+            ("delegate", delegator.pre, True), ("delegate", delegator.pre, True)]
+        assert [kwa["serder"].ked["t"] for kwa in sent] == ["exn", "dip"]

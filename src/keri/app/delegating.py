@@ -79,7 +79,7 @@ class Anchorer(doing.DoDoer):
         self.auths = auths if auths is not None else self.auths
 
         # load the event and signatures
-        evt = hab.msgOwnEvent(sn=sn, gvrsn=version if version is not None else self.version)
+        evt = hab.msgOwnEvent(sn=sn, gvrsn=version if version is not None else self.postman.version)
 
         # Send exn message for notification purposes
         srdr = SerderKERI(raw=evt)
@@ -209,15 +209,17 @@ class Anchorer(doing.DoDoer):
                 exn, atc = delegateRequestExn(phab, delpre=delpre, evt=bytes(evt), aids=smids,
                                               version=self.version, kind=self.kind)
 
+                # Legacy /fwd envelopes are V1 bodies; V2 framing needs nested forwarding.
+                stream = self.postman.version.major >= 2
                 logger.info(
                     "Sending delegation request exn for %s from %s to delegator %s", srdr.ilk, phab.pre, delpre)
                 logger.debug("Delegation request=\n%s\n", exn.pretty())
-                self.postman.send(hab=phab, dest=hab.kever.delpre, topic="delegate", serder=exn, attachment=atc)
+                self.postman.send(hab=phab, dest=hab.kever.delpre, topic="delegate", serder=exn, attachment=atc, stream=stream)
 
                 del evt[:srdr.size]
                 logger.info("Sending delegation event %s from %s to delegator %s", srdr.ilk, phab.pre, delpre)
                 logger.debug("Delegated inception=\n%s\n", srdr.pretty())
-                self.postman.send(hab=phab, dest=delpre, topic="delegate", serder=srdr, attachment=evt)
+                self.postman.send(hab=phab, dest=delpre, topic="delegate", serder=srdr, attachment=evt, stream=stream)
 
                 seal = dict(i=srdr.pre, s=srdr.snh, d=srdr.said)
                 kwa = dict(version=self.version, gvrsn=self.version, kind=self.kind) if self.version is not None else {}
