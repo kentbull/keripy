@@ -115,7 +115,8 @@ class NoticeDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims,
+                                  gvrsn=Vrsn_1_0)
 
             while len(self.postman.cues) != (2 * len(others)):
                 yield self.tock

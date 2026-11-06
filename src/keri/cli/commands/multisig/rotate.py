@@ -263,7 +263,8 @@ class GroupMultisigRotate(doing.DoDoer):
                               dest=recpt,
                               topic="multisig",
                               serder=exn,
-                              attachment=bytearray(ims), stream=self.rgy is not None)
+                              attachment=bytearray(ims), stream=self.rgy is not None,
+                              gvrsn=exn.pvrsn)
 
         self.counselor.start(ghab=ghab, prefixer=prefixer, number=number, diger=Diger(qb64=rserder.said))
 
