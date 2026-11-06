@@ -25,7 +25,8 @@ from keri.app import (Mailboxer, ForwardHandler, Poster,
                       StreamPoster, HttpEnd,
                       openHab, openHby, setupWitness)
 
-from keri.app.forwarding import introduce
+from keri.app.forwarding import forwardEnvelope, introduce
+from keri.app.grouping import multisigInceptExn
 from keri.db import openLMDB, dgKey
 from keri.peer import specialExchange, Exchanger, serializeMessage, verify
 from keri.peer.exchanging import loadParsedNestedSubstreams
@@ -180,6 +181,50 @@ def test_essr_wrapper_preserves_explicit_and_default_attachment_version(hab_vers
         assert parsed[0].serder.pvrsn == Vrsn_1_0
         assert len(parsed[0].essrs) == 1
         assert recp.decrypt(parsed[0].essrs[0].raw) == original
+
+
+
+@pytest.mark.parametrize("version", [Vrsn_1_0, Vrsn_2_0])
+def test_poster_forwards_v1_group_proposal_in_group_version_stream(version):
+    """A member forwards KERIpy's v1 e-embed group proposal through its group-version witness.
+
+    The proposal wrapper is v1 with v1 attachments for both group versions. A v2 member's
+    stream is v2 after its introduction, so it nests the proposal in a v2 /fwd; v1 pathed
+    couples cannot follow v2 counters. The recipient reads the stored proposal's e embed.
+    """
+    with openHby(name="member", temp=True, version=version) as hby, \
+            openHab(name="witness", transferable=False, temp=True, version=version) as (whby, wit), \
+            openLMDB(cls=Mailboxer, name="witness") as mbx:
+        member = hby.makeHab("member", version=version)
+        group = hby.makeGroupHab(group="group", mhab=member, smids=[member.pre],
+                                 rmids=[member.pre], isith="1", nsith="1", version=version)
+        icp = group.msgOwnInception(allowPartiallySigned=True, gvrsn=version)
+        proposal, atc = multisigInceptExn(member, smids=[member.pre], rmids=[member.pre],
+                                          icp=icp, version=Vrsn_1_0)
+        assert proposal.pvrsn == Vrsn_1_0
+
+        recipient = "EBrecipientrecipientrecipientrecipientrecip"
+        fwd, fatc = forwardEnvelope(member, recp=recipient, topic="multisig", serder=proposal,
+                                    atc=atc, version=version, kind=Kinds.json,
+                                    gvrsn=Vrsn_1_0)  # the CLI's Poster.send(gvrsn=Vrsn_1_0)
+        assert fwd.pvrsn == (Vrsn_2_0 if version == Vrsn_2_0 else Vrsn_1_0)
+
+        msg = bytearray(introduce(member, wit.pre, gvrsn=version))
+        msg.extend(fwd.raw)
+        msg.extend(fatc)
+        witness = Parser(kvy=whby.kvy, framed=True, version=version,
+                         exc=Exchanger(hby=whby, handlers=[ForwardHandler(hby=whby, mbx=mbx)]))
+        witness.parse(ims=msg, local=False)
+
+        rows = list(mbx.cloneTopicIter(topic=f"{recipient}/multisig"))
+        assert len(rows) == 1
+        _, _, message = rows[0]
+        carried = Parser(version=version).parse(ims=bytearray(message), processive=False)
+        assert len(carried) == 1
+        assert carried[0].serder.raw == proposal.raw
+        assert carried[0].serder.ked["e"]["icp"]["d"] == SerderKERI(raw=icp).said
+        pathed = b"".join(bytes(ptd) for ptd in carried[0].ptds)
+        assert icp[SerderKERI(raw=icp).size:] in pathed
 
 
 @pytest.mark.parametrize("kind", [Kinds.json, Kinds.cbor, Kinds.mgpk])

@@ -220,7 +220,8 @@ class JoinDoer(doing.DoDoer):
                                   dest=smid,
                                   topic="multisig",
                                   serder=rexn,
-                                  attachment=atc)
+                                  attachment=atc,
+                                  gvrsn=Vrsn_1_0)
                 while not self.postman.sent(said=rexn.said):
                     yield self.tock
 

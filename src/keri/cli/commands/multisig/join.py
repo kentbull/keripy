@@ -416,7 +416,8 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims,
+                                  gvrsn=Vrsn_1_0)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -495,7 +496,8 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims)
+                                  attachment=ims,
+                                  gvrsn=Vrsn_1_0)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -654,7 +656,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims, stream=v2)
+                                  attachment=ims, stream=v2, gvrsn=exn.pvrsn)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock
@@ -813,7 +815,8 @@ class JoinDoer(doing.DoDoer):
                                   dest=recp,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=atc)
+                                  attachment=atc,
+                                  gvrsn=Vrsn_1_0)
 
             while not hab.loadEndRole(cid=cid, role=role, eid=eid):
                 self.rgy.processEscrows()
