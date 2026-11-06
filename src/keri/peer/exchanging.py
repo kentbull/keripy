@@ -500,9 +500,18 @@ class Exchanger:
         return True
 
     def processEscrow(self):
-        """ Process all escrows for `exn` messages"""
+        """ Process all escrows for `exn` messages, then each route handler's own escrow.
+
+        A handler that keeps accepted exchanges pending for later local work
+        (for example ``acdc.salting.RegistryRoot``) opts in by defining
+        ``processEscrows``.
+        """
         self.processEscrowPartialSigned()
         self.processEscrowMissingSchema()
+        for handler in {id(handler): handler for handler in self.routes.values()}.values():
+            processEscrows = getattr(handler, "processEscrows", None)
+            if processEscrows is not None:
+                processEscrows()
 
     def _storeEscrowEvidence(self, serder, tsgs, cigars, sourceSeals):
         """Persist exchange authentication evidence for later replay."""
