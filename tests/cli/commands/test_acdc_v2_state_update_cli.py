@@ -200,9 +200,9 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
     assert sent['recipient'] == peer['member'] and sent['gid'] == lead['pre']
     assert retained(peer, body)[0] is None
     received = last_result(kli(tmp_path, 'vc', 'registry', 'root', 'receive', *peer['args'],
-        '--registry', body.regid, '--sender', lead['member'], '--event', first.said,
-        '--opening', str(held), '--message', str(copy)))
-    assert received['received'] and received['said'] == sent['exchange']
+        '--registry', body.regid, '--message', str(copy), '--said', sent['exchange'],
+        '--event', first.said, '--opening', str(held)))
+    assert received == dict(gid=peer['pre'], registry=body.regid, retained=True)
     root, encrypted, _ = retained(peer, body)
     assert root == before[0][0] and encrypted != root
     assert Blinder.unblind(first.sad['b'], salt=root, sn=1, acdc=body.said, states=('issued',)).qb64 == proof.qb64
