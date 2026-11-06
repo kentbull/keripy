@@ -2161,3 +2161,144 @@ def test_multisig_rpy_handler_v2_with_kram(mockHelpingNowUTC):
         prefixers = hby1.db.maids.get(keys=(esaid,))
         assert len(prefixers) == 1
         assert prefixers[0].qb64 == ghab2.mhab.pre
+
+
+def _dhQuery(pre):
+    from keri.core import query
+    return query(pre=pre, route="/ipex/dhke", query=dict(x=pre), pvrsn=Vrsn_2_0, kind=Kinds.json)
+
+
+def _coordination(ghab):
+    """Return one group-authored v2 query and one group-authored v2 Grant stream."""
+    from keri.acdc import ipexing
+
+    qwire = ghab.endorse(_dhQuery(ghab.pre), last=True, framed=True, gvrsn=Vrsn_2_0)
+    grant, atc = ipexing.grant(ghab, recp=ghab.mhab.pre, message="",
+                               kind=Kinds.json, gvrsn=Vrsn_2_0)
+    return bytes(qwire), grant.raw + bytes(atc)
+
+
+def _kram():
+    return {"kram": {"enabled": True, "denials": [],
+                     "caches": {"~": [1000, 5000, 60000, 300000, 5000, 60000, 300000]}},
+            "dt": "2021-01-01T00:00:00.000000+00:00"}
+
+
+@pytest.mark.parametrize("route", ["/multisig/qry", "/multisig/ipex-proof"])
+def test_multisig_v2_coordination_routes_are_core_multiplexed(route, mockHelpingNowUTC):
+    with openMultiSig(prefix="coord") as ((hby1, ghab1), (_, ghab2), (_, _)):
+        qwire, gwire = _coordination(ghab2)
+        if route == "/multisig/qry":
+            exn, atc = grouping.multisigQueryExn(ghab2, qwire)
+            child, field = SerderKERI(raw=qwire), "qry"
+        else:
+            exn, atc = grouping.multisigIpexProofExn(ghab2, gwire)
+            child, field = SerderKERI(raw=gwire), "grant"
+        assert exn.ked["r"] == route and exn.pre == ghab2.mhab.pre
+        assert exn.ked["a"] == {"gid": ghab2.pre, field: child.said}
+
+        notifier = Notifier(hby=hby1)
+        mux = Multiplexor(hby=hby1, notifier=notifier)
+        exc = Exchanger(hby=hby1, handlers=[])
+        loadHandlers(exc=exc, mux=mux)
+        assert isinstance(exc.routes[route], grouping.MultisigNotificationHandler)
+        with openCF(name=f"coord-kram-{field}", base="test") as cf:
+            cf.put(_kram())
+            kvy = Kevery(db=hby1.db, lax=False, local=False,
+                         kramer=Kramer(db=hby1.db, cf=cf), exc=exc)
+            Parser(version=Vrsn_2_0).parse(ims=bytearray(exn.raw + atc), kvy=kvy, exc=exc)
+
+        # Indexed and noticed like every other proposal; never replayed by the mux.
+        assert len(notifier.signaler.signals) == 1
+        assert [d.qb64 for d in hby1.db.meids.get(keys=(child.said,))] == [exn.said]
+        assert [p.qb64 for p in hby1.db.maids.get(keys=(child.said,))] == [ghab2.mhab.pre]
+        from keri.peer.exchanging import loadParsedNestedSubstreams
+        assert [n.serder.said for n in loadParsedNestedSubstreams(hby1, exn.said)] == [child.said]
+
+
+def test_multisig_v2_coordination_routes_reject_malformed(mockHelpingNowUTC):
+    with openMultiSig(prefix="coordbad") as ((hby1, ghab1), (_, ghab2), (_, _)):
+        qwire, gwire = _coordination(ghab2)
+        mux = Multiplexor(hby=hby1, notifier=Notifier(hby=hby1))
+
+        def nested(raw):
+            return [Parser(version=Vrsn_2_0).parseOneBare(ims=bytearray(raw), processive=False)]
+
+        def wrapper(route, attrs):
+            return exchange(sender=ghab2.mhab.pre, route=route, attributes=attrs,
+                            version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+
+        qry, grant = SerderKERI(raw=qwire), SerderKERI(raw=gwire)
+        assert mux.validate(wrapper("/multisig/qry", dict(gid=ghab2.pre, qry=qry.said)),
+                            nests=nested(qwire))[0] == qry.said
+        assert mux.validate(wrapper("/multisig/ipex-proof", dict(gid=ghab2.pre, grant=grant.said)),
+                            nests=nested(gwire))[0] == grant.said
+        member = ghab2.mhab.endorse(
+            _dhQuery(ghab2.mhab.pre), last=True, framed=True, gvrsn=Vrsn_2_0)
+        rpy = ghab2.mhab.reply(route="/test/rpy", data=dict(i=ghab2.pre), framed=True,
+                               version=Vrsn_2_0, kind=Kinds.json, gvrsn=Vrsn_2_0)
+        refused = [
+            ("/multisig/qry", dict(gid=ghab2.pre, qry=grant.said), gwire),  # wrong child ilk
+            ("/multisig/qry", dict(gid=ghab2.pre, qry=SerderKERI(raw=member).said), member),  # not group
+            ("/multisig/qry", dict(gid=ghab2.pre, qry=SerderKERI(raw=rpy).said), qwire),  # SAID mismatch
+            ("/multisig/qry", dict(gid=ghab2.pre), qwire),  # missing commitment
+            ("/multisig/ipex-proof", dict(gid=ghab2.pre, grant=qry.said), qwire),  # not a Grant
+            ("/multisig/ipex-proof", dict(gid=ghab2.pre, **{"ipex-proof": grant.said}), gwire),
+        ]
+        for route, attrs, raw in refused:
+            with pytest.raises(ValidationError):
+                mux.validate(wrapper(route, attrs), nests=nested(raw))
+        with pytest.raises(ValidationError):  # one child only
+            mux.validate(wrapper("/multisig/qry", dict(gid=ghab2.pre, qry=qry.said)),
+                         nests=nested(qwire) * 2)
+        with pytest.raises(ValidationError):
+            grouping.multisigQueryExn(ghab2, member)
+        with pytest.raises(ValidationError):
+            grouping.multisigIpexProofExn(ghab2, qwire)
+        # The wrapper must come from a current signing member of the selected group.
+        stranger = hby1.makeHab(name="coordbad-stranger", transferable=True)
+        outside = exchange(sender=stranger.pre, route="/multisig/qry",
+                           attributes=dict(gid=ghab2.pre, qry=qry.said),
+                           version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
+        with pytest.raises(ValidationError):
+            mux.validate(outside, nests=nested(qwire))
+
+
+def test_multisig_child_handlers_share_one_core_route(mockHelpingNowUTC):
+    with openMultiSig(prefix="coordshare") as ((hby1, ghab1), (_, ghab2), (_, _)):
+        qwire, _ = _coordination(ghab2)
+
+        class Owner:
+            def __init__(self, accept):
+                self.accept, self.verified, self.handled = accept, [], []
+
+            def verify(self, serder, attachments=None, nests=None):
+                self.verified.append(serder.said)
+                return self.accept
+
+            def handle(self, serder, attachments=None, nests=None):
+                self.handled.append(serder.said)
+
+        notifier = Notifier(hby=hby1)
+        mux = Multiplexor(hby=hby1, notifier=notifier)
+        exc = Exchanger(hby=hby1, handlers=[])
+        loadHandlers(exc=exc, mux=mux)
+        dh, other = Owner(True), Owner(False)
+        mux.addChildHandler("/multisig/qry", "/ipex/dhke", dh)
+        mux.addChildHandler("/multisig/qry", "/ipex/unblind", other)
+        with pytest.raises(ValidationError):
+            mux.addChildHandler("/multisig/qry", "/ipex/dhke", other)
+
+        exn, atc = grouping.multisigQueryExn(ghab2, qwire)
+        with openCF(name="coordshare-kram", base="test") as cf:
+            cf.put(_kram())
+            kvy = Kevery(db=hby1.db, lax=False, local=False,
+                         kramer=Kramer(db=hby1.db, cf=cf), exc=exc)
+            Parser(version=Vrsn_2_0).parse(ims=bytearray(exn.raw + atc), kvy=kvy, exc=exc)
+
+        # The delegate owns the child; the shared route's default mux path did nothing.
+        assert dh.verified == [exn.said] and dh.handled == [exn.said]
+        assert other.verified == [] and other.handled == []
+        assert not notifier.signaler.signals
+        assert not hby1.db.meids.get(keys=(SerderKERI(raw=qwire).said,))
+        assert exc.routes["/multisig/qry"].resource == "/multisig/qry"

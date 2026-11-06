@@ -4,8 +4,8 @@ from types import SimpleNamespace
 
 from ... import Kinds, Vrsn_2_0
 from ...acdc import chaining, ipexing
-from ...app import Multiplexor, multisigExn, multisigRpyExn
-from ...core import BlindState, BoundState, Parser, exchange, messagize
+from ...app import Multiplexor, multisigExn, multisigQueryExn, multisigRpyExn
+from ...core import BlindState, BoundState, Parser, messagize
 from ...kering import ConfigurationError, KeriError
 from ...peer.exchanging import serializeMessage, serializeParsedSubstream
 from .presenting import currentIssued, xid
@@ -31,8 +31,8 @@ class _Proposal:
 class GroupUnblind:
     """The command queues authenticated wrappers; v2 IPEX owners verify every child.
 
-    /multisig/qry is this CLI's coordination extension, not an auxiliary protocol
-    route. Its {gid, qry} commitment covers one ordinary v2 query substream.
+    /multisig/qry is the core local coordination profile route, not an auxiliary
+    protocol route. Its {gid, qry} commitment covers one ordinary v2 query substream.
     The selected proposer authors bytes only; v2 verified indices elect delivery.
     """
     def __init__(self, owner, grant, proposer, notifier, *, requester=False):
@@ -72,8 +72,8 @@ class GroupUnblind:
         if (wrapper.sad['a'] != dict(gid=self.hab.pre, **{field: body.said})
                 or body.pvrsn != Vrsn_2_0 or body.pre != self.hab.pre):
             return False
+        self.mux.validate(wrapper, nests=nests)
         if field == 'exn':
-            self.mux.validate(wrapper, nests=nests)
             if (body.ilk != 'exn' or body.route != '/ipex/admit'
                     or body.sad['p'] != self.grant.said or body.sad['x'] != self.operation
                     or body.sad['ri'] != self.grant.pre or body.sad['a'] != dict(m=self.owner.args.message)):
@@ -97,11 +97,8 @@ class GroupUnblind:
         self.frozen[field] = child.serder.raw
         self.contributed.add(field)
         if field == 'qry':
-            wrapper = exchange(sender=self.hab.mhab.pre, route='/multisig/qry',
-                attributes=dict(gid=self.hab.pre, qry=child.serder.said),
-                version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
-            wire = self.hab.mhab.endorse(wrapper, framed=False, gvrsn=Vrsn_2_0,
-                                       nests=[serializeParsedSubstream(child)])
+            wrapper, atc = multisigQueryExn(self.hab, raw)
+            wire = wrapper.raw + atc
         else:
             if field == 'rpy':
                 # The existing wrapper builder expects ordinary body+attachments, not a nested stream.

@@ -6,9 +6,9 @@ from types import SimpleNamespace
 
 from ... import Kinds, Vrsn_2_0
 from ...acdc import Registrar, ipexing, regeventing
-from ...app import Multiplexor, multisigExn
+from ...app import Multiplexor, multisigExn, multisigQueryExn
 from ...app.grouping import MultisigNotificationHandler
-from ...core import Parser, SerderACDC, exchange, messagize
+from ...core import Parser, SerderACDC, messagize
 from ...kering import ConfigurationError, KeriError
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from .credentialing import recipient
@@ -31,6 +31,7 @@ class _QueryProposal:
                 return False
             child = SimpleNamespace(**nests[0]) if isinstance(nests[0], dict) else nests[0]
             body = child.serder
+            operation.mux.validate(serder, nests=nests)
             return (serder.pvrsn == Vrsn_2_0
                 and serder.pre in operation.owner.hby.db.signingMembers(pre=operation.owner.hab.pre)
                 and serder.sad['a'] == dict(gid=operation.owner.hab.pre, qry=body.said)
@@ -161,11 +162,8 @@ class GroupIssuance:
         owner = self.owner
         child = Parser(version=Vrsn_2_0).parseOneBare(ims=bytearray(raw), processive=False)
         self.query = child.serder.raw
-        wrapper = exchange(sender=owner.hab.mhab.pre, route='/multisig/qry',
-            attributes=dict(gid=owner.hab.pre, qry=child.serder.said),
-            version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
-        wire = owner.hab.mhab.endorse(wrapper, framed=False, gvrsn=Vrsn_2_0,
-                                     nests=[serializeParsedSubstream(child)])
+        wrapper, atc = multisigQueryExn(owner.hab, raw)
+        wire = wrapper.raw + atc
         owner.psr.parse(ims=bytearray(raw), local=True)
         for member in owner.hby.db.signingMembers(pre=owner.hab.pre):
             if member != owner.hab.mhab.pre:

@@ -5,15 +5,14 @@ from types import SimpleNamespace
 
 from ... import Kinds, Vrsn_2_0
 from ...acdc import chaining, ipexing, regeventing
-from ...app import Multiplexor, multisigExn, multisigRpyExn
-from ...core import (BlindState, Blinder, Parser, Prefixer, SealEvent, SerderACDC,
-                     exchange, messagize)
+from ...app import Multiplexor, multisigExn, multisigIpexProofExn, multisigRpyExn
+from ...core import BlindState, Blinder, Parser, Prefixer, SealEvent, SerderACDC, messagize
 from ...kering import ConfigurationError, ValidationError
 from ...peer.exchanging import (loadParsedNestedSubstreams, serializeMessage,
                                serializeParsedSubstream, verify)
 
 
-# This command's group coordination extension, not a standardized auxiliary route.
+# Core local coordination profile route, not a standardized auxiliary route.
 ProofRoute = '/multisig/ipex-proof'
 
 
@@ -70,6 +69,7 @@ class GroupAdmission:
                 or wrapper.sad['a'] != dict(gid=self.hab.pre, grant=self.grant.said)
                 or len(nests) != 1):
             return False
+        self.mux.validate(wrapper, nests=nests)
         child = SimpleNamespace(**nests[0]) if isinstance(nests[0], dict) else nests[0]
         if child.serder.raw != self.grant.raw:
             return False
@@ -244,13 +244,9 @@ class GroupAdmission:
                     public = b''.join(owner.hby.db.clonePreIter(self.grant.pre, gvrsn=Vrsn_2_0))
                     public += b''.join(owner.evidence(SerderACDC(raw=raw), issuer=self.grant.pre)
                         for raw in owner.rgy.store.cloneTelIter(registry))
-                    completed = Parser(version=Vrsn_2_0).parseOneBare(
-                        ims=serializeMessage(owner.hby, self.grant.said), processive=False)
-                    envelope = exchange(sender=self.hab.mhab.pre, route=ProofRoute,
-                        attributes=dict(gid=self.hab.pre, grant=self.grant.said), version=Vrsn_2_0,
-                        gvrsn=Vrsn_2_0, kind=Kinds.json)
-                    proof = self.hab.mhab.endorse(envelope, last=False, framed=False,
-                        gvrsn=Vrsn_2_0, nests=[serializeParsedSubstream(completed)])
+                    envelope, atc = multisigIpexProofExn(
+                        self.hab, serializeMessage(owner.hby, self.grant.said))
+                    proof = envelope.raw + atc
                     for member in self.hab.db.signingMembers(pre=self.hab.pre):
                         if member != self.hab.mhab.pre:
                             yield from owner.send(public, member)
