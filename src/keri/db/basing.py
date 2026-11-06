@@ -1175,6 +1175,10 @@ class Baser(LMDBer):
 
         self.essrs = subing.CesrIoSetSuber(db=self, subkey="essrs.", klas=coring.Texter)
 
+        # /registry/root copies stored in exns/essrs and awaiting automatic
+        # retention, keyed by exn SAID; value is the retry deadline
+        self.rrpe = subing.CesrSuber(db=self, subkey="rrpe.", klas=coring.Dater)
+
         # registry state authenticated for each node an accepted grant disclosed,
         # keyed by (exchange SAID, node SAID); recorded for the application to judge
         self.exrs = koming.Komer(db=self, subkey="exrs.",
@@ -1533,7 +1537,7 @@ class Baser(LMDBer):
             self.qnfs, self.uwes, self.misfits, self.delegables,
             self.pdes, self.udes, self.rpes, self.ldes, self.epsd, self.emsd,
             self.eoobi, self.dpub, self.gpwe, self.gdee, self.dpwe,
-            self.gpse, self.epse, self.emse, self.dune,
+            self.gpse, self.epse, self.emse, self.dune, self.rrpe,
         ]
         total = 0
         for escrow in escrows:
@@ -1554,7 +1558,7 @@ class Baser(LMDBer):
                        self.udes, self.rpes, self.ldes, self.epsd, self.emsd,
                        self.eoobi,
                        self.dpub, self.gpwe, self.gdee, self.dpwe, self.gpse,
-                       self.epse, self.emse, self.dune]:
+                       self.epse, self.emse, self.dune, self.rrpe]:
             count = escrow.cntAll()
             escrow.trim()
             logger.info(f"KEL: Cleared {count} escrows from ({escrow}")

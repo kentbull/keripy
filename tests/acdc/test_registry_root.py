@@ -122,10 +122,9 @@ def copy(w, sender, recipient, *, td=None, gid=None):
 
 
 def seed(w):
-    """The issuer's cross-party copy gives Alice's group its first root."""
+    """The issuer's cross-party copy gives Alice's group its first root on arrival."""
     copy(w, w.issuer, w.alice)
-    assert w.alice.root.receive(stored(w.alice)[0]) is True
-    assert held(w, w.alice).qb64 == w.root.qb64
+    assert held(w, w.alice).qb64 == w.root.qb64 and stored(w.alice) == []
 
 
 def rotate(w, members, current, *, sith, hold=()):
@@ -168,61 +167,76 @@ def rotate(w, members, current, *, sith, hold=()):
 
 
 @pytest.mark.parametrize('enabled', [False, True])
-def test_cross_party_then_member_copy_with_commitment_or_held_opening(enabled):
+def test_member_copy_is_retained_on_arrival_by_commitment_reproduction(enabled):
     with world(enabled=enabled) as w:
         seed(w)
         bob = w.bob
         assert held(w, bob) is None
-        copy(w, w.alice, bob)
-        pending = bob.root.pending()
-        assert [(p['sender'], p['gid'], p['registry']) for p in pending] == [
-            (w.alice.hab.pre, w.gid, w.registry)]
-        note = [n for _, n in bob.notifier.noter.notes.getTopItemIter()]
-        assert note[0].attrs['r'] == RegistryRoot.Note and note[0].attrs['d'] == pending[0]['said']
-        # Nothing decrypts or retains until the receiver explicitly approves.
-        assert held(w, bob) is None
-        assert bob.root.receive(pending[0]['said'], opening=w.opening) is True
-        assert held(w, bob).qb64 == w.root.qb64
-        assert bob.root.pending() == []
-        assert next(bob.notifier.noter.notes.getTopItemIter())[1].read
-        # A second holder's identical copy is idempotent.
-        dup = copy(w, w.issuer, bob)
-        assert bob.root.receive(dup) is True and bob.root.pending() == []
+        pending = copy(w, w.alice, bob)
+        # No approval step: the handler verifies and retains the root at once.
+        assert held(w, bob).qb64 == w.root.qb64 and bob.root.pending() == []
+        assert bob.hby.db.exns.get(keys=(pending,)) is not None
+        (note,) = notes(bob)
+        assert note['r'] == RegistryRoot.Note and note['d'] == pending and 'deferred' not in note
+        # A second holder's identical copy is retained idempotently with no second note.
+        copy(w, w.issuer, bob)
+        assert held(w, bob).qb64 == w.root.qb64 and bob.root.pending() == []
+        assert len(notes(bob)) == 1
 
 
-def test_unverifiable_root_stays_pending_until_evidence_is_held():
+def test_unverifiable_root_stays_escrowed_until_a_held_opening_is_supplied():
     with world() as w:
         seed(w)
         pending = copy(w, w.alice, w.bob, td='')
+        assert stored(w.bob) == [pending] and held(w, w.bob) is None and notes(w.bob) == []
+        w.bob.exc.processEscrow()
+        assert stored(w.bob) == [pending]
         with pytest.raises(RootUnverified):
             w.bob.root.receive(pending)
-        assert stored(w.bob) == [pending] and held(w, w.bob) is None
+        assert stored(w.bob) == [pending]
+        # Manual retry supplies evidence the copy lacks.
         assert w.bob.root.receive(pending, opening=w.opening) is True
+        assert held(w, w.bob).qb64 == w.root.qb64 and stored(w.bob) == []
 
 
-def test_pending_copy_survives_a_fresh_handler_over_the_same_store():
-    with world() as w:
+def test_escrowed_copy_is_retried_by_a_fresh_handler_over_the_same_store():
+    with world(late=('bob',)) as w:
         seed(w)
         pending = copy(w, w.alice, w.bob)
+        assert stored(w.bob) == [pending]
+        for side, kel, tel in w.late:
+            receive(side, kel)
+            receive(side, tel)
         restarted = RegistryRoot(w.bob.hby, w.bob.rgy)
-        Exchanger(hby=w.bob.hby, handlers=[restarted])
+        exc = Exchanger(hby=w.bob.hby, handlers=[restarted])
         assert [item['said'] for item in restarted.pending()] == [pending]
-        assert restarted.receive(pending) is True
-        assert held(w, w.bob).qb64 == w.root.qb64
+        exc.processEscrow()
+        assert held(w, w.bob).qb64 == w.root.qb64 and restarted.pending() == []
+
+
+def test_escrowed_copy_is_dropped_after_its_timeout(monkeypatch):
+    with world(late=('bob',)) as w:
+        seed(w)
+        monkeypatch.setattr(RegistryRoot, 'TimeoutRRE', -1)
+        pending = copy(w, w.alice, w.bob)
+        assert stored(w.bob) == []
+        assert w.bob.hby.db.exns.get(keys=(pending,)) is not None and held(w, w.bob) is None
 
 
 @pytest.mark.parametrize('enabled', [False, True])
-def test_duplicate_delivery_is_stored_once_with_one_note(enabled):
+def test_duplicate_delivery_is_idempotent(enabled):
     with world(enabled=enabled) as w:
         seed(w)
         wire = w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry, td=w.acdc.said)
         receive(w.bob, wire)
         receive(w.bob, wire)
-        assert stored(w.bob) == [said(wire)]
+        assert held(w, w.bob).qb64 == w.root.qb64 and stored(w.bob) == []
         assert w.bob.notifier.noter.notes.cntAll() == 1
-        assert w.bob.root.receive(said(wire)) is True
+        # A duplicate of a still-escrowed copy is not escrowed twice.
+        wire = w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry, td='')
         receive(w.bob, wire)
-        assert w.bob.notifier.noter.notes.cntAll() == 1 and w.bob.root.pending() == []
+        receive(w.bob, wire)
+        assert stored(w.bob) == [said(wire)]
 
 
 def test_kram_exempts_a_copy_delivered_long_after_its_window():
@@ -235,9 +249,7 @@ def test_kram_exempts_a_copy_delivered_long_after_its_window():
         stale = helping.toIso8601(helping.nowUTC() - timedelta(days=1))
         wire = forge(w.alice, w.bob.hab.pre, w.gid, w.registry, plain, stamp=stale)
         receive(w.bob, wire)
-        assert stored(w.bob) == [said(wire)]
-        assert w.bob.root.receive(said(wire)) is True
-        assert held(w, w.bob).qb64 == w.root.qb64
+        assert stored(w.bob) == [] and held(w, w.bob).qb64 == w.root.qb64
 
 
 def notes(side):
@@ -245,21 +257,20 @@ def notes(side):
 
 
 @pytest.mark.parametrize('missing', ['tel', 'rotation'])
-def test_offline_newcomer_copy_is_stored_then_approved_once_local_state_arrives(missing):
+def test_offline_newcomer_copy_is_retained_by_escrow_once_local_state_arrives(missing):
     with world(newcomer=True, late=('outsider',) if missing == 'tel' else ()) as w:
         seed(w)
         copy(w, w.alice, w.bob)
-        w.bob.root.receive(stored(w.bob)[0])
+        assert held(w, w.bob).qb64 == w.root.qb64
         current = [w.alice, w.bob, w.outsider]
         rotate(w, current, current, sith='2', hold=(w.outsider,) if missing == 'rotation' else ())
         # The witnesser sends catch-up while the newcomer still lacks local state.
         pending = copy(w, w.alice, w.outsider)
-        assert stored(w.outsider) == [pending]
-        (note,) = notes(w.outsider)
-        assert note['d'] == pending and note['deferred']
+        assert stored(w.outsider) == [pending] and notes(w.outsider) == []
+        w.outsider.exc.processEscrow()
+        assert held(w, w.outsider) is None and stored(w.outsider) == [pending]
         with pytest.raises(RootDeferred, match='not yet verifiable'):
             w.outsider.root.receive(pending)
-        assert held(w, w.outsider) is None and stored(w.outsider) == [pending]
         if missing == 'tel':
             for side, kel, tel in w.late:
                 receive(side, kel)
@@ -268,20 +279,42 @@ def test_offline_newcomer_copy_is_stored_then_approved_once_local_state_arrives(
             for wire in w.held:
                 w.outsider.psr.parse(ims=bytearray(wire), framed=False, local=True)
             w.outsider.kvy.processEscrows()
-        assert w.outsider.root.receive(pending) is True
-        assert held(w, w.outsider).qb64 == w.root.qb64
+        assert held(w, w.outsider) is None
+        # Ordinary escrow processing retains it; no approval, no resend.
+        w.outsider.exc.processEscrow()
+        assert held(w, w.outsider).qb64 == w.root.qb64 and stored(w.outsider) == []
+        assert [note['d'] for note in notes(w.outsider)] == [pending]
 
 
-def test_member_removed_between_arrival_and_approval_is_refused():
-    with world(newcomer=True) as w:
+def test_member_removed_before_escrow_retry_is_refused_and_dropped():
+    with world(newcomer=True, late=('bob',)) as w:
         seed(w)
         pending = copy(w, w.alice, w.bob)
         assert stored(w.bob) == [pending]
         rotate(w, [w.alice, w.outsider], [w.alice, w.outsider], sith='2')
+        for side, kel, tel in w.late:
+            receive(side, kel)
+            receive(side, tel)
+        w.bob.exc.processEscrow()
+        assert held(w, w.bob) is None and stored(w.bob) == [] and notes(w.bob) == []
         with pytest.raises(ValidationError, match='current signing member') as refusal:
             w.bob.root.receive(pending)
         assert not isinstance(refusal.value, RootUnverified)
-        assert held(w, w.bob) is None and stored(w.bob) == [pending]
+
+
+def test_deferred_copy_with_unbound_plaintext_is_dropped_on_retry():
+    with world(late=('bob',)) as w:
+        seed(w)
+        plain = dict(i=w.issuer.hab.pre, ri=w.bob.hab.pre, gid=w.gid, rd=w.registry,
+                     s=w.root.qb64, e=w.event.said, td=w.acdc.said)
+        wire = forge(w.alice, w.bob.hab.pre, w.gid, w.registry, plain)
+        receive(w.bob, wire)
+        assert stored(w.bob) == [said(wire)]
+        for side, kel, tel in w.late:
+            receive(side, kel)
+            receive(side, tel)
+        w.bob.exc.processEscrow()
+        assert stored(w.bob) == [] and held(w, w.bob) is None and notes(w.bob) == []
 
 
 def forge(sender, recipient, gid, registry, plain, *, digest=None, sealed=None, stamp=None):
@@ -340,8 +373,8 @@ def test_copies_missing_local_state_are_stored_pending_not_dropped(fault):
                      s=w.root.qb64, e=w.event.said)
         wire = forge(alice, bob.hab.pre, gid, registry, plain)
         receive(bob, wire)
-        assert stored(bob) == [said(wire)]
-        assert notes(bob)[0]['deferred']
+        assert stored(bob) == [said(wire)] and notes(bob) == []
+        bob.exc.processEscrow()
         with pytest.raises(RootDeferred):
             bob.root.receive(said(wire))
         assert held(w, bob) is None and stored(bob) == [said(wire)]
@@ -349,7 +382,7 @@ def test_copies_missing_local_state_are_stored_pending_not_dropped(fault):
 
 @pytest.mark.parametrize('fault', ['inner-sender', 'inner-recipient', 'inner-gid', 'inner-registry',
                                    'noncanonical-root', 'wrong-root', 'stale-key'])
-def test_stored_copy_with_bad_plaintext_or_key_is_refused_on_receive(fault):
+def test_copy_with_bad_plaintext_key_or_root_is_never_retained(fault):
     with world() as w:
         seed(w)
         alice, bob = w.alice, w.bob
@@ -375,12 +408,15 @@ def test_stored_copy_with_bad_plaintext_or_key_is_refused_on_receive(fault):
                     receive(side, kel)
         receive(bob, wire)
         pending = said(wire)
-        assert stored(bob) == [pending]
+        assert held(w, bob) is None and notes(bob) == []
+        assert bob.hby.db.exns.get(keys=(pending,)) is not None
+        # Hard refusals leave escrow at once; a wrong root may still be an
+        # unknown commitment, so it waits for evidence until its timeout.
+        assert stored(bob) == ([pending] if fault == 'wrong-root' else [])
         error = RootUnverified if fault == 'wrong-root' else RootRefused
         with pytest.raises(error):
             bob.root.receive(pending)
-        assert held(w, bob) is None and stored(bob) == [pending]
-        assert bob.root.dismiss(pending) == 1 and bob.notifier.noter.notes.cntAll() == 0
+        assert held(w, bob) is None
 
 
 def test_conflicting_retained_root_is_never_replaced():
@@ -389,17 +425,18 @@ def test_conflicting_retained_root_is_never_replaced():
         other = Salter(raw=b'wrong-test-root!')
         w.bob.hby.mgr.putRegistryRoot(w.gid, w.registry, other)
         pending = copy(w, w.alice, w.bob)
+        # Refused on arrival and dropped from escrow; the retained root stays.
+        assert held(w, w.bob).qb64 == other.qb64 and stored(w.bob) == [] and notes(w.bob) == []
         with pytest.raises(RootRefused):
             w.bob.root.receive(pending, opening=w.opening)
         assert held(w, w.bob).qb64 == other.qb64
-        assert w.bob.root.pending()[0]['error']
 
 
 def test_newcomer_catches_up_after_real_rotation_and_removed_member_is_never_recipient():
     with world(newcomer=True) as w:
         seed(w)
         copy(w, w.alice, w.bob)
-        w.bob.root.receive(stored(w.bob)[0])
+        assert held(w, w.bob).qb64 == w.root.qb64
         with pytest.raises(ValidationError, match='current signing member'):
             w.alice.root.prepare(w.alice.hab, w.outsider.hab.pre, w.gid, w.registry)
         current = [w.alice, w.bob, w.outsider]
@@ -408,7 +445,7 @@ def test_newcomer_catches_up_after_real_rotation_and_removed_member_is_never_rec
         assert w.alice.root.witnesser(w.alice.group, rotation)
         assert not w.bob.root.witnesser(w.bob.group, rotation)
         copy(w, w.alice, w.outsider)
-        assert w.outsider.root.receive(stored(w.outsider)[0]) is True
+        assert stored(w.outsider) == []
         # Every current member holds every root the group knows.
         assert {held(w, side).qb64 for side in current} == {w.root.qb64}
 
@@ -417,14 +454,13 @@ def test_full_roster_replacement_catch_up_from_removed_historical_member():
     with world(newcomer=True) as w:
         seed(w)
         copy(w, w.alice, w.bob)
-        w.bob.root.receive(stored(w.bob)[0])
+        assert held(w, w.bob).qb64 == w.root.qb64
         rotation = rotate(w, [w.outsider], [w.outsider], sith='1')
         assert w.bob.root.newcomers(w.bob.group, rotation) == [w.outsider.hab.pre]
         # Bob left the roster: never a recipient, still an authorized historical sender.
         with pytest.raises(ValidationError, match='current signing member'):
             w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry)
-        pending = copy(w, w.bob, w.outsider)
-        assert w.outsider.root.receive(pending) is True
+        copy(w, w.bob, w.outsider)
         assert held(w, w.outsider).qb64 == w.root.qb64
 
 
@@ -500,8 +536,7 @@ def test_every_member_holds_every_root_after_group_dh():
                 for registry in h.registries:
                     deliver(side, custodian.root.prepare(custodian.member, side.member.pre,
                         custodian.hab.pre, registry.regk, td=hints[registry.regk]))
-                for item in side.root.pending():
-                    assert side.root.receive(item['said']) is True
+                assert side.root.pending() == []
                 assert side.root.held(side.hab.pre) == sorted(regks)
         for registry in h.registries:
             for members in (h.issuers, h.issuees):

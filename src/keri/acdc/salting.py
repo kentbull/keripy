@@ -11,13 +11,18 @@ and the first ESSR carried through a witness mailbox. Its v2 ``a`` field map
 the Exchanger checks only the v1 form, so this handler verifies it.
 
 Copies are store-and-forward: KRAM exempts the route
-(``Kramer.StoreForwardDenials``), the exchange store keys them by SAID, and
-copies that cannot yet be authorized because local KEL, TEL or group state is
-missing are stored pending rather than dropped.
+(``Kramer.StoreForwardDenials``) and the exchange store keys them by SAID.
+Received copies are accepted automatically, with no approval step: a copy
+that verifies on arrival is retained at once, and one that cannot yet verify
+because local KEL, TEL, group or opening evidence is missing waits in a
+bounded escrow (``Baser.rrpe``) that ``processEscrows`` retries.
 """
 
+import datetime
+
 from ..app.habbing import GroupHab, Hab
-from ..core import Blinder, MtrDex, Number, Prefixer, Salter
+from ..core import Blinder, Dater, MtrDex, Number, Prefixer, Salter
+from ..help import helping
 from hio.help import ogler
 from ..kering import AuthError, Ilks, KeriError, Kinds, ValidationError, Vrsn_2_0
 from .regeventing import vetAnchor, vetBlind
@@ -115,23 +120,28 @@ class RegistryRoot:
     ``ri`` not a local individual habitat, ``i == ri``, ``gid`` a local
     habitat that is not this member's group, a non-Ed25519 recipient key, or
     a membership or sender-authority failure against complete local state.
-    When the failure is only missing local state (registry TEL, sender or
-    group KEL, local group habitat, or a group rotation that commits to the
-    recipient's key but is not yet accepted here) the copy is deferred: it is
-    stored with a note carrying ``deferred``, so an offline newcomer never
-    needs a resend. A SAID already stored is ignored, so duplicate deliveries
-    add no note.
+    A SAID already stored is ignored, so duplicate deliveries are idempotent.
 
-    Stored copies persist in the Exchanger's ``exns``/``essrs`` stores with a
-    Notifier note, so pending copies survive restart without a new ledger.
-    Nothing is decrypted until ``receive``, the explicit receiver approval,
-    which re-runs the full authorization, checks the plaintext binding and
-    verifies the root against a held opening or by reproducing the BUP ``b``
-    commitment before retention.
+    Acceptance is automatic. ``handle`` escrows the stored copy (exchange
+    store plus ``rrpe`` deadline) and immediately tries to retain it: full
+    authorization, decryption, plaintext binding and root verification
+    against a held opening or by reproducing the BUP ``b`` commitment. On
+    success the root is retained and the escrow entry removed; a newly
+    retained root adds one informational Notifier note. A copy that is not
+    yet verifiable (missing registry TEL, sender, recipient or holder key
+    state, local group habitat, an unaccepted rotation that adds the
+    recipient, or missing opening evidence) stays escrowed and
+    ``processEscrows`` retries it, which the Exchanger drives from
+    ``processEscrow``, until ``TimeoutRRE`` elapses. A copy refused on any
+    attempt (plaintext mismatch, undecryptable, membership lost, or a
+    different root already retained, which is never replaced) is dropped
+    from escrow. ``receive`` is a manual retry that can supply a BUP or
+    opening.
     """
 
     Route = "/registry/root"
     Note = "/exn/registry/root"
+    TimeoutRRE = 3600  # seconds a stored copy is retried before it is dropped
     States = ("issued", "revoked")
 
     def __init__(self, hby, rgy, notifier=None):
@@ -342,40 +352,25 @@ class RegistryRoot:
         self.authorize(serder.pre, recipient, gid, registry)
         return hab, gid, registry
 
-    def _deferral(self, serder, essr):
-        """Return None when authorized now, else the RootDeferred reason; raise on refusal."""
-        try:
-            self._scope(serder, essr)
-        except RootDeferred as ex:
-            return str(ex)
-        return None
-
     def verify(self, serder, attachments=None, essr=None, **kwa):
         """Store authorized or deferred copies once; refuse the rest; never decrypt here."""
         if self.hby.db.exns.get(keys=(serder.said,)) is not None:
             logger.info("Registry root copy %s is already stored", serder.said)
             return False
         try:
-            reason = self._deferral(serder, essr)
+            self._scope(serder, essr)
+        except RootDeferred as ex:
+            logger.info("Registry root copy %s stored pending local state: %s", serder.said, ex)
         except (KeriError, ValueError, KeyError, TypeError, AttributeError) as ex:
             logger.info("Registry root copy %s refused: %s", serder.said, ex)
             return False
-        if reason is not None:
-            logger.info("Registry root copy %s stored pending local state: %s", serder.said, reason)
         return True
 
     def handle(self, serder, attachments=None, essr=None, **kwa):
-        if self.notifier is not None:
-            data = serder.ked['a']
-            attrs = dict(r=self.Note, d=serder.said, i=serder.pre,
-                         ri=serder.ked['ri'], gid=data['gid'], rd=data['rd'])
-            try:
-                reason = self._deferral(serder, essr)
-            except (KeriError, ValueError, KeyError, TypeError, AttributeError):
-                reason = None
-            if reason is not None:
-                attrs['deferred'] = reason
-            self.notifier.add(attrs=attrs)
+        """Escrow the stored copy and retain its root now when it verifies."""
+        deadline = helping.nowUTC() + datetime.timedelta(seconds=self.TimeoutRRE)
+        self.hby.db.rrpe.put(keys=(serder.said,), val=Dater(dts=helping.toIso8601(deadline)))
+        self._attempt(serder.said)
 
     def _stored(self, said):
         serder = self.hby.db.exns.get(keys=(said,))
@@ -410,16 +405,12 @@ class RegistryRoot:
             raise RootRefused("registry root is not a canonical Salt128") from None
         return gid, registry, root, plain
 
-    def receive(self, said, *, event=None, opening=None):
-        """Explicitly approve one stored copy; verify and retain its root.
+    def _accept(self, said, *, event=None, opening=None):
+        """Verify one stored copy and retain its root; return True when newly retained.
 
-        ``event`` overrides the sender's BUP hint; ``opening`` is a held
-        Blinder for that BUP. Without one, a held opening in the registry
-        store is used, else the BUP ``b`` commitment is reproduced from
-        ``(uuid, td, ts)`` using the sender's ``td`` hint. Returns True on
-        retention. RootRefused marks a copy that can never be retained;
-        RootUnverified leaves it pending; its RootDeferred subclass names the
-        local KEL, TEL or group state still missing.
+        Raises RootUnverified (or its RootDeferred) while the copy may still
+        verify later, and RootRefused or another ValidationError when it never
+        can be retained here.
         """
         serder, essr = self._stored(said)
         try:
@@ -442,8 +433,60 @@ class RegistryRoot:
         retained = self.hby.mgr.getRegistryRoot(gid, registry)
         if retained is not None and retained.qb64 != root.qb64:
             raise RootRefused("a different root is already retained for this holder and registry")
-        self.hby.mgr.putRegistryRoot(gid, registry, root)
-        self._notes(said, read=True)
+        added = self.hby.mgr.putRegistryRoot(gid, registry, root)
+        self.hby.db.rrpe.rem(keys=(said,))
+        if added and self.notifier is not None:
+            self.notifier.add(attrs=dict(r=self.Note, d=said, i=serder.pre, ri=serder.ked['ri'],
+                                         gid=gid, rd=registry))
+        logger.info("Registry root copy %s retained for holder %s registry %s", said, gid, registry)
+        return added
+
+    def _attempt(self, said):
+        """Try one escrowed copy: True retained, None still pending, False dropped."""
+        try:
+            self._accept(said)
+        except (RootUnverified, AuthError) as ex:
+            deadline = self.hby.db.rrpe.get(keys=(said,))
+            if deadline is None or helping.nowUTC() > deadline.datetime:
+                self.hby.db.rrpe.rem(keys=(said,))
+                logger.info("Registry root copy %s timed out pending: %s", said, ex)
+                return False
+            logger.debug("Registry root copy %s stays pending: %s", said, ex)
+            return None
+        except (KeriError, ValueError, KeyError, TypeError, AttributeError) as ex:
+            self.hby.db.rrpe.rem(keys=(said,))
+            logger.info("Registry root copy %s refused: %s", said, ex)
+            return False
+        return True
+
+    def processEscrows(self):
+        """Retry every escrowed copy; drop refused or timed-out ones.
+
+        The Exchanger calls this from ``processEscrow`` when the handler is
+        registered, so ordinary escrow loops drive it.
+        """
+        for (said,), _ in list(self.hby.db.rrpe.getTopItemIter()):
+            self._attempt(said)
+
+    def receive(self, said, *, event=None, opening=None):
+        """Manually retry one stored copy with an optional BUP and held opening.
+
+        Retention is automatic; use this only to supply evidence the copy
+        lacks: ``event`` overrides the sender's BUP hint and ``opening`` is a
+        held Blinder for that BUP. Without one, a held opening in the registry
+        store is used, else the BUP ``b`` commitment is reproduced from
+        ``(uuid, td, ts)`` using the sender's ``td`` hint. Returns True on
+        retention. RootRefused marks a copy that can never be retained and
+        drops it from escrow; RootUnverified leaves it as it was; its
+        RootDeferred subclass names the local state still missing.
+        """
+        try:
+            self._accept(said, event=event, opening=opening)
+        except (RootUnverified, AuthError):
+            raise
+        except ValidationError:
+            self.hby.db.rrpe.rem(keys=(said,))
+            raise
         return True
 
     def _reproduces(self, blid, uuid, td, gid):
@@ -459,46 +502,19 @@ class RegistryRoot:
         return Blinder.unblind(said=blid, uuid=uuid, acdc=td, states=self.States,
                                bound=True, bounds=bounds) is not None
 
-    def pending(self):
-        """List stored copies to local recipients whose root is not yet retained.
 
-        Each item has ``said, sender, recipient, gid, registry, dt``. With an
-        unlocked Keeper a retained identical root resolves the copy; a
-        different retained root is reported with ``error``.
+    def pending(self):
+        """List escrowed copies awaiting automatic retention, without decrypting.
+
+        Each item has ``said, sender, recipient, gid, registry, dt, deadline``.
         """
         items = []
-        for (said,), serder in self.hby.db.exns.getTopItemIter():
-            if serder.ked.get('r') != self.Route or serder.ked.get('ri') not in self.hby.habs:
+        for (said,), deadline in self.hby.db.rrpe.getTopItemIter():
+            serder = self.hby.db.exns.get(keys=(said,))
+            if serder is None:
                 continue
             data = serder.ked.get('a') or {}
-            gid, registry = data.get('gid'), data.get('rd')
-            item = dict(said=said, sender=serder.pre, recipient=serder.ked['ri'], gid=gid,
-                        registry=registry, dt=serder.ked.get('dt'))
-            try:
-                retained = self.hby.mgr.getRegistryRoot(gid, registry)
-            except (KeriError, ValueError):
-                retained = None
-            if retained is not None:
-                try:
-                    _, _, root, _ = self._open(*self._stored(said))
-                except (KeriError, ValueError) as error:
-                    item['error'] = str(error)
-                else:
-                    if root.qb64 == retained.qb64:
-                        continue
-                    item['error'] = "a different root is already retained"
-            items.append(item)
+            items.append(dict(said=said, sender=serder.pre, recipient=serder.ked.get('ri'),
+                              gid=data.get('gid'), registry=data.get('rd'),
+                              dt=serder.ked.get('dt'), deadline=deadline.dts))
         return items
-
-    def _notes(self, said, *, read=False):
-        if self.notifier is None:
-            return 0
-        count = 0
-        for _, note in list(self.notifier.noter.notes.getTopItemIter()):
-            if note.attrs.get('r') == self.Note and note.attrs.get('d') == said:
-                count += bool(self.notifier.mar(note.rid) if read else self.notifier.rem(note.rid))
-        return count
-
-    def dismiss(self, said):
-        """Remove this copy's Notifier note; the exchange store is unchanged."""
-        return self._notes(said)

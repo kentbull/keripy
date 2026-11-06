@@ -92,8 +92,8 @@ def group_copy(tmp_path, live_parties, data='{"role":"group reader"}'):
         '--registry', body.regid, '--acdc', body.said, '--out', str(wire)))
     assert [(item['recipient'], item['gid']) for item in sent] == [(target['member'], target['pre'])]
     received = results(kli(tmp_path, 'vc', 'registry', 'root', 'receive', *target['args'],
-        '--registry', body.regid, '--sender', lead['member'], '--message', str(wire)))[-1]
-    assert received['received'] and received['said'] == sent[0]['exchange']
+        '--registry', body.regid, '--message', str(wire)))
+    assert received == [dict(gid=target['pre'], registry=body.regid, retained=True)]
     saved = retained(target, body)
     assert saved[0] == before[0] and saved[1] != before[0] and saved[2] == before[2]
     assert retained(lead, body) == before and before[0].encode() not in wire.read_bytes()
@@ -127,7 +127,7 @@ def accept_public(side, raw):
         hby.close()
 
 
-def test_cross_party_file_fallback_lists_then_retains_by_commitment(tmp_path, live_parties):
+def test_cross_party_file_fallback_retains_by_commitment_on_arrival(tmp_path, live_parties):
     issuer, receiver = live_parties
     body, event, _, expected, public, _ = existing_registry(tmp_path, live_parties)
     accept_public(receiver, public.read_bytes())
@@ -140,14 +140,12 @@ def test_cross_party_file_fallback_lists_then_retains_by_commitment(tmp_path, li
         '--registry', body.regid, '--recipient', receiver['pre'], '--out', str(wire), succeeds=False)
     assert 'output already exists' in refused
     receive = ['vc', 'registry', 'root', 'receive', *receiver['args']]
-    output = kli(tmp_path, *receive, '--registry', body.regid, '--sender', receiver['pre'],
-                 '--message', str(wire), succeeds=False)
-    assert 'no matching pending' in output and root(receiver, receiver['pre'], body.regid) is None
-    assert [item['said'] for item in results(kli(tmp_path, *receive))] == [sent[0]['exchange']]
-    received = results(kli(tmp_path, *receive, '--registry', body.regid, '--sender', issuer['pre']))[-1]
-    assert received['received'] and received['said'] == sent[0]['exchange']
+    received = results(kli(tmp_path, *receive, '--registry', body.regid, '--message', str(wire)))
+    assert received == [dict(gid=receiver['pre'], registry=body.regid, retained=True)]
     assert root(receiver, receiver['pre'], body.regid) == expected
+    # Nothing is left pending, and a duplicate file delivery is idempotent.
     assert results(kli(tmp_path, *receive)) == []
+    assert results(kli(tmp_path, *receive, '--registry', body.regid, '--message', str(wire))) == received
 
 
 def group_root(tmp_path, live_parties):
@@ -176,8 +174,8 @@ def test_mailbox_copy_fetched_after_the_kram_window_is_received(tmp_path, live_p
     # The peer is offline past its whole KRAM short-lag window (1 s + 5 s).
     time.sleep(8)
     received = results(kli(tmp_path, 'vc', 'registry', 'root', 'receive', *peer['args'],
-        '--registry', body.regid, '--sender', lead['member'], '--listen', '--timeout', '20'))[-1]
-    assert received['received'] and received['said'] == sent[0]['exchange']
+        '--registry', body.regid, '--listen', '--timeout', '20'))[-1]
+    assert received == dict(gid=peer['pre'], registry=body.regid, retained=True)
     assert root(peer, peer['pre'], body.regid) == expected
 
 
@@ -186,7 +184,7 @@ def test_group_member_send_defaults_to_members_through_mailbox(tmp_path, live_pa
     log = tmp_path / 'root-receive.log'
     with log.open('w+') as output:
         process = subprocess.Popen([shutil.which('kli'), 'vc', 'registry', 'root', 'receive', *peer['args'],
-            '--registry', body.regid, '--sender', lead['member'], '--listen', '--timeout', '60'],
+            '--registry', body.regid, '--listen', '--timeout', '60'],
             cwd=tmp_path, stdout=output, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + 30
@@ -202,7 +200,7 @@ def test_group_member_send_defaults_to_members_through_mailbox(tmp_path, live_pa
             process.wait(timeout=65)
             assert process.returncode == 0 and 'ERR:' not in log.read_text(), log.read_text()
             received = results(log.read_text())[-1]
-            assert received['received'] and received['said'] == sent[0]['exchange']
+            assert received == dict(gid=peer['pre'], registry=body.regid, retained=True)
         finally:
             if process.poll() is None:
                 process.terminate()
