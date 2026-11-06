@@ -482,6 +482,30 @@ def test_partial_reply_retains_verified_proofs_until_second_signature_without_pr
             h.verifier.route.complete(h.xid)
 
 
+def test_openings_exposes_only_authenticated_selected_proofs(fakeHelpingClock):
+    with presentation() as h:
+        receive(h.holder, h.verifier.route.start(h.grant.said))
+        frame = parsed(h.holder.route.cues.popleft()['msg'])
+        receive(h.verifier, signed(h.holder, frame, indices=[0]))
+        # Partially signed proofs are retained but not yet readable.
+        with pytest.raises(ValidationError):
+            h.verifier.route.openings(h.xid)
+        frame.bsqs, frame.bsss = [], []
+        receive(h.verifier, signed(h.holder, frame, indices=[1]))
+        openings = h.verifier.route.openings(h.xid)
+        assert list(openings) == [event.said for event in h.events[1:]]
+        assert {opening.said for opening in openings.values()} == {proof.said for proof in h.proofs[1:]}
+        assert all(opening.said == h.verifier.rgy.store.event(said).sad['b']
+                   for said, opening in openings.items())
+        openings.clear()  # A copy: the caller cannot change the verified cache.
+        assert len(h.verifier.route.openings(h.xid)) == len(h.events) - 1
+        with pytest.raises(ValidationError):
+            h.verifier.route.openings(Diger(ser=b"unapproved").qb64)
+        h.verifier.route.abandon(h.xid)
+        with pytest.raises(ValidationError):
+            h.verifier.route.openings(h.xid)
+
+
 def test_partial_kram_query_retains_nested_public_events():
     with presentation(True, approve_holder=False) as h:
         frame = parsed(h.verifier.route.start(h.grant.said))
