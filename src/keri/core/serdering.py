@@ -140,7 +140,8 @@ class Serdery:
         self.version = version
 
 
-    def reap(self, ims, genus, svrsn, cold=None, ctr=None, size=None, fixed=True):
+    def reap(self, ims, genus, svrsn, cold=None, ctr=None, size=None,
+             fixed=True, verify=True):
         """Extract and return Serder subclass based on protocol type reaped from
         version string inside serialized raw of Serder.
 
@@ -168,6 +169,7 @@ class Serdery:
             fixed (bool): when CESR native message.
                                True means top-level fixed field
                                False means top-level field map
+            verify (bool): True means verify message fields and SAIDs.
         """
         if ctr:  # parser sniffed and peekd so native and assigned ctr, size, fixed
             # parser already peeked to see .FixBodyGroup or .MapBodyGroup so
@@ -220,9 +222,11 @@ class Serdery:
 
 
         if smellage.proto == Protocols.keri:
-            return SerderKERI(raw=ims, strip=True, smellage=smellage)
+            return SerderKERI(raw=ims, strip=True, smellage=smellage,
+                              verify=verify)
         elif smellage.proto == Protocols.acdc:
-            return SerderACDC(raw=ims, strip=True, smellage=smellage)
+            return SerderACDC(raw=ims, strip=True, smellage=smellage,
+                              verify=verify)
         else:
             raise ProtocolError(f"Unsupported protocol type = {smellage.proto}.")
 
