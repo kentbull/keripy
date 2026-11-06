@@ -102,6 +102,17 @@ class Kramer:
         [[2, 0], Ilks.rpy, "/end/role"],
         [[2, 0], Ilks.rpy, "/loc/scheme"],
     )
+    # Store-and-forward exchanges whose acceptance does not depend on
+    # timeliness. ``/registry/root`` (``acdc.salting.RegistryRoot.Route``)
+    # copies are correct whenever they arrive, often from a witness mailbox
+    # long after any KRAM window, and the poller never re-fetches a dropped
+    # message. Their acceptance model replaces KRAM replay protection: the
+    # exchange store is keyed by SAID and the handler ignores an already
+    # stored SAID, nothing is retained until explicit receiver approval
+    # re-authorizes the copy, and a retained root is immutable.
+    StoreForwardDenials = (
+        [[2, 0], Ilks.exn, "/registry/root"],
+    )
 
     def __init__(self, db, cf=None, cues=None):
         self.db = db
@@ -118,7 +129,7 @@ class Kramer:
 
         fullDenials = kram.get('denials', [])
         if self._enabled:
-            fullDenials = self._mergeOobiDenials(fullDenials)
+            fullDenials = self._mergeBuiltinDenials(fullDenials)
 
         self._fullDenials = fullDenials
         self._denials = self._compactDenials(self._fullDenials)
@@ -130,17 +141,18 @@ class Kramer:
         self._pending = {}
 
     @classmethod
-    def _mergeOobiDenials(cls, fullDenials):
-        """Add built-in OOBI denial exemptions unless config already covers them.
+    def _mergeBuiltinDenials(cls, fullDenials):
+        """Add built-in denial exemptions unless config already covers them.
 
         OOBI endpoint discovery replies rely on BADA acceptance rather than
         KRAM replay protection, so V2 service-endpoint reply routes must bypass
-        ``kramit`` even when KRAM is enabled.
+        ``kramit`` even when KRAM is enabled. ``StoreForwardDenials`` routes
+        rely on their own SAID-idempotent acceptance model in the same way.
         """
         merged = list(fullDenials)
         compact = cls._compactDenials(merged)
 
-        for denial in cls.OobiDenials:
+        for denial in cls.OobiDenials + cls.StoreForwardDenials:
             bcompact = cls._compactDenials([denial])[0]
             if any(bcompact.startswith(cdenial) for cdenial in compact):
                 continue
@@ -248,7 +260,8 @@ class Kramer:
     def fullDenials(self):
         """Returns raw denials list from config.
         Each denial is [[major, minor], ilk, route]
-        OOBIs routes /end/role and /loc/scheme are automatically added to the list when KRAM is enabled.
+        OOBIs routes /end/role and /loc/scheme and the store-and-forward exn
+        route /registry/root are automatically added when KRAM is enabled.
         """
         return self._fullDenials
 

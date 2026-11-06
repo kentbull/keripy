@@ -2,6 +2,7 @@
 
 import json
 from contextlib import ExitStack, contextmanager
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,11 +11,12 @@ import pytest
 
 from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap
-from keri.acdc.salting import RegistryRoot, RootRefused, RootUnverified, rootExn
+from keri.acdc.salting import RegistryRoot, RootDeferred, RootRefused, RootUnverified, rootExn
 from keri.app import Notifier, openCF, openHby
 from keri.core import (Codens, Counter, Diger, Kevery, Kramer, MtrDex, Parser, Salter,
                        SealSource, SerderKERI, Signer, Texter, exchange, messagize)
-from keri.kering import Kinds, ValidationError
+from keri.help import helping
+from keri.kering import Ilks, Kinds, ValidationError
 from keri.peer import Exchanger
 
 Fixture = Path(__file__).parent / "fixtures" / "registry_root_essr.json"
@@ -35,8 +37,12 @@ def stored(side):
 
 
 @contextmanager
-def world(*, enabled=True, newcomer=False):
-    """Individual issuer; Alice/Bob 2-of-2 holder group, optionally Outsider as next-key member."""
+def world(*, enabled=True, newcomer=False, late=()):
+    """Individual issuer; Alice/Bob 2-of-2 holder group, optionally Outsider as next-key member.
+
+    Sides named in ``late`` do not receive the registry TEL or its issuer
+    anchors; those messages wait in ``w.late`` for later delivery.
+    """
     with ExitStack() as stack:
         sides = []
         for n, name in enumerate(('issuer', 'alice', 'bob', 'outsider'), 1):
@@ -74,6 +80,7 @@ def world(*, enabled=True, newcomer=False):
             assert alice.group.pre in side.hby.kevers
         registrar = Registrar(issuer.rgy)
         registry = registrar.makeRegistry('existing', issuer.hab.pre)
+        deferred = []
 
         def transfer(event):
             kel = issuer.hab.interact(data=[dict(i=registry.regk, s=event.sad['n'], d=event.said)],
@@ -82,6 +89,9 @@ def world(*, enabled=True, newcomer=False):
             anchor = SerderKERI(raw=kel)
             tel = messagize(event, bonds=[SealSource(s=anchor.snh, d=anchor.said)], gvrsn=V2)
             for side in sides[1:]:
+                if side.hab.name in late:
+                    deferred.append((side, kel, tel))
+                    continue
                 receive(side, kel)
                 receive(side, tel)
                 assert side.rgy.store.headEvent(registry.regk).said == event.said
@@ -96,7 +106,7 @@ def world(*, enabled=True, newcomer=False):
         gid = alice.group.pre
         yield SimpleNamespace(sides=sides, issuer=issuer, alice=alice, bob=bob, outsider=outsider,
                               registry=registry.regk, root=root, opening=opening, event=event,
-                              acdc=acdc, gid=gid)
+                              acdc=acdc, gid=gid, late=deferred)
 
 
 def held(w, side, gid=None):
@@ -118,8 +128,12 @@ def seed(w):
     assert held(w, w.alice).qb64 == w.root.qb64
 
 
-def rotate(w, members, current, *, sith):
-    """Real member and group rotations; ``current`` becomes the signing roster."""
+def rotate(w, members, current, *, sith, hold=()):
+    """Real member and group rotations; ``current`` becomes the signing roster.
+
+    Sides in ``hold`` sign but do not yet see the others' signatures; the
+    rotation wires wait in ``w.held`` for later delivery.
+    """
     for member in members:
         kel = member.hab.rotate(framed=False, gvrsn=V2)
         for side in w.sides:
@@ -141,7 +155,11 @@ def rotate(w, members, current, *, sith):
                 smids=[side.hab.pre for side in current], rmids=[side.hab.pre for side in current])
         wires.append(other.group.rotate(serder=event, smids=[side.hab.pre for side in current],
             rmids=[side.hab.pre for side in current], framed=False, gvrsn=V2))
+    w.held = wires
     for side in w.sides:
+        if side in hold:
+            assert side.hby.kevers[w.gid].serder.said != event.said
+            continue
         for wire in wires:
             side.psr.parse(ims=bytearray(wire), framed=False, local=True)
         side.kvy.processEscrows()
@@ -193,23 +211,87 @@ def test_pending_copy_survives_a_fresh_handler_over_the_same_store():
         assert held(w, w.bob).qb64 == w.root.qb64
 
 
-def test_kram_drops_byte_replay_before_the_exchanger():
-    with world(enabled=True) as w:
+@pytest.mark.parametrize('enabled', [False, True])
+def test_duplicate_delivery_is_stored_once_with_one_note(enabled):
+    with world(enabled=enabled) as w:
         seed(w)
         wire = w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry, td=w.acdc.said)
         receive(w.bob, wire)
         receive(w.bob, wire)
+        assert stored(w.bob) == [said(wire)]
         assert w.bob.notifier.noter.notes.cntAll() == 1
+        assert w.bob.root.receive(said(wire)) is True
+        receive(w.bob, wire)
+        assert w.bob.notifier.noter.notes.cntAll() == 1 and w.bob.root.pending() == []
 
 
-def forge(sender, recipient, gid, registry, plain, *, digest=None, sealed=None):
+def test_kram_exempts_a_copy_delivered_long_after_its_window():
+    assert [[2, 0], Ilks.exn, RegistryRoot.Route] in [list(d) for d in Kramer.StoreForwardDenials]
+    with world(enabled=True) as w:
+        seed(w)
+        plain = dict(i=w.alice.hab.pre, ri=w.bob.hab.pre, gid=w.gid, rd=w.registry,
+                     s=w.root.qb64, e=w.event.said, td=w.acdc.said)
+        # A mailbox copy fetched a day after it was sent, far past the 6 s window.
+        stale = helping.toIso8601(helping.nowUTC() - timedelta(days=1))
+        wire = forge(w.alice, w.bob.hab.pre, w.gid, w.registry, plain, stamp=stale)
+        receive(w.bob, wire)
+        assert stored(w.bob) == [said(wire)]
+        assert w.bob.root.receive(said(wire)) is True
+        assert held(w, w.bob).qb64 == w.root.qb64
+
+
+def notes(side):
+    return [note.attrs for _, note in side.notifier.noter.notes.getTopItemIter()]
+
+
+@pytest.mark.parametrize('missing', ['tel', 'rotation'])
+def test_offline_newcomer_copy_is_stored_then_approved_once_local_state_arrives(missing):
+    with world(newcomer=True, late=('outsider',) if missing == 'tel' else ()) as w:
+        seed(w)
+        copy(w, w.alice, w.bob)
+        w.bob.root.receive(stored(w.bob)[0])
+        current = [w.alice, w.bob, w.outsider]
+        rotate(w, current, current, sith='2', hold=(w.outsider,) if missing == 'rotation' else ())
+        # The witnesser sends catch-up while the newcomer still lacks local state.
+        pending = copy(w, w.alice, w.outsider)
+        assert stored(w.outsider) == [pending]
+        (note,) = notes(w.outsider)
+        assert note['d'] == pending and note['deferred']
+        with pytest.raises(RootDeferred, match='not yet verifiable'):
+            w.outsider.root.receive(pending)
+        assert held(w, w.outsider) is None and stored(w.outsider) == [pending]
+        if missing == 'tel':
+            for side, kel, tel in w.late:
+                receive(side, kel)
+                receive(side, tel)
+        else:
+            for wire in w.held:
+                w.outsider.psr.parse(ims=bytearray(wire), framed=False, local=True)
+            w.outsider.kvy.processEscrows()
+        assert w.outsider.root.receive(pending) is True
+        assert held(w, w.outsider).qb64 == w.root.qb64
+
+
+def test_member_removed_between_arrival_and_approval_is_refused():
+    with world(newcomer=True) as w:
+        seed(w)
+        pending = copy(w, w.alice, w.bob)
+        assert stored(w.bob) == [pending]
+        rotate(w, [w.alice, w.outsider], [w.alice, w.outsider], sith='2')
+        with pytest.raises(ValidationError, match='current signing member') as refusal:
+            w.bob.root.receive(pending)
+        assert not isinstance(refusal.value, RootUnverified)
+        assert held(w, w.bob) is None and stored(w.bob) == [pending]
+
+
+def forge(sender, recipient, gid, registry, plain, *, digest=None, sealed=None, stamp=None):
     raw = sealed if sealed is not None else pysodium.crypto_box_seal(
         json.dumps(plain).encode(), pysodium.crypto_sign_pk_to_box_pk(
             sender.hby.kevers[recipient].verfers[0].raw))
     texter = Texter(raw=raw)
     serder = exchange(sender=sender.hab.pre, receiver=recipient, route=RegistryRoot.Route,
         attributes=dict(essr=digest or Diger(ser=raw, code=MtrDex.Blake3_256).qb64,
-                        gid=gid, rd=registry), version=V2, kind=Kinds.json)
+                        gid=gid, rd=registry), stamp=stamp, version=V2, kind=Kinds.json)
     signed = sender.hab.endorse(serder, framed=True, gvrsn=V2)
     atc = bytes(signed[serder.size:]) + Counter(Codens.ESSRPayloadGroup,
         count=len(texter.qb64b) // 4, version=V2).qb64b + texter.qb64b
@@ -217,7 +299,7 @@ def forge(sender, recipient, gid, registry, plain, *, digest=None, sealed=None):
 
 
 @pytest.mark.parametrize('fault', ['digest', 'payload', 'wrong-recipient', 'outsider-sender',
-                                   'unknown-registry', 'group-recipient'])
+                                   'group-recipient'])
 def test_unauthorized_or_unbound_copies_are_refused_and_never_persisted(fault):
     with world() as w:
         seed(w)
@@ -235,8 +317,6 @@ def test_unauthorized_or_unbound_copies_are_refused_and_never_persisted(fault):
             recipient = w.outsider.hab.pre  # Not a member, and not local to Bob.
         elif fault == 'outsider-sender':
             sender = w.outsider
-        elif fault == 'unknown-registry':
-            registry = w.event.said
         elif fault == 'group-recipient':
             recipient = w.gid
         wire = forge(sender, recipient, w.gid, registry, plain, **kwa)
@@ -244,6 +324,27 @@ def test_unauthorized_or_unbound_copies_are_refused_and_never_persisted(fault):
         assert bob.hby.db.exns.get(keys=(said(wire),)) is None
         assert bob.root.pending() == [] and held(w, bob) is None
         assert bob.notifier.noter.notes.cntAll() == 0
+
+
+@pytest.mark.parametrize('fault', ['unknown-registry', 'holder-not-local'])
+def test_copies_missing_local_state_are_stored_pending_not_dropped(fault):
+    with world() as w:
+        seed(w)
+        alice, bob = w.alice, w.bob
+        gid, registry = w.gid, w.registry
+        if fault == 'unknown-registry':
+            registry = w.event.said  # Not a registry Bob has accepted.
+        else:
+            gid = w.issuer.hab.pre  # No local habitat for this holder.
+        plain = dict(i=alice.hab.pre, ri=bob.hab.pre, gid=gid, rd=registry,
+                     s=w.root.qb64, e=w.event.said)
+        wire = forge(alice, bob.hab.pre, gid, registry, plain)
+        receive(bob, wire)
+        assert stored(bob) == [said(wire)]
+        assert notes(bob)[0]['deferred']
+        with pytest.raises(RootDeferred):
+            bob.root.receive(said(wire))
+        assert held(w, bob) is None and stored(bob) == [said(wire)]
 
 
 @pytest.mark.parametrize('fault', ['inner-sender', 'inner-recipient', 'inner-gid', 'inner-registry',
@@ -345,6 +446,18 @@ def test_essr_round_trip_fixture_decrypts_and_binds():
     assert vector['plaintext']['i'] == serder.pre and vector['plaintext']['ri'] == serder.ked['ri']
     assert {k: vector['plaintext'][k] for k in ('gid', 'rd')} == {
         k: serder.ked['a'][k] for k in ('gid', 'rd')}
+
+
+def test_essr_negative_fixture_vector_fails_its_digest():
+    vector = json.loads(Fixture.read_text())
+    good = Parser(version=V2).parseOne(ims=bytearray(vector['wire'].encode()), processive=False)
+    (negative,) = vector['negative']
+    assert negative['name'] == 'essr-digest-mismatch'
+    frame = Parser(version=V2).parseOne(ims=bytearray(negative['wire'].encode()), processive=False)
+    # The signed exchange is unchanged; only the attached payload differs.
+    assert frame.serder.said == good.serder.said
+    assert frame.essrs[0].raw != good.essrs[0].raw
+    assert not Diger(qb64=frame.serder.ked['a']['essr']).verify(ser=frame.essrs[0].raw)
 
 
 def test_root_exn_requires_individual_sender_and_salt128():

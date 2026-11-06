@@ -76,11 +76,13 @@ def test_configuration():
 
             # Enabled flag
             assert kramer.enabled is True
-            assert kramer.fullDenials == fullDenials
+            # Built-in OOBI denials are covered by v2 rpy; the store-and-forward
+            # registry root exn denial is appended.
+            assert kramer.fullDenials == fullDenials + [[[2, 0], "exn", "/registry/root"]]
 
             # Compact denials
             compact = kramer.denials
-            assert len(compact) == 3
+            assert len(compact) == 4
 
             v1b64 = Verser.verToB64(major=1, minor=0)
             assert compact[0] == f"{v1b64}."
@@ -88,6 +90,7 @@ def test_configuration():
             v2b64 = Verser.verToB64(major=2, minor=0)
             assert compact[1] == f"{v2b64}.rpy."
             assert compact[2] == f"{v2b64}.rpy./end"
+            assert compact[3] == f"{v2b64}.exn./registry/root"
 
             # Default cache type
             rec = db.kramCTYP.get("~")
@@ -476,6 +479,44 @@ def test_v2_oobi_service_reply_routes_bypass_kram_by_default():
 
             assert result is serder
             assert calls == []
+
+
+def test_v2_registry_root_exchange_bypasses_kram_by_default():
+    """Store-and-forward /registry/root copies bypass KRAM; other bare exns do not."""
+    enabledCf = {"kram": {"enabled": True, "denials": [], "caches": {}}}
+
+    with openCF(name="kram_registry_root", base="test", temp=True) as cf:
+        cf.put(enabledCf)
+        with openDB(name="test_registry_root_denials", temp=True) as db:
+            kramer = Kramer(db, cf)
+            v2b64 = Verser.verToB64(major=2, minor=0)
+            assert f"{v2b64}.exn./registry/root" in kramer.denials
+
+            calls = []
+
+            def mock_kramit(msg, kwa=None):
+                calls.append(msg.route)
+                return msg
+
+            kramer.kramit = mock_kramit
+            stale = helping.toIso8601(helping.nowUTC() - timedelta(days=1))
+            root = exchange(sender=TEST_PRE, route="/registry/root", stamp=stale,
+                            attributes=dict(essr="", gid=TEST_PRE, rd=""), **EXN_KWA)
+            assert kramer.intake(root) is root
+            assert calls == []
+
+            other = exchange(sender=TEST_PRE, route="/ipex/grant", stamp=stale, **EXN_KWA)
+            kramer.intake(other)
+            assert calls == ["/ipex/grant"]
+
+    # Explicit configuration that already covers the route is not duplicated.
+    coveredCf = {"kram": {"enabled": True, "denials": [[[2, 0], "exn", ""]], "caches": {}}}
+    with openCF(name="kram_registry_root_cov", base="test", temp=True) as cf:
+        cf.put(coveredCf)
+        with openDB(name="test_registry_root_cov", temp=True) as db:
+            assert Kramer(db, cf).fullDenials == [[[2, 0], "exn", ""],
+                                                   [[2, 0], "rpy", "/end/role"],
+                                                   [[2, 0], "rpy", "/loc/scheme"]]
 
 
 # The following four tests provide basic coverage for integration with kevery.processMsg() along the various auth paths
