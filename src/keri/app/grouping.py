@@ -131,6 +131,60 @@ class Counselor(doing.DoDoer):
         self._clearWitnessAuths(prefixer.qb64, number.sn, cdiger.qb64)
         return True
 
+    def _escrows(self):
+        """Pair each counseling stage with the escrow that holds it, in order."""
+        return (("signatures", self.hby.db.gpse),
+                ("delegation", self.hby.db.gdee),
+                ("witnesses", self.hby.db.gpwe))
+
+    def pending(self, pre):
+        """Return the group event still being counseled for ``pre``, or None.
+
+        Public read-only accessor for the counseling escrows. The stage is
+        ``signatures`` (waiting for other members' signatures), ``delegation``
+        (waiting for delegator approval) or ``witnesses`` (waiting for witness
+        receipts). Completion is reported by ``complete``. No stores change.
+
+        Parameters:
+            pre (str): qb64 group identifier prefix
+
+        Returns:
+            tuple | None: (stage, Number, Diger) of the escrowed event
+        """
+        for stage, escrow in self._escrows():
+            for number, diger in escrow.get(keys=(pre,)):
+                return stage, number, diger
+        return None
+
+    def pendingIter(self):
+        """Yield (pre, stage, Number, Diger) for every counseled group event.
+
+        Same contract as ``pending``, in stage order. No stores change.
+        """
+        for stage, escrow in self._escrows():
+            for (pre,), (number, diger) in escrow.getTopItemIter():
+                yield pre, stage, number, diger
+
+    def abandon(self, pre):
+        """Stop counseling ``pre`` and forget its completion markers.
+
+        For a caller discarding a local group identifier: removes every
+        counseling escrow entry and completion marker for ``pre`` and drops
+        its in-memory witness authorizations. Accepted KEL events, signatures
+        and Kevery escrows are untouched; the group Hab itself is the caller's
+        to delete.
+
+        Parameters:
+            pre (str): qb64 group identifier prefix
+        """
+        for _, escrow in self._escrows():
+            escrow.rem(keys=(pre,))
+        for keys, _ in list(self.hby.db.cgms.getTopItemIter(keys=(pre,))):
+            if keys[0] == pre:
+                self.hby.db.cgms.rem(keys=keys)
+        for key in [key for key in self._witnessAuths if key[0] == pre]:
+            self._clearWitnessAuths(*key)
+
     def escrowDo(self, tymth, tock=1.0, **kwa):
         """ Process escrows of group multisig identifiers waiting to be completed.
 
