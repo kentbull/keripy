@@ -53,7 +53,7 @@ class NativeIssuance(doing.DoDoer):
         if self.tyme >= self.deadline:
             raise TimeoutError('native issuance did not complete before --timeout')
         if getattr(self, 'nativeDeadline', None) is not None and nowUTC() >= self.nativeDeadline:
-            raise TimeoutError('selected group issuance reached its original native deadline')
+            raise TimeoutError('selected Grant reached its original native deadline')
 
     def intake(self, raw, *, local=False):
         NativeNegotiation.intake(self.psr, self.exc, raw, local=local, issuance=True)
@@ -255,7 +255,8 @@ class NativeIssuance(doing.DoDoer):
                     raise ConfigurationError('selected Grant terminated without Admit')
             else:
                 registry = nests[0].serder.regid
-                while self.rgy.store.headEvent(registry).ilk == 'rip':
+                # Wait within --timeout; never dereference a registry head that is not yet accepted.
+                while (head := self.rgy.store.headEvent(registry)) is None or head.ilk == 'rip':
                     self.check()
                     yield tock
                 yield from evidencing.acquire(self, [registry], self.dh, xid, evidenceSource)

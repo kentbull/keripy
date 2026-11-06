@@ -97,6 +97,7 @@ class GroupPresentation:
             raise ConfigurationError('proposal did not pass current authentication and selected admitted-view scope')
         if not self.owner.exc.complete(self.grant.said):
             # Fresh command consent permits escrow of this exact scoped child, never partial acceptance.
+            # KRAM already saw the child in the wrapper parse above; this kramer-less pass only escrows it.
             protected = Parser(version=Vrsn_2_0, kvy=self.owner.hby.kvy,
                 exc=self.owner.exc, rvy=self.owner.hby.rvy, rgy=self.owner.rgy, local=True)
             protected.parse(ims=serializeParsedSubstream(self.child), local=True)
