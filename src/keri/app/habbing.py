@@ -3890,9 +3890,11 @@ class GroupHab(BaseHab):
         When ``serder`` is ``None``, delegates entirely to
         ``BaseHab.rotate(**kwa)`` for a locally-driven rotation.  When a
         pre-built rotation ``serder`` is provided, the local member hab signs
-        it, the result is processed through the local Kevery, and the
-        ``smids``/``rmids`` member lists are updated on both the instance and
-        the persisted ``HabitatRecord``.
+        it and the result is processed through the local Kevery.  The
+        ``smids``/``rmids`` member lists are committed only if that processing
+        accepted ``serder`` as the latest establishment event; otherwise the
+        caller commits them with ``commitAcceptedMembers`` once the rotation
+        is accepted.
 
         Parameters:
             smids (list or None): Updated qb64 prefixes of signing members
@@ -3952,13 +3954,46 @@ class GroupHab(BaseHab):
             raise ValidationError("Improper Habitat rotation for "
                                          "pre={self.pre}.") from ex
 
+        self.commitAcceptedMembers(serder, smids=smids, rmids=rmids)
+
+        return msg
+
+    def commitAcceptedMembers(self, serder, smids, rmids=None):
+        """Commit group members once their establishment event is accepted.
+
+        Updates ``smids``/``rmids`` on this instance and in the persisted
+        ``HabitatRecord`` only when ``serder`` is the current latest accepted
+        establishment event of this group.  A pending event, or an older event
+        replayed after a later one, leaves the committed members unchanged so
+        unaccepted proposals and historical approvals never alter membership.
+
+        Parameters:
+            serder (SerderKERI): group establishment event naming the members.
+            smids (list): qb64 prefixes of the signing members of ``serder``.
+            rmids (list | None): qb64 prefixes of the rotation members of
+                ``serder``. ``None`` means the same as ``smids``.
+
+        Returns:
+            bool: True when the members were committed.
+
+        Raises:
+            ValidationError: If the habitat record for ``self.pre`` does not
+                exist in the database."""
+        kever = self.kevers.get(self.pre)
+        if serder.pre != self.pre or kever is None or kever.lastEst.d != serder.said:
+            return False
+
+        if (habord := self.db.habs.get(keys=(self.pre,))) is None:
+            raise ValidationError(f"Missing HabitatRecord for pre={self.pre}")
+
+        smids = list(smids)
+        rmids = list(smids) if rmids is None else list(rmids)
         self.smids = smids
         self.rmids = rmids
         habord.smids = smids
         habord.rmids = rmids
         self.db.habs.pin(keys=(self.pre,), val=habord)
-
-        return msg
+        return True
 
     def sign(self, ser, verfers=None, indexed=True, rotated=False,
                         indices=None, ondices=None):

@@ -514,12 +514,21 @@ class JoinDoer(doing.DoDoer):
 
             return True
 
-    def startCounselor(self, hab, prefixer, number, diger):
+    def startCounselor(self, hab, prefixer, number, diger, commit=None):
+        """Counsel a group event to completion.
+
+        ``commit`` (callable | None): returns True once it has committed state
+        that must wait for the event's acceptance; retried until then.
+        """
         self.counselor.start(prefixer=prefixer, number=number, diger=diger, ghab=hab)
 
+        committed = commit is None
         while True:
+            committed = committed or commit()
             saider = self.hby.db.cgms.get(keys=(prefixer.qb64, number.qb64))
             if saider is not None:
+                if not committed:
+                    commit()
                 break
 
             yield self.tock
@@ -629,8 +638,8 @@ class JoinDoer(doing.DoDoer):
                                   gvrsn=Vrsn_2_0 if v2 else orot.pvrsn)
 
             exn, ims = multisigRotateExn(ghab,
-                                         smids=ghab.smids,
-                                         rmids=ghab.rmids,
+                                         smids=smids,
+                                         rmids=rmids,
                                          rot=rot,
                                          version=Vrsn_2_0 if v2 else Vrsn_1_0,
                                          gvrsn=Vrsn_2_0 if v2 else orot.pvrsn,
@@ -667,7 +676,10 @@ class JoinDoer(doing.DoDoer):
             prefixer = Prefixer(qb64=ghab.pre)
             number = Number(sn=serder.sn)
 
-            yield from self.startCounselor(ghab, prefixer, number, Diger(qb64=serder.said))
+            # Membership changes only once the rotation is accepted.
+            yield from self.startCounselor(ghab, prefixer, number, Diger(qb64=serder.said),
+                                           commit=lambda: ghab.commitAcceptedMembers(
+                                               orot, smids=smids, rmids=rmids))
 
             print()
             printIdentifier(self.hby, ghab.pre)

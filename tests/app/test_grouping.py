@@ -407,6 +407,87 @@ def test_counselor_pending_and_abandon():
         assert ghab.pre in hby1.kevers  # accepted KEL state is untouched
 
 
+def test_rotation_members_commit_only_once_accepted():
+    """Proposer and joiner adopt a newcomer only when the rotation is accepted."""
+    salt = b'0123456789abcdef'
+    prefix = "accepted-members"
+    with openHab(name=f"{prefix}_alice", salt=salt, transferable=True, version=Vrsn_1_0, kind=Kinds.json) as (hby1, alice), \
+            openHab(name=f"{prefix}_bob", salt=salt, transferable=True, version=Vrsn_1_0, kind=Kinds.json) as (hby2, bob), \
+            openHab(name=f"{prefix}_carol", salt=salt, transferable=True, version=Vrsn_1_0, kind=Kinds.json) as (_, carol):
+        kev1 = Kevery(db=hby1.db, lax=True, local=False)
+        kev2 = Kevery(db=hby2.db, lax=True, local=False)
+
+        def share(hab, *kevs):
+            for sn in range(hab.kever.sn + 1):
+                msg = hab.msgOwnEvent(sn=sn, framed=True, gvrsn=TEST_VERSION)
+                for kev in kevs:
+                    Parser(version=TEST_VERSION).parse(ims=bytearray(msg), kvy=kev, local=True)
+
+        share(alice, kev2)
+        share(bob, kev1)
+        share(carol, kev1, kev2)
+
+        mids = [alice.pre, bob.pre]
+        inits = dict(isith="2", nsith="2", toad=0, wits=[], version=Vrsn_1_0, kind=Kinds.json)
+        proposer = hby1.makeGroupHab(group=f"{prefix}_group1", mhab=alice, smids=mids, **inits)
+        joiner = hby2.makeGroupHab(group=f"{prefix}_group2", mhab=bob, smids=mids, **inits)
+        icp = hby1.db.evts.get(keys=(proposer.pre, proposer.pre))
+        Parser(version=TEST_VERSION).parse(
+            ims=bytearray(joiner.msgOwnInception(allowPartiallySigned=True, framed=True, gvrsn=TEST_VERSION)),
+            kvy=kev1, local=True)
+        Parser(version=TEST_VERSION).parse(
+            ims=bytearray(proposer.msgOwnInception(allowPartiallySigned=True, framed=True, gvrsn=TEST_VERSION)),
+            kvy=kev2, local=True)
+        kev1.processEscrows()
+        kev2.processEscrows()
+        assert proposer.accepted and joiner.accepted
+
+        # Members rotate so their committed next keys can sign the group rotation.
+        alice.rotate(framed=True, gvrsn=TEST_VERSION, version=Vrsn_1_0, kind=Kinds.json)
+        bob.rotate(framed=True, gvrsn=TEST_VERSION, version=Vrsn_1_0, kind=Kinds.json)
+        share(alice, kev2)
+        share(bob, kev1)
+
+        # Proposer path: kli multisig rotate builds the rotation adding carol.
+        smids = rmids = [alice.pre, bob.pre, carol.pre]
+        members = [alice, bob, carol]
+        rot = SerderKERI(raw=proposer.rotate(isith="2", nsith="2", toad=0, cuts=[], adds=[],
+                                             verfers=[hab.kever.verfers[0] for hab in members],
+                                             digers=[hab.kever.ndigers[0] for hab in members],
+                                             framed=True, gvrsn=TEST_VERSION,
+                                             version=Vrsn_1_0, kind=Kinds.json))
+        assert proposer.kever.sn == 0  # only alice signed
+        assert proposer.commitAcceptedMembers(rot, smids=smids, rmids=rmids) is False
+        assert hby1.db.signingMembers(pre=proposer.pre) == mids
+
+        # Joiner path: kli multisig join approves before the rotation is accepted.
+        approval = joiner.rotate(serder=rot, smids=smids, rmids=rmids, framed=True, gvrsn=TEST_VERSION)
+        assert joiner.kever.sn == 0
+        assert joiner.smids == mids and hby2.db.signingMembers(pre=joiner.pre) == mids
+
+        # Each side accepts the rotation once the other's signature arrives.
+        Parser(version=TEST_VERSION).parse(ims=bytearray(approval), kvy=kev1, local=True)
+        kev1.processEscrows()
+        assert proposer.kever.serder.said == rot.said
+        assert proposer.commitAcceptedMembers(rot, smids=smids, rmids=rmids) is True
+        assert hby1.db.signingMembers(pre=proposer.pre) == smids
+        assert hby1.db.rotationMembers(pre=proposer.pre) == rmids
+        assert proposer.smids == smids and proposer.rmids == rmids
+
+        Parser(version=TEST_VERSION).parse(
+            ims=bytearray(proposer.msgOwnEvent(sn=1, framed=True, gvrsn=TEST_VERSION)), kvy=kev2, local=True)
+        kev2.processEscrows()
+        assert joiner.kever.serder.said == rot.said
+        assert joiner.commitAcceptedMembers(rot, smids=smids, rmids=rmids) is True
+        assert hby2.db.signingMembers(pre=joiner.pre) == smids
+
+        # An older establishment event never rolls committed members back.
+        assert proposer.commitAcceptedMembers(icp, smids=mids, rmids=mids) is False
+        assert joiner.rotate(serder=icp, smids=mids, rmids=mids) is not None
+        assert hby1.db.signingMembers(pre=proposer.pre) == smids
+        assert hby2.db.signingMembers(pre=joiner.pre) == smids
+
+
 def test_the_seven():
     salt = b'0123456789abcdef'
     prefix = "counselor"
