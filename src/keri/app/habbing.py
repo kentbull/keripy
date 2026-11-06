@@ -1519,7 +1519,8 @@ class BaseHab:
             src (str): qb64 identifier prefix of attester being queried.
             query (dict or None): additional query modifiers to include in
                 ``q``.
-            **kwa: keyword arguments passed to ``eventing.query``.
+            **kwa: keyword arguments passed to ``eventing.query``; ``kind``
+                defaults to JSON.
 
         Returns:
             bytearray: signed query event."""
@@ -1527,6 +1528,8 @@ class BaseHab:
         query = query if query is not None else dict()
         query['i'] = pre
         query["src"] = src
+        if kwa.get("kind") is None:  # like other Hab messages; route topics are not CESR labels
+            kwa["kind"] = Kinds.json
         serder = eventing.query(pre=self.pre, query=query, **kwa)
         gvrsn = kwa.get("gvrsn") or Version
         return self.endorse(serder, last=True, framed=False, gvrsn=gvrsn)
@@ -4030,7 +4033,8 @@ class GroupHab(BaseHab):
             src (str): qb64 identifier prefix of the attester being queried.
             query (dict or None): Additional query modifiers to include in the
                 ``q`` field. Defaults to an empty dict when ``None``.
-            **kwa: Keyword arguments forwarded to ``query``.
+            **kwa: Keyword arguments forwarded to ``query``; ``kind``
+                defaults to JSON.
 
         Returns:
             bytearray: Signed query message endorsed by ``mhab``."""
@@ -4040,6 +4044,8 @@ class GroupHab(BaseHab):
         query["src"] = src
         if gvrsn is not Version and "gvrsn" not in kwa:
             kwa["gvrsn"] = gvrsn
+        if kwa.get("kind") is None:  # like other Hab messages; route topics are not CESR labels
+            kwa["kind"] = Kinds.json
         serder = eventing.query(pre=self.mhab.pre, query=query, **kwa)
 
         return self.mhab.endorse(serder, last=True, framed=framed, nested=nested,
