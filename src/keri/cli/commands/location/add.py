@@ -119,7 +119,7 @@ class LocationDoer(doing.DoDoer):
                                   topic="multisig",
                                   serder=exn,
                                   attachment=atc,
-                                  gvrsn=Vrsn_1_0)
+                                  gvrsn=exn.pvrsn)
 
         while not self.hab.loadLocScheme(scheme=up.scheme, eid=eid, gvrsn=self.version):
             yield self.tock

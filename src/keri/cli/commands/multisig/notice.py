@@ -110,13 +110,14 @@ class NoticeDoer(doing.DoDoer):
 
             for recpt in others:
                 self.postman.send(src=hab.mhab.pre, dest=recpt, topic="multisig",
-                                  serder=eserder, attachment=atc)
+                                  serder=eserder, attachment=atc,
+                                  gvrsn=eserder.pvrsn)
                 self.postman.send(src=hab.mhab.pre,
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
                                   attachment=ims,
-                                  gvrsn=Vrsn_1_0)
+                                  gvrsn=exn.pvrsn)
 
             while len(self.postman.cues) != (2 * len(others)):
                 yield self.tock
