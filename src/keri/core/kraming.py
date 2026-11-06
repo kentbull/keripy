@@ -77,6 +77,56 @@ the last event of any kind.
 """
 
 
+def fetchCacheType(db, msgType, route):
+    """Fetch the most specific matching cache-type entry.
+
+    Public read-only lookup of the configured KRAM policy; ``Kramer`` uses it
+    for every message and ``Exchanger.chainDeadline`` for exchange lifetimes.
+    Uses Komer.getTopItemIter to scan the message-type branch of the kramCTYP
+    database in a single LMDB cursor pass. The cursor positions at the
+    first key >= msgType and iterates forward through all keys sharing
+    the msgType prefix. Among matches, the most specific key (longest
+    match against the message vector) is selected.
+
+    Cascade specificity:
+        1. msgType.R.route  (type + route, most specific)
+        2. msgType          (type only)
+        3. ~                (default catchall, separate lookup)
+
+    Parameters:
+        db (Baser): database holding the ``kramCTYP`` policy.
+        msgType (str): message ilk (qry, rpy, exn, etc.)
+        route (str): message route string
+
+    Returns:
+        CacheTypeRecord: matching cache-type record
+
+    Raises:
+        KramError: if no matching cache-type entry found
+    """
+    bestRec = None
+    exactRoute = f"{msgType}.R.{route}" if route else None
+
+    # Single cursor scan of the msgType branch
+    for keys, rec in db.kramCTYP.getTopItemIter(keys=msgType):
+        key = db.kramCTYP.sep.join(keys)  # rejoin tuple to string
+        if exactRoute and key == exactRoute:
+            return rec  # exact type+route match, most specific
+        elif key == msgType:
+            bestRec = rec  # type-only match, keep as candidate
+
+    if bestRec is not None:
+        return bestRec
+
+    # Fall back to default catchall
+    rec = db.kramCTYP.get("~")
+    if rec is not None:
+        return rec
+
+    raise KramError(f"No cache-type entry found for "
+                    f"msgType={msgType}, route={route}")
+
+
 class Kramer:
     """KRAM (KERI Request Authentication Mechanism) processor.
 
@@ -281,51 +331,8 @@ class Kramer:
 
 
     def _fetchCacheType(self, msgType, route):
-        """Fetch the most specific matching cache-type entry.
-
-        Uses Komer.getTopItemIter to scan the message-type branch of the kramCTYP
-        database in a single LMDB cursor pass. The cursor positions at the
-        first key >= msgType and iterates forward through all keys sharing
-        the msgType prefix. Among matches, the most specific key (longest
-        match against the message vector) is selected.
-
-        Cascade specificity:
-            1. msgType.R.route  (type + route, most specific)
-            2. msgType          (type only)
-            3. ~                (default catchall, separate lookup)
-
-        Parameters:
-            msgType (str): message ilk (qry, rpy, exn, etc.)
-            route (str): message route string
-
-        Returns:
-            CacheTypeRecord: matching cache-type record
-
-        Raises:
-            KramError: if no matching cache-type entry found
-        """
-        bestRec = None
-        exactRoute = f"{msgType}.R.{route}" if route else None
-
-        # Single cursor scan of the msgType branch
-        for keys, rec in self.db.kramCTYP.getTopItemIter(keys=msgType):
-            key = self.db.kramCTYP.sep.join(keys)  # rejoin tuple to string
-            if exactRoute and key == exactRoute:
-                return rec  # exact type+route match, most specific
-            elif key == msgType:
-                bestRec = rec  # type-only match, keep as candidate
-
-        if bestRec is not None:
-            return bestRec
-
-        # Fall back to default catchall
-        rec = self.db.kramCTYP.get("~")
-        if rec is not None:
-            return rec
-
-        raise KramError(f"No cache-type entry found for "
-                               f"msgType={msgType}, route={route}")
-
+        """Fetch the most specific matching cache-type entry (``fetchCacheType``)."""
+        return fetchCacheType(self.db, msgType, route)
 
     @staticmethod
     def _hasSeals(senderId, kwa):

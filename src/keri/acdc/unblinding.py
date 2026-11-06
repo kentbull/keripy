@@ -637,6 +637,24 @@ class Unblind:
             self._current(op)
         return op['reply'] is not None if self.group and self.hab.pre == op['sender'] else op["received"]
 
+    def requested(self, xid):
+        """Return whether the peer's authenticated disclosure query arrived.
+
+        Public read-only accessor for the responder side: a group sender's
+        members wait for it before signing the threshold reply. It says
+        nothing about the original Grant's liveness; ``complete`` owns that.
+
+        Parameters:
+            xid (str): exchange identifier of the approved presentation.
+
+        Returns:
+            bool: True once a peer query was accepted for this operation.
+
+        Raises:
+            ValidationError: no local approval for xid.
+        """
+        return self._operation(xid)["requestedByPeer"]
+
     def openings(self, xid):
         """Return the verified openings an authenticated reply selected.
 

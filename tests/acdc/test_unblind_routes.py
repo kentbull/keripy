@@ -466,7 +466,13 @@ def test_rootless_holder_replies_only_with_explicit_held_bound_proofs():
 
 def test_partial_reply_retains_verified_proofs_until_second_signature_without_proofs(fakeHelpingClock):
     with presentation() as h:
+        assert h.holder.route.requested(h.xid) is False
         receive(h.holder, h.verifier.route.start(h.grant.said))
+        # Only the responder records the peer's request.
+        assert h.holder.route.requested(h.xid) is True
+        assert h.verifier.route.requested(h.xid) is False
+        with pytest.raises(ValidationError):
+            h.holder.route.requested(Diger(ser=b"unapproved").qb64)
         frame = parsed(h.holder.route.cues.popleft()['msg'])
         receive(h.verifier, signed(h.holder, frame, indices=[0]))
         assert not h.verifier.route.complete(h.xid)
@@ -485,7 +491,13 @@ def test_partial_reply_retains_verified_proofs_until_second_signature_without_pr
 
 def test_openings_exposes_only_authenticated_selected_proofs(fakeHelpingClock):
     with presentation() as h:
+        assert h.holder.route.requested(h.xid) is False
         receive(h.holder, h.verifier.route.start(h.grant.said))
+        # Only the responder records the peer's request.
+        assert h.holder.route.requested(h.xid) is True
+        assert h.verifier.route.requested(h.xid) is False
+        with pytest.raises(ValidationError):
+            h.holder.route.requested(Diger(ser=b"unapproved").qb64)
         frame = parsed(h.holder.route.cues.popleft()['msg'])
         receive(h.verifier, signed(h.holder, frame, indices=[0]))
         # Partially signed proofs are retained but not yet readable.
@@ -612,7 +624,13 @@ def test_query_refusals_do_not_disclose_or_advance_public_state(fault, fakeHelpi
     'expired', 'abandoned', 'restarted'])
 def test_reply_refusals_do_not_finish_presentation(fault, fakeHelpingClock):
     with presentation() as h:
+        assert h.holder.route.requested(h.xid) is False
         receive(h.holder, h.verifier.route.start(h.grant.said))
+        # Only the responder records the peer's request.
+        assert h.holder.route.requested(h.xid) is True
+        assert h.verifier.route.requested(h.xid) is False
+        with pytest.raises(ValidationError):
+            h.holder.route.requested(Diger(ser=b"unapproved").qb64)
         frame = parsed(h.holder.route.cues.popleft()['msg'])
         sad = deepcopy(frame.serder.sad)
         signing, target, indices = h.holder, h.verifier, None

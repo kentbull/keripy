@@ -12,7 +12,8 @@ from hio.help import decking, ogler
 from ..kering import (Vrsn_1_0, Vrsn_2_0, Ilks, Colds, sniff,
                       Kinds, Version, versify,
                       ValidationError, MissingChainError, MissingSchemaError,
-                      MissingSignatureError, MissingSenderKeyStateError)
+                      MissingSignatureError, MissingSenderKeyStateError,
+                      KramError)
 from ..core import (Counter, Pather, Dater, Diger, Number,
                     Prefixer, Seqner, Saider,
                     Serder, SerderKERI, Texter,
@@ -577,6 +578,55 @@ class Exchanger:
             return None
         return (helping.fromIso8601(cache.xdt)
                 + datetime.timedelta(milliseconds=cache.xl))
+
+    def chainDeadline(self, serder):
+        """Return when the v2 exchange holding ``serder`` expires, without writes.
+
+        Public read-only accessor for any message in a transactioned v2
+        exchange chain (for example an IPEX apply, offer, agree or grant). It
+        follows ``p`` through saved exchange messages to the chain opener and
+        returns the opener's KRAM exchange window end, xdt + xl, as
+        ``exchangeDeadline`` derives it. The opener's accepted KRAM
+        transaction row supplies xdt and xl while it exists. Once pruned, or
+        for an opener this Habery sent, xdt is the opener's own ``dt`` and xl
+        comes from the configured KRAM policy for the opener's route.
+
+        This is display/expiry evidence only: it authorizes neither DH nor
+        Unblind (``exchangeDeadline`` owns Grant authorization), and it does
+        not check whether KRAM is enabled.
+
+        Parameters:
+            serder (SerderKERI): a v2 ``xip`` or transactioned ``exn``.
+
+        Returns:
+            datetime.datetime | None: timezone-aware deadline, possibly past,
+                or None for a non-transactioned or v1 message, a broken or
+                cyclic chain, or no KRAM policy for the opener's route.
+        """
+        from ..core.kraming import fetchCacheType
+        seen = set()
+        while serder.ked.get("p"):
+            if serder.said in seen:
+                return None
+            seen.add(serder.said)
+            serder = self.hby.db.exns.get(keys=(serder.ked["p"],))
+            if serder is None:
+                return None
+        if serder.pvrsn.major < 2 or serder.ilk not in (Ilks.xip, Ilks.exn):
+            return None
+        xid = serder.said if serder.ilk == Ilks.xip else serder.ked.get("x")
+        if not xid or not serder.stamp:
+            return None
+        cache = self.hby.db.kramTMSC.get(keys=(serder.pre, xid, serder.said))
+        if cache is not None and cache.rdt:
+            return (helping.fromIso8601(cache.xdt)
+                    + datetime.timedelta(milliseconds=cache.xl))
+        try:
+            record = fetchCacheType(self.hby.db, serder.ilk, serder.route)
+        except KramError:
+            return None
+        return (helping.fromIso8601(serder.stamp)
+                + datetime.timedelta(milliseconds=record.xl))
 
     def _partialSignedDeadline(self, serder):
         """Bound escrow cleanup by KRAM validity or the local PSE timeout."""
