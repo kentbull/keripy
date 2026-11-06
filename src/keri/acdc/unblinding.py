@@ -146,6 +146,32 @@ class Unblind:
         self._current(op)
         return op['query'] or op['contribution']
 
+    def requery(self, xid):
+        """Re-sign this disclosee's started individual query for delivery now.
+
+        A queued query can age past the discloser's KRAM timeliness window
+        before transport begins. The renewal keeps the approved Grant, the
+        frozen requested events and their nested public evidence; only the
+        query's own ``dt``, SAID and signatures change, and it becomes the
+        outstanding query. A newer registry head still needs a new operation,
+        and the Grant's deadline is never extended. Groups cannot renew here.
+        """
+        op = self._operation(xid)
+        if self.group:
+            raise ValidationError("one group member cannot renew a threshold unblind query")
+        if self.hab.pre != op["recipient"] or op["query"] is None:
+            raise ValidationError("unblind has no started disclosee query")
+        if op["received"]:
+            raise ValidationError("unblind already received its authenticated reply")
+        self._current(op)
+        requested, nests = self._request(op)
+        if requested != op["requested"]:
+            raise ValidationError("unblind request differs from the approved query")
+        message = query(pre=self.hab.pre, route=self.Route, replyRoute=self.Route,
+            query=dict(x=xid, re=requested), pvrsn=Vrsn_2_0, kind=Kinds.json)
+        op['query'] = self._signed(message, nests=nests)
+        return op['query']
+
     def _request(self, op):
         """Select exact missing-event query evidence without signing or state writes."""
         _, disclosure, _ = self._live(op)

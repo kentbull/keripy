@@ -766,3 +766,36 @@ def test_query_for_already_carried_old_proof_returns_empty_not_a_current_verdict
         with pytest.raises(ValidationError):
             h.verifier.route.finish(h.xid)
         assert h.verifier.hby.db.epse.get((h.grant.said,)) is not None
+
+
+def test_requery_renews_a_stale_query_with_the_same_request_and_evidence(fakeHelpingClock):
+    """A query queued past KRAM drift is refused; its renewal keeps the frozen request."""
+    with presentation() as h:
+        with pytest.raises(ValidationError, match='no started disclosee query'):
+            h.verifier.route.requery(h.xid)
+        stale = h.verifier.route.start(h.grant.said)
+        fakeHelpingClock.advance(seconds=90)  # Past the 1 s drift and 60 s multi-key lag.
+        receive(h.holder, stale)
+        assert not h.holder.route.cues
+        fresh = h.verifier.route.requery(h.xid)
+        before, after = parsed(stale), parsed(fresh)
+        assert after.serder.said != before.serder.said
+        assert after.serder.sad['q'] == before.serder.sad['q']
+        assert ([serializeParsedSubstream(nest) for nest in after.nests]
+                == [serializeParsedSubstream(nest) for nest in before.nests])
+        assert h.verifier.route.start(h.grant.said) == fresh
+        with pytest.raises(ValidationError, match='no started disclosee query'):
+            h.holder.route.requery(h.xid)
+        receive(h.holder, fresh)
+        receive(h.verifier, h.holder.route.cues.popleft()['msg'])
+        assert h.verifier.route.complete(h.xid)
+        with pytest.raises(ValidationError, match='already received'):
+            h.verifier.route.requery(h.xid)
+
+
+def test_requery_never_extends_the_grant_deadline(fakeHelpingClock):
+    with presentation() as h:
+        h.verifier.route.start(h.grant.said)
+        fakeHelpingClock.advance(seconds=301)
+        with pytest.raises(ValidationError, match='unavailable, terminated or expired'):
+            h.verifier.route.requery(h.xid)

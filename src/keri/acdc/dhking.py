@@ -272,6 +272,34 @@ class Dhke:
                 op['query'] = signed
         return op["query"] or op['contribution']
 
+    def requery(self, xid):
+        """Re-sign this issuer's started individual query for delivery now.
+
+        A queued query can age past the issuee's KRAM timeliness window before
+        transport begins. The renewal keeps the approved Grant, ephemeral keys
+        and registry scope; only the query's own ``dt``, SAID and signatures
+        change, and it becomes the outstanding query. It never extends the
+        Grant's exchange deadline. A group threshold query needs a new member
+        proposal, so groups cannot renew here.
+        """
+        from ..core import query
+        from ..kering import Kinds, ValidationError, Vrsn_2_0
+        op = self._operations.get(xid)
+        if op is None:
+            raise ValidationError("DH transaction has no local approval")
+        if self.group:
+            raise ValidationError("one group member cannot renew a threshold DH query")
+        if self.hab.pre != op["issuer"] or op["query"] is None:
+            raise ValidationError("DH has no started issuer query")
+        self._live(op)
+        self._roots(op)
+        if op["completed"]:
+            raise ValidationError("DH operation has already completed")
+        message = query(pre=self.hab.pre, route=self.Route, replyRoute=self.Route,
+                        query=dict(x=xid, pk=op["public"]), pvrsn=Vrsn_2_0, kind=Kinds.json)
+        op["query"] = bytes(self.hab.endorse(message, last=True, gvrsn=Vrsn_2_0))
+        return op["query"]
+
     def _preflight(self, serder, field, role, *, own=False):
         from ..kering import ValidationError
         data = serder.ked.get(field)
