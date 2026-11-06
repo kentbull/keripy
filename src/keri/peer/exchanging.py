@@ -71,6 +71,55 @@ class Exchanger:
         """
         return self.routes.get(serder.ked["r"])
 
+    def pending(self, said):
+        """Return the exchange retained in partial-signature escrow, or None.
+
+        This is the only read of the partially signed exchange escrow. An
+        escrowed exchange has not been accepted: presence proves neither sender
+        authentication nor route verification, and an accepted exchange is
+        never returned here. Callers that need authenticated pending state use
+        ``pendingGrant`` or ``presentationContext``. No stores change.
+
+        Parameters:
+            said (str): qb64 SAID of the exchange message
+
+        Returns:
+            SerderKERI | None: escrowed, unaccepted exchange body
+        """
+        if self.hby.db.exns.get(keys=(said,)) is not None:
+            return None
+        return self.hby.db.epse.get(keys=(said,))
+
+    def pendingIter(self):
+        """Yield each exchange retained in partial-signature escrow.
+
+        Same contract as ``pending`` for every escrowed, unaccepted exchange:
+        bodies only, unauthenticated, in escrow key order. No stores change.
+
+        Returns:
+            Iterator[SerderKERI]: escrowed, unaccepted exchange bodies
+        """
+        for (said,), serder in self.hby.db.epse.getTopItemIter():
+            if self.hby.db.exns.get(keys=(said,)) is None:
+                yield serder
+
+    def response(self, said):
+        """Return the accepted exchange that names ``said`` as its prior.
+
+        ``logEvent`` links each accepted exchange to its prior ``p`` SAID; the
+        latest accepted link wins. Only an accepted, stored response is
+        returned. A response is evidence of what was received, not a fresh
+        verdict on the prior exchange. No stores change.
+
+        Parameters:
+            said (str): qb64 SAID of the prior exchange message
+
+        Returns:
+            SerderKERI | None: accepted response exchange body
+        """
+        link = self.hby.db.erpy.get(keys=(said,))
+        return self.hby.db.exns.get(keys=(link.qb64,)) if link is not None else None
+
     def _cueMissingKeyState(self, missing):
         """Request each missing KEL coordinate once."""
         # Deduplicate repeated references in this processing attempt.
@@ -853,7 +902,7 @@ class Exchanger:
         changes no stores and cannot authorize admission or fresh-root DH.
         """
         accepted = self.hby.db.exns.get(keys=(said,))
-        serder = accepted or self.hby.db.epse.get(keys=(said,))
+        serder = accepted or self.pending(said)
         deadline = self.exchangeDeadline(serder) if serder is not None else None
         handler = self.routes.get("/ipex/grant")
         if (serder is None or deadline is None or handler is None
@@ -887,7 +936,7 @@ class Exchanger:
         neither accepts the Grant nor changes authentication/escrow stores.
         Returns (serder, registries), or None when unavailable or unauthorized.
         """
-        serder = self.hby.db.epse.get(keys=(said,))
+        serder = self.pending(said)
         deadline = self.exchangeDeadline(serder) if serder is not None else None
         handler = self.routes.get("/ipex/grant")
         if (serder is None or deadline is None or handler is None
@@ -936,7 +985,7 @@ class Exchanger:
 
         serder = self.hby.db.exns.get(keys=(said,))
         if serder is None and pendingPresentation:
-            candidate = self.hby.db.epse.get(keys=(said,))
+            candidate = self.pending(said)
             if candidate is not None and candidate.pre == hab.pre:
                 context = self.presentationContext(said,
                     xid=candidate.said if candidate.ilk == Ilks.xip else candidate.ked.get('x'),

@@ -170,6 +170,39 @@ def test_first_acceptance_replaces_provisional_disclosure(retained_exchange, ilk
     assert receiver.db.epse.get((message.said,)) is None
 
 
+@pytest.mark.parametrize("ilk", ["xip", "exn"])
+def test_public_pending_and_response_accessors(retained_exchange, ilk):
+    receiver, sender, _, handler, exc, paths, nests = retained_exchange
+    message = retained_message(sender, handler.resource, ilk)
+    group = signed_group(sender, message)
+    assert exc.pending(message.said) is None
+    assert list(exc.pendingIter()) == []
+
+    # Partial signatures leave only an unaccepted escrowed body.
+    with pytest.raises(MissingSignatureError):
+        exc.processEvent(message, tsgs=[signed_group(sender, message, group[3][:1])],
+                          ptds=paths, nests=nests)
+    assert exc.pending(message.said).said == message.said
+    assert [serder.said for serder in exc.pendingIter()] == [message.said]
+    assert exc.complete(message.said) is False
+    assert exc.response(message.said) is None
+
+    # Acceptance removes the exchange from the pending view.
+    assert exc.processEvent(message, tsgs=[group], ptds=paths, nests=nests) is True
+    assert exc.pending(message.said) is None
+    assert list(exc.pendingIter()) == []
+    assert exc.response(message.said) is None
+
+    # An accepted exchange naming it as prior is its response.
+    xid = message.said if ilk == "xip" else message.ked["x"]
+    reply = exchange(sender=sender.pre, receiver=sender.pre, route=handler.resource,
+                     xid=xid, prior=message.said, attributes=dict(n=1),
+                     version=Vrsn_2_0, kind=Kinds.json)
+    assert exc.processEvent(reply, tsgs=[signed_group(sender, reply)]) is True
+    assert exc.response(message.said).said == reply.said
+    assert exc.response(reply.said) is None
+
+
 def test_nesting():
     paths = ['a']
     val = "-JAbccDefg"
