@@ -11,6 +11,7 @@ Full KRAM employs a strictly monotonically ordered timeliness cache to protect
 from replay attacks. It includes protection from retrograde attacks on the
 receiver's clock.
 """
+import datetime
 from collections import namedtuple, defaultdict
 from dataclasses import dataclass, astuple
 
@@ -1095,6 +1096,78 @@ class Kramer:
             verified = bool(valid) and len(own) == len(seals) and not invalid and not missing
         if not verified:
             raise ValidationError("query attachments do not authenticate the requester")
+
+    def timely(self, serder, kwa):
+        """Report whether a message is inside its KRAM timeliness window now.
+
+        Public read-only check, for example a sender's gate before re-sending
+        a retained message. It uses the same window as ``kramit``: the
+        cache-type record for this message type and route, and the long lag
+        for multi-key signature authentication or the short lag otherwise,
+        so ``now - d - lag <= stamp <= now + d``. Authentication is
+        classified, not verified, and no cache, escrow or cue changes; ``kwa``
+        is not mutated. Whether to enforce the result is caller policy,
+        including when KRAM is disabled or the message type is denied.
+
+        Parameters:
+            serder (SerderKERI): message with a datetime stamp.
+            kwa (dict): its parsed attachments.
+
+        Returns:
+            bool: False when the message has no stamp or is outside the window.
+
+        Raises:
+            MissingAuthAttachmentError: no sender authentication attachments.
+            MissingSenderKeyStateError: the sender's key state is unknown.
+        """
+        if not serder.stamp:
+            return False
+        kwa = {key: list(value) if isinstance(value, list) else value
+               for key, value in kwa.items()}
+        kwa.setdefault("sigers", [])
+        pre = serder.pre
+        self._normalizeSenderSeals(pre, kwa)
+        self._normalizeSenderTlsgs(pre, kwa)
+        hasSealRef, hasSigs = self._hasSeals(pre, kwa), self._hasSigs(pre, kwa)
+        if not hasSealRef and not hasSigs:
+            raise MissingAuthAttachmentError(
+                f"No authentication attachments for message {serder.ilk} "
+                f"with SAID={serder.said}")
+        kever = self.db.kevers.get(pre)
+        if kever is None:
+            raise MissingSenderKeyStateError(f"Sender KEL unavailable for {pre}")
+        authType, _ = self._resolveAuthType(serder, kwa, kever, hasSealRef, hasSigs, pre)
+        record = self._fetchCacheType(serder.ilk, serder.route)
+        lag = record.ll if authType == AuthTypes.AttachedSignatureMultiKey else record.sl
+        mdt = helping.fromIso8601(serder.stamp).timestamp() * 1000
+        now = helping.nowUTC().timestamp() * 1000
+        return (now - record.d - lag) <= mdt <= (now + record.d)
+
+    def deadline(self, serder):
+        """Return the end of a non-transactioned message's KRAM window, or None.
+
+        Public read-only accessor for the window ``kramit`` recorded when it
+        first verified this message's authentication: stamp + d + lag. A
+        recorded window does not mean a multi-key threshold was met. A
+        transactioned exchange (``xip`` or v2 ``exn`` with ``x``) returns None;
+        its lifetime belongs to the exchange (``Exchanger.exchangeDeadline``).
+        None also means no window was recorded, e.g. KRAM disabled or denied.
+
+        Parameters:
+            serder (SerderKERI): the message.
+
+        Returns:
+            datetime.datetime | None: timezone-aware window end, possibly past.
+        """
+        if serder.ilk == Ilks.xip or (serder.ilk == Ilks.exn
+                                      and serder.pvrsn >= Vrsn_2_0
+                                      and serder.ked.get("x")):
+            return None
+        cache = self.db.kramMSGC.get((serder.pre, serder.said))
+        if cache is None:
+            return None
+        return (helping.fromIso8601(cache.mdt)
+                + datetime.timedelta(milliseconds=cache.d + cache.ml))
 
     def kramit(self, msg, kwa=None):
         """Core KRAM processing logic.

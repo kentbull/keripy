@@ -6367,3 +6367,48 @@ def test_authenticate_query_and_parse_signed_query():
         forged = parsed(signed(other, sender=requester.pre)[1])
         with pytest.raises(MissingAuthAttachmentError):
             kramer.authenticateQuery(forged.serder, attachments(forged), hby=verifierHby)
+
+
+def test_timely_and_deadline_are_read_only_kram_windows():
+    """A sender can check the KRAM window and recorded deadline without writes."""
+    with (openHby(name="timely-sender", temp=True, version=V2) as senderHby,
+          openHby(name="timely-verifier", temp=True, version=V2) as verifierHby,
+          openCF(name="timely", temp=True) as cf):
+        sender = senderHby.makeHab(name="sender", version=V2, kind=Kinds.cesr)
+        cf.put(KRAM_INTEGRATION_CONFIG)  # d=1000 ms, short lag sl=5000 ms
+        kramer = Kramer(db=verifierHby.db, cf=cf)
+
+        def parsed(stamp):
+            qry = query(pre=sender.pre, route="tels", query=dict(i=sender.pre),
+                        stamp=stamp, version=V2, kind=Kinds.cesr)
+            raw = sender.endorse(qry, last=True, framed=False, gvrsn=V2)
+            dom = Parser(version=V2).parseOneBare(ims=bytearray(raw), processive=False)
+            return dom.serder, {key: list(getattr(dom, key))
+                                for key in ("sigers", "cigars", "lsgs", "tsgs", "sscs", "ssts")}
+
+        now = helping.nowUTC()
+        serder, kwa = parsed(helping.toIso8601(now))
+        with pytest.raises(MissingSenderKeyStateError):
+            kramer.timely(serder, kwa)
+        kvy = Kevery(db=verifierHby.db, lax=False, local=False)
+        Parser(version=V2).parse(ims=bytearray(
+            sender.msgOwnEvent(sn=0, framed=True, gvrsn=V2)), kvy=kvy)
+
+        before = verifierHby.db.env.info()['last_txnid']
+        snapshot = {key: list(value) for key, value in kwa.items()}
+        assert kramer.timely(serder, kwa) is True
+        assert kwa == snapshot
+        assert kramer.timely(*parsed(helping.toIso8601(now - timedelta(seconds=10)))) is False
+        assert kramer.timely(*parsed(helping.toIso8601(now + timedelta(seconds=10)))) is False
+        with pytest.raises(MissingAuthAttachmentError):
+            kramer.timely(serder, {})
+        assert kramer.deadline(serder) is None
+        assert verifierHby.db.env.info()['last_txnid'] == before
+
+        # Intake records the window; deadline reads it back: stamp + d + sl.
+        assert kramer.intake(serder, dict(kwa)) is not None
+        assert kramer.deadline(serder) == now + timedelta(milliseconds=6000)
+
+        # Transactioned exchanges belong to Exchanger.exchangeDeadline.
+        xip = exchept(sender=sender.pre, route="/ipex/apply", **EXN_KWA)
+        assert kramer.deadline(xip) is None
