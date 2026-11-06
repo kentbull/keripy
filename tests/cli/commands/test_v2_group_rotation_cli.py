@@ -10,10 +10,10 @@ from keri import Vrsn_2_0 as V2
 from keri.cli.common import setupHby
 from keri.core import Diger, Kevery, Kramer, Parser
 from keri.peer.exchanging import verify
-from tests.cli.commands.test_native_both_group_issuance_cli import both_parties, issue_groups
-from tests.cli.commands.test_native_issuance_cli import PASSCODE
-from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
-from tests.cli.commands.test_native_negotiation_cli import kli
+from tests.cli.commands.test_ipex_v2_both_group_issuance_cli import both_parties, issue_groups
+from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE
+from tests.cli.commands.test_ipex_v2_issuance_cli import live_parties as live_parties
+from tests.cli.commands.test_ipex_v2_negotiation_cli import kli
 
 
 pytestmark = pytest.mark.real_store_roots

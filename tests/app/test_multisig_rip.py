@@ -1,4 +1,4 @@
-"""Native RIP group proposal integration probes."""
+"""v2 ACDC RIP group proposal integration probes."""
 
 from contextlib import ExitStack, contextmanager
 from time import monotonic, sleep
@@ -452,7 +452,7 @@ def test_join_refuses_group_change_during_prompt_before_signing(monkeypatch):
             assert not joined.postman.evts
 
 
-def test_join_exit_closes_native_owner_before_escrow_doer_starts():
+def test_join_exit_closes_acdc_v2_regery_before_escrow_doer_starts():
     with participant_stores(temp=False, base=f'r06a-{uuid4().hex}') as participants:
         hbys, _, rgys = participants
         with restart_join(hbys[1], rgys[1]) as joined:
@@ -463,7 +463,7 @@ def test_join_exit_closes_native_owner_before_escrow_doer_starts():
 
 @pytest.mark.parametrize('est_only', [False, True], ids=['interaction', 'accepted-establishment-only'])
 @pytest.mark.parametrize('answer', ['n', 'y'], ids=['decline', 'approve'])
-def test_native_registry_command_proposes_exact_anchor_for_real_join(monkeypatch, est_only, answer):
+def test_acdc_v2_registry_command_proposes_exact_anchor_for_real_join(monkeypatch, est_only, answer):
     with participant_stores(temp=False, base=f'r10group-{uuid4().hex}', est_only=est_only) as participants:
         hbys, groups, rgys = participants
         gid, mids = groups[0].pre, [group.mhab.pre for group in groups]
@@ -533,7 +533,7 @@ def test_native_registry_command_proposes_exact_anchor_for_real_join(monkeypatch
             assert not command.notifier.noter.opened
 
 
-def test_native_registry_command_prompt_cancellation_precedes_registry_and_kel_mutation(monkeypatch):
+def test_acdc_v2_registry_command_prompt_cancellation_precedes_registry_and_kel_mutation(monkeypatch):
     with participant_stores(temp=False, base=f'r10group-{uuid4().hex}') as participants:
         hbys, _, rgys = participants
         name, base = hbys[0].name, hbys[0].base

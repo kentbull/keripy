@@ -15,10 +15,10 @@ from keri.cli.common import setupHby
 from keri.core import SerderACDC
 from keri.db import Baser
 from keri.peer.exchanging import loadParsedNestedSubstreams, verify
-from tests.cli.commands.test_native_issuance_cli import PASSCODE, holder_group
-from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
-from tests.cli.commands.test_native_negotiation_cli import exchange_deadline, kli
-from tests.cli.commands.vc.test_native_registry_cli import group_registry
+from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, holder_group
+from tests.cli.commands.test_ipex_v2_issuance_cli import live_parties as live_parties
+from tests.cli.commands.test_ipex_v2_negotiation_cli import exchange_deadline, kli
+from tests.cli.commands.vc.test_acdc_v2_registry_cli import group_registry
 
 
 pytestmark = pytest.mark.real_store_roots
@@ -90,7 +90,7 @@ def issue_groups(tmp_path, issuers, holders, holder_public, icoordinator, hcoord
                 time.sleep(.03)
 
         try:
-            # A partial issuer Grant cannot authorize native DH or create a root.
+            # A partial issuer Grant cannot authorize v2 DH or create a root.
             start(['ipex', 'grant', *issuers[0]['args'], *grant_args, '--proposal-output', str(proposal),
                    '--output', str(grantfile)], logs[0])
             selected = phase(logs[0], 'group_proposed')
@@ -193,6 +193,6 @@ def issue_groups(tmp_path, issuers, holders, holder_public, icoordinator, hcoord
     return body, selected
 
 
-def test_installed_both_groups_require_native_thresholds_before_issuance_and_admit(tmp_path, live_parties):
+def test_installed_both_groups_require_v2_thresholds_before_issuance_and_admit(tmp_path, live_parties):
     issuers, holders, public, icoordinator, hcoordinator = both_parties(tmp_path, live_parties)
     issue_groups(tmp_path, issuers, holders, public, icoordinator, hcoordinator)

@@ -323,7 +323,7 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(fakeHelpingClock)
             with pytest.raises(ValidationError, match='already frozen'):
                 issuee.unblind.contribute(presentation.said, recipient.hab.endorse(altered, gvrsn=V2))
 
-            # Native Revery must obtain the other genuine signature; duplicate partials do not finish.
+            # The v2 Revery must obtain the other genuine signature; duplicate partials do not finish.
             for side in h.issuees:
                 receive(side, proposal)
                 receive(side, proposal)
@@ -673,8 +673,8 @@ def test_restarted_lead_cannot_accept_old_threshold_reply():
         issuee.dh.abandon(h.xid)
 
 
-def test_native_ipex_proposals_replay_only_after_local_approval_with_native_verification():
-    # Native multisig proposal replay needs no DH; KRAM-off retransmission repairs openings.
+def test_ipex_v2_proposals_replay_only_after_local_approval_with_v2_verification():
+    # v2 IPEX multisig proposal replay needs no DH; KRAM-off retransmission repairs openings.
     with groups(enabled=False, approve=False) as h, ExitStack() as stack:
         opening, event = h.registrar.issue(h.registry, h.credential, salt=Salter().qb64)
         h.anchor(event)
@@ -766,8 +766,8 @@ def test_native_ipex_proposals_replay_only_after_local_approval_with_native_veri
         assert not list(h.issuees[0].hby.ks.rroots.getTopItemIter())
 
 
-def test_nonzero_dh_custodian_and_native_admit_transmitter_are_independent():
-    # Native election proof only: installed CLI transport is separately exercised with two members.
+def test_nonzero_dh_custodian_and_ipex_v2_admit_transmitter_are_independent():
+    # v2 IPEX election proof only: installed CLI transport is separately exercised with two members.
     with groups(size=3, lead=1) as h:
         exchange(h)
         issuer, custodian = h.issuers[1], h.issuees[1]

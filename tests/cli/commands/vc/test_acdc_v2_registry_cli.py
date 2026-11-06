@@ -12,7 +12,7 @@ from keri.acdc import Regery
 from keri.cli.common import setupHby
 
 
-from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
+from tests.cli.commands.test_ipex_v2_issuance_cli import live_parties as live_parties
 
 
 pytestmark = pytest.mark.real_store_roots
@@ -43,14 +43,14 @@ def create_issuer(tmp_path, *, version='2.0', est_only=False):
 
 
 @pytest.mark.parametrize('est_only', [False, True], ids=['interaction', 'accepted-establishment-only'])
-def test_native_registry_installed_lifecycle_and_refusal(tmp_path, est_only):
+def test_acdc_v2_registry_installed_lifecycle_and_refusal(tmp_path, est_only):
     name, base, common = create_issuer(tmp_path, est_only=est_only)
     output = kli(tmp_path, 'vc', 'registry', 'incept', *common, '--alias', 'issuer',
-                 '--registry-name', 'native', '--version', '2.0')
+                 '--registry-name', 'acdc-v2', '--version', '2.0')
     hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_2_0)
     rgy = Regery(hby=hby, name=name, base=base)
     try:
-        reg = rgy.registryByName('native')
+        reg = rgy.registryByName('acdc-v2')
         assert reg is not None and reg.sn == 0
         rip = rgy.store.seqEvent(reg.regk, 0)
         assert rip.ilk == 'rip' and rip.said in output
@@ -64,9 +64,9 @@ def test_native_registry_installed_lifecycle_and_refusal(tmp_path, est_only):
         rgy.close()
         hby.close()
     listing = kli(tmp_path, 'vc', 'registry', 'list', *common, '--version', '2.0')
-    assert all(value in listing for value in ('native', registry, issuer, head))
+    assert all(value in listing for value in ('acdc-v2', registry, issuer, head))
     status = kli(tmp_path, 'vc', 'registry', 'status', *common, '--version', '2.0',
-                 '--registry-name', 'native', '--verbose')
+                 '--registry-name', 'acdc-v2', '--verbose')
     assert all(value in status for value in (registry, issuer, head, 'Seq No.  0', '"rip"'))
     missing = kli(tmp_path, 'vc', 'registry', 'status', *common, '--version', '2.0',
                   '--registry-name', 'missing', succeeds=False)
@@ -80,9 +80,9 @@ def test_native_registry_installed_lifecycle_and_refusal(tmp_path, est_only):
     hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_2_0)
     rgy = Regery(hby=hby, name=name, base=base)
     try:
-        assert list(rgy.names) == ['native']
+        assert list(rgy.names) == ['acdc-v2']
         assert hby.habByName('issuer').kever.sn == 1
-        assert rgy.registryByName('native').head.qb64 == head
+        assert rgy.registryByName('acdc-v2').head.qb64 == head
     finally:
         rgy.close()
         hby.close()
@@ -99,7 +99,7 @@ def test_default_registry_commands_preserve_legacy_store(tmp_path):
     assert 'legacy' not in kli(tmp_path, 'vc', 'registry', 'list', *common, '--version', '2.0')
 
 
-def test_native_group_installed_cli_accepts_exact_registry_anchor(tmp_path):
+def test_acdc_v2_group_installed_cli_accepts_exact_registry_anchor(tmp_path):
     name, base, common = create_issuer(tmp_path)
     hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_2_0)
     member = hby.habByName('issuer')
@@ -129,7 +129,7 @@ def test_native_group_installed_cli_accepts_exact_registry_anchor(tmp_path):
         hby.close()
 
 
-def test_native_read_commands_report_staged_registry_as_pending(tmp_path):
+def test_acdc_v2_read_commands_report_staged_registry_as_pending(tmp_path):
     name, base, common = create_issuer(tmp_path)
     hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_2_0)
     rgy = Regery(hby=hby, name=name, base=base)
@@ -148,11 +148,11 @@ def test_native_read_commands_report_staged_registry_as_pending(tmp_path):
 
 
 def group_registry(tmp_path, live_parties):
-    """Two encrypted issuer stores; native RIP authoring and explicit join."""
+    """Two encrypted issuer stores; v2 ACDC RIP authoring and explicit join."""
     from contextlib import ExitStack
     from keri.app import Habery
     from keri.core import Parser
-    from tests.cli.commands.test_native_issuance_cli import PASSCODE, witnessed
+    from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, witnessed
     V2 = Vrsn_2_0
     first, holder = live_parties
     second = dict(name=f'issuer-peer-{uuid4().hex}', base=first['base'])
@@ -210,8 +210,8 @@ def group_registry(tmp_path, live_parties):
     return issuers, holder, coordinator
 
 
-def test_native_two_member_installed_registry_uses_nested_forwarding(tmp_path, live_parties):
-    from tests.cli.commands.test_native_issuance_cli import PASSCODE
+def test_acdc_v2_two_member_installed_registry_uses_nested_forwarding(tmp_path, live_parties):
+    from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE
     issuers, _, _ = group_registry(tmp_path, live_parties)
     registry = None
     # Read back the accepted RIP, exact controller anchor and witness receipt.

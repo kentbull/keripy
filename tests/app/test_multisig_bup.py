@@ -1,4 +1,4 @@
-"""Exact BUP proposals reuse native TEL and normal group approval owners."""
+"""Exact BUP proposals reuse v2 ACDC TEL and normal group approval owners."""
 
 from uuid import uuid4
 import pytest
@@ -208,7 +208,7 @@ def test_bup_refuses_before_replay_or_signing(fault):
 
 
 @pytest.mark.parametrize('kind', ['RIP-BUP', 'BUP-RIP', 'BUP-BUP', 'IXN-BUP', 'invalid-local-auth'])
-def test_native_consent_filters_exact_authenticated_operation(kind):
+def test_v2_registry_consent_filters_exact_authenticated_operation(kind):
     with participant_stores() as (hbys, groups, rgys):
         rip, _ = accept_rip(hbys, groups, rgys)
         own = (messaging.regcept(israid=groups[0].pre) if kind == 'RIP-BUP' else

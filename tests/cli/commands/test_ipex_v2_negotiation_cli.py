@@ -1,4 +1,4 @@
-"""Native negotiation through installed console scripts and independent stores."""
+"""v2 IPEX negotiation through installed console scripts and independent stores."""
 import json
 import shutil
 import subprocess
@@ -92,7 +92,7 @@ def stored(side, said):
         hby.close()
 
 
-def test_installed_native_negotiation_preserves_exact_parties_plan_and_thread(tmp_path, actors):
+def test_installed_ipex_v2_negotiation_preserves_exact_parties_plan_and_thread(tmp_path, actors):
     alice, bob = actors
     plan = [[[Diger(ser=b'public requested schema').qb64, '/', []]]]
     (tmp_path / 'plan.json').write_text(json.dumps(plan))
@@ -119,7 +119,7 @@ def test_installed_native_negotiation_preserves_exact_parties_plan_and_thread(tm
         assert result['locally_accepted'] is True and result['transmitted'] is False
 
 
-def test_installed_native_negotiation_refuses_wrong_parties_prior_plan_and_input(tmp_path, actors):
+def test_installed_ipex_v2_negotiation_refuses_wrong_parties_prior_plan_and_input(tmp_path, actors):
     alice, bob = actors
     plan = json.dumps([[[Diger(ser=b'public schema').qb64, '/', []]]])
     application = send(tmp_path, 'apply', alice, 'apply.cesr', '--recipient', bob[1], '--plan', plan)

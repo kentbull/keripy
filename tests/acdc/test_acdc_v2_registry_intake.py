@@ -1,4 +1,4 @@
-"""Native foreign registry intake through the parser and ordinary TEL escrows."""
+"""v2 ACDC foreign registry intake through the parser and ordinary TEL escrows."""
 
 import pytest
 
@@ -24,7 +24,7 @@ def message(event, issuer, anchor, triple=False):
 
 @pytest.mark.parametrize("reverse", [False, True])
 @pytest.mark.parametrize("triple", [False, True])
-def test_native_foreign_stream_replays_after_registry_reopen(tmp_path, reverse, triple):
+def test_acdc_v2_foreign_stream_replays_after_registry_reopen(tmp_path, reverse, triple):
     with (openHby(name="issuer", temp=True, version=Vrsn_2_0) as sender,
           openHby(name="verifier", temp=True, version=Vrsn_2_0) as receiver):
         hab = sender.makeHab(name="issuer", version=Vrsn_2_0)
@@ -33,7 +33,7 @@ def test_native_foreign_stream_replays_after_registry_reopen(tmp_path, reverse, 
                        blid=Diger(ser=b"foreign state").qb64, sn=1)
         hab.interact(data=[seal(rip, rip.said), seal(bup, rip.said)])
         anchoring = hab.kever.serder
-        options = dict(cls=RegBaser, name="native", temp=False,
+        options = dict(cls=RegBaser, name="acdc-v2", temp=False,
                        headDirPath=str(tmp_path))
 
         with openLMDB(**options) as baser:
@@ -80,10 +80,10 @@ def test_native_foreign_stream_replays_after_registry_reopen(tmp_path, reverse, 
 
 
 @pytest.mark.parametrize("bad_source", ["controller", "digest", "seal"])
-def test_native_intake_refuses_resolvable_wrong_source(bad_source):
+def test_acdc_v2_intake_refuses_resolvable_wrong_source(bad_source):
     with (openHby(name="issuer", temp=True, version=Vrsn_2_0) as sender,
           openHby(name="verifier", temp=True, version=Vrsn_2_0) as receiver,
-          openLMDB(cls=RegBaser, name="native", temp=True) as baser):
+          openLMDB(cls=RegBaser, name="acdc-v2", temp=True) as baser):
         hab = sender.makeHab(name="issuer", version=Vrsn_2_0)
         stranger = sender.makeHab(name="stranger", version=Vrsn_2_0)
         rip = regcept(israid=hab.pre)
@@ -109,10 +109,10 @@ def test_native_intake_refuses_resolvable_wrong_source(bad_source):
         assert rgy.processEvent(rip) is True
 
 
-def test_native_intake_waits_for_partial_signed_kel_source():
+def test_acdc_v2_intake_waits_for_partial_signed_kel_source():
     with (openHby(name="issuer", temp=True, version=Vrsn_2_0) as sender,
           openHby(name="verifier", temp=True, version=Vrsn_2_0) as receiver,
-          openLMDB(cls=RegBaser, name="native", temp=True) as baser):
+          openLMDB(cls=RegBaser, name="acdc-v2", temp=True) as baser):
         hab = sender.makeHab(name="issuer", isith='2', icount=3, version=Vrsn_2_0)
         rgy = Regery(hby=receiver, baser=baser)
         parser = Parser(kvy=Kevery(db=receiver.db, lax=False, local=False),
@@ -136,7 +136,7 @@ def test_native_intake_waits_for_partial_signed_kel_source():
 def test_pre_inception_bup_cannot_select_issuer_or_pin_source_hint():
     with (openHby(name="issuer", temp=True, version=Vrsn_2_0) as sender,
           openHby(name="verifier", temp=True, version=Vrsn_2_0) as receiver,
-          openLMDB(cls=RegBaser, name="native", temp=True) as baser):
+          openLMDB(cls=RegBaser, name="acdc-v2", temp=True) as baser):
         issuer = sender.makeHab(name="issuer", version=Vrsn_2_0)
         stranger = sender.makeHab(name="stranger", version=Vrsn_2_0)
         rip = regcept(israid=issuer.pre)
@@ -168,10 +168,10 @@ def test_pre_inception_bup_cannot_select_issuer_or_pin_source_hint():
         assert rgy.store.head(rip.said).qb64 == bup.said
 
 
-def test_native_foreign_sibling_arbitration_uses_existing_anchor_order():
+def test_acdc_v2_foreign_sibling_arbitration_uses_existing_anchor_order():
     with (openHby(name="issuer", temp=True, version=Vrsn_2_0) as sender,
           openHby(name="verifier", temp=True, version=Vrsn_2_0) as receiver,
-          openLMDB(cls=RegBaser, name="native", temp=True) as baser):
+          openLMDB(cls=RegBaser, name="acdc-v2", temp=True) as baser):
         hab = sender.makeHab(name="issuer", version=Vrsn_2_0)
         rip = regcept(israid=hab.pre)
         early = blindate(regid=rip.said, prior=rip.said,

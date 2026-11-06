@@ -449,7 +449,7 @@ def test_receipt_end_returns_bytes_for_v1_receipt():
         assert len(camHby.db.wigs.get((cam.pre, serder.said))) == 1
 
 
-def test_receipt_get_encapsulates_native_witness_signatures():
+def test_receipt_get_encapsulates_cesr_v2_witness_signatures():
     with openHby(name="get-wit", version=Vrsn_2_0) as whby, \
             openHby(name="get-controller", version=Vrsn_2_0) as chby:
         wit = whby.makeHab(name="wit", transferable=False, version=Vrsn_2_0)
@@ -462,7 +462,7 @@ def test_receipt_get_encapsulates_native_witness_signatures():
         app.add_route('/receipts', endpoint)
         response = testing.TestClient(app).simulate_get('/receipts', params=dict(pre=controller.pre, sn=0))
         assert response.status_code == 200
-        # HTTP success must carry a parseable native attachment envelope and verified receipt.
+        # HTTP success must carry a parseable CESR v2 attachment envelope and verified receipt.
         frames = Parser(version=Vrsn_2_0).parse(ims=bytearray(response.content), processive=False)
         assert len(frames) == 1 and frames[0].serder.said == event.said
         assert len(frames[0].wigers) == 1

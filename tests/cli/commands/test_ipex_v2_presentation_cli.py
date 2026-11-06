@@ -17,12 +17,12 @@ from keri.db import Baser
 from keri.help import toIso8601
 from keri.peer import Exchanger
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
-from keri.acdc.ipexing import admit as native_admit, loadHandlers
+from keri.acdc.ipexing import admit as admitV2, loadHandlers
 from types import SimpleNamespace
 
-from tests.cli.commands.test_native_issuance_cli import PASSCODE, issue, live_parties, witnessed
-from tests.cli.commands.test_native_registry_root_cli import group_copy, last_result, retained
-from tests.cli.commands.test_native_negotiation_cli import enable_kram, exchange_deadline, kli
+from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, issue, live_parties, witnessed
+from tests.cli.commands.test_acdc_v2_registry_root_cli import group_copy, last_result, retained
+from tests.cli.commands.test_ipex_v2_negotiation_cli import enable_kram, exchange_deadline, kli
 
 import pytest
 pytestmark = pytest.mark.real_store_roots
@@ -33,7 +33,7 @@ def state(side):
 
 
 def update(side, credential, output, *, value='', bound=False):
-    """Use the existing real witness receipt path for each exact native BUP anchor."""
+    """Use the existing real witness receipt path for each exact v2 ACDC BUP anchor."""
     hby = state(side)
     rgy = Regery(hby, name=side['name'], base=side['base'])
     try:
@@ -177,7 +177,7 @@ def test_selected_admitted_view_unblind_refresh_and_read_only_inspection(tmp_pat
     assert inspect(tmp_path, holder, selected['grant']) == old
 
 
-def test_provisioned_nonlead_presents_exact_group_view_at_native_threshold(tmp_path, live_parties):
+def test_provisioned_nonlead_presents_exact_group_view_at_v2_threshold(tmp_path, live_parties):
     issuer, holders, body, selected = group_copy(tmp_path, live_parties,
         data='{"d":"","shown":{"d":"","name":"Ada"},"secret":{"d":"","name":"hidden"}}')
     before = [inspect(tmp_path, side, selected['grant']) for side in holders]
@@ -419,7 +419,7 @@ def test_group_unblind_uses_live_member_thresholds_before_exact_admit(tmp_path, 
             hab = signing.habByName('verifiers')
             presented = next(p.serder for p in Parser(version=V2).parse(
                 ims=bytearray(outputs[1].read_bytes()), processive=False) if p.serder.route == '/ipex/grant')
-            alternate, atc = native_admit(hab, '', presented, gvrsn=V2)
+            alternate, atc = admitV2(hab, '', presented, gvrsn=V2)
             wrapper, watc = multisigExn(hab, alternate.raw + atc, version=V2)
             poster = StreamPoster(hby=signing, hab=hab.mhab, recp=verifiers[1]['member'],
                                   topic='multisig', version=V2)
@@ -495,7 +495,7 @@ def test_held_bound_refresh_and_invalid_revoked_refusal(tmp_path, live_parties):
         '--refresh', '--opening', str(proof_file))
     assert accepted['observations'][body.said]['state'] == 'issued'
     assert inspect(tmp_path, holder, selected['grant']) == original
-    # Native Unblind preserves the carried bound proof and discovers revoked state.
+    # v2 IPEX Unblind preserves the carried bound proof and discovers revoked state.
     update(issuer, body, later, value='revoked')
     public = Parser(version=V2).parse(ims=bytearray(later.read_bytes()), processive=False)
     intake(holder, b''.join(serializeParsedSubstream(child) for child in public[:-1]))

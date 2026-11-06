@@ -1514,7 +1514,7 @@ def test_query_defaults_to_json_for_route_topics():
     """Default queries are JSON, so mailbox route topics such as "/receipt" serialize.
 
     Strict native CESR field-map labels cannot encode those topic keys, and HTTP
-    query streaming expects JSON bodies; the native default broke kli rotate.
+    query streaming expects JSON bodies; the CESR-native default broke kli rotate.
     """
     with openHby(name="query-kind", salt=Salter(raw=b'0123456789abcdef').qb64) as hby:
         hab = hby.makeHab(name="query-kind", isith="1", icount=1)

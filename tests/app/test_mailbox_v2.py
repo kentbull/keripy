@@ -1,4 +1,4 @@
-"""MailboxDirector borrows native TEL and reply owners for actual incoming bytes."""
+"""MailboxDirector borrows v2 ACDC TEL and reply owners for actual incoming bytes."""
 import pytest
 
 from keri import Kinds, Vrsn_2_0
@@ -10,8 +10,8 @@ from keri.kering import Roles
 
 @pytest.fixture
 def parties():
-    with (openHby(name='native-mail-source', temp=True, version=Vrsn_2_0) as source,
-          openHby(name='native-mail-receiver', temp=True, version=Vrsn_2_0) as receiver):
+    with (openHby(name='v2-mail-source', temp=True, version=Vrsn_2_0) as source,
+          openHby(name='v2-mail-receiver', temp=True, version=Vrsn_2_0) as receiver):
         sender = source.makeHab(name='issuer', icount=2, isith='2', ncount=2, nsith='2', version=Vrsn_2_0)
         receiver.makeHab(name='holder', icount=2, isith='2', ncount=2, nsith='2', version=Vrsn_2_0)
         registries = [Regery(hby=hby, name=hby.name, temp=True) for hby in (source, receiver)]
@@ -22,7 +22,7 @@ def parties():
                 rgy.close()
 
 
-def test_native_mailbox_parser_and_escrow_accept_anchored_foreign_tel(parties):
+def test_v2_mailbox_parser_and_escrow_accept_anchored_foreign_tel(parties):
     source, receiver, issuer, own, foreign = parties
     registry = Registrar(own).makeRegistry('public', issuer.pre)
     rip = own.store.event(registry.regk)
@@ -54,7 +54,7 @@ def test_native_mailbox_parser_and_escrow_accept_anchored_foreign_tel(parties):
     finally:
         escrow.close()
         mbx.exit()
-    assert foreign.store.opened, 'MailboxDirector borrows native Regery; the caller closes it'
+    assert foreign.store.opened, 'MailboxDirector borrows v2 ACDC Regery; the caller closes it'
 
 
 def test_mailbox_routes_real_reply_through_supplied_revery_router(parties):

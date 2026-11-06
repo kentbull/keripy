@@ -1,4 +1,4 @@
-"""Installed public native credential authoring, separate from registry issuance."""
+"""Installed public v2 ACDC credential authoring, separate from registry issuance."""
 import hashlib
 import json
 from uuid import uuid4
@@ -11,7 +11,7 @@ from keri.cli.common import setupHby
 from keri.app import Organizer
 from keri.core import Diger, Schemer, SerderACDC
 from keri.vc.proving import credential as legacy_credential
-from tests.cli.commands.vc.test_native_registry_cli import kli
+from tests.cli.commands.vc.test_acdc_v2_registry_cli import kli
 
 
 pytestmark = pytest.mark.real_store_roots
@@ -30,7 +30,7 @@ def state(tmp_path, request):
     config.write_text(json.dumps(dict(transferable=True, wits=[], toad=0, icount=1, isith='1', ncount=1, nsith='1')))
     for alias in ('issuer', 'recipient'):
         kli(tmp_path, 'incept', *common, *auth, '--version', '2.0', '--alias', alias, '--file', str(config))
-    for alias, registry in (('issuer', 'native'), ('recipient', 'foreign')):
+    for alias, registry in (('issuer', 'local'), ('recipient', 'foreign')):
         kli(tmp_path, 'vc', 'registry', 'incept', *common, *auth, '--version', '2.0',
             '--alias', alias, '--registry-name', registry)
     hby = setupHby(name=name, base=base, bran=PASSCODE if encrypted else None, noPrompt=True, version=Vrsn_2_0)
@@ -61,14 +61,14 @@ def snapshot(state):
         hby.close()
 
 
-def create(tmp_path, state, filename, *args, succeeds=True, alias='issuer', registry='native', auth=None):
+def create(tmp_path, state, filename, *args, succeeds=True, alias='issuer', registry='local', auth=None):
     return kli(tmp_path, 'vc', 'create', *state['common'], *(state['auth'] if auth is None else auth),
                '--alias', alias, '--registry-name', registry, '--recipient', 'recipient',
                '--version', '2.0', '--output', str(tmp_path / filename), *args, succeeds=succeeds)
 
 
 @pytest.mark.parametrize('state', [False, True], indirect=True, ids=['unencrypted', 'encrypted'])
-def test_native_acm_body_uses_imported_schema_and_is_deterministic_without_issuing(tmp_path, state):
+def test_acdc_v2_acm_body_uses_imported_schema_and_is_deterministic_without_issuing(tmp_path, state):
     schema = Schemer(sed={'$id': '', '$schema': scheming.SchemaDialect, 'type': 'object', 'version': '1.0.0',
         'required': ['a'], 'properties': {'a': {'type': 'object', 'required': ['role'],
         'properties': {'role': {'const': 'member'}}}}})
@@ -89,7 +89,7 @@ def test_native_acm_body_uses_imported_schema_and_is_deterministic_without_issui
     hby = opened(state)
     try:
         assert body.israid == hby.habByName('issuer').pre and body.iseaid == hby.habByName('recipient').pre
-        assert body.regid == before['registries']['native'][0] and body.schema == schema.said
+        assert body.regid == before['registries']['local'][0] and body.schema == schema.said
         assert body.edge['ref']['n'] == Diger(ser=b'public predecessor').qb64 and body.rule['usage'] == 'test'
         assert scheming.validateSchema(body, hby.db)
     finally:
@@ -105,7 +105,7 @@ def test_native_acm_body_uses_imported_schema_and_is_deterministic_without_issui
 
 
 @pytest.mark.parametrize('ilk', ['act', 'acg'])
-def test_native_fixed_body_and_verified_full_body_roundtrip(tmp_path, state, ilk):
+def test_acdc_v2_fixed_body_and_verified_full_body_roundtrip(tmp_path, state, ilk):
     hby = opened(state)
     try:
         recipient = hby.habByName('recipient').pre
@@ -122,7 +122,7 @@ def test_native_fixed_body_and_verified_full_body_roundtrip(tmp_path, state, ilk
     assert snapshot(state) == before
 
 
-def test_native_body_refuses_invalid_scope_schema_and_options_before_mutation(tmp_path, state):
+def test_acdc_v2_body_refuses_invalid_scope_schema_and_options_before_mutation(tmp_path, state):
     hby = opened(state)
     rgy = Regery(hby=hby, name=state['name'], base=state['base'])
     try:
@@ -159,7 +159,7 @@ def test_native_body_refuses_invalid_scope_schema_and_options_before_mutation(tm
 
 
 @pytest.mark.parametrize('state', [True], indirect=True)
-def test_native_body_wrong_unlock_preserves_encrypted_keeper_and_existing_output(tmp_path, state):
+def test_acdc_v2_body_wrong_unlock_preserves_encrypted_keeper_and_existing_output(tmp_path, state):
     before = snapshot(state)
     create(tmp_path, state, 'wrong', '--data', '{"d":""}', auth=['--passcode', 'abcdefghijklmnopqrstu'], succeeds=False)
     assert not (tmp_path / 'wrong').exists() and snapshot(state) == before
@@ -170,7 +170,7 @@ def test_native_body_wrong_unlock_preserves_encrypted_keeper_and_existing_output
 
 def test_verified_full_body_refuses_other_issuer_registry_aggregate_issuee_and_legacy_version(tmp_path, state):
     before = snapshot(state)
-    regid = before['registries']['native'][0]
+    regid = before['registries']['local'][0]
     common = dict(israid=state['issuer'], regid=regid, iseaid=state['recipient'], attribute=dict(d='', role='member'))
     wrong_issuer = acdcmap(**dict(common, israid=state['recipient']))
     wrong_registry = acdcmap(**dict(common, regid=before['registries']['foreign'][0]))

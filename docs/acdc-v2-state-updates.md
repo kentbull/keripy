@@ -1,6 +1,6 @@
-# Native issuer state updates
+# v2 ACDC issuer state updates
 
-After native issuance and Admit, update the same credential using its exact
+After v2 IPEX issuance and Admit, update the same credential using its exact
 self-verifying body and the issuer's existing encrypted Keeper:
 
 ```sh
@@ -30,7 +30,7 @@ accepted KEL policy selects interaction or establishment anchoring and ordinary
 witness/delegation completion.
 
 A local group member may author an update after explicitly receiving the existing
-root through the [provision/receive workflow](native-registry-roots.md). Imported
+root through the [provision/receive workflow](acdc-v2-registry-roots.md). Imported
 accepted group registry history requires no new local registry alias. The exact
 issuer RIP, accepted BUP history, existing root and current credential binding are
 still checked before any successor is staged; membership alone cannot authorize
