@@ -1509,6 +1509,25 @@ def test_seed_code_mapping_covers_every_algorithm_signer_supports():
             )
             assert SeedCodeByVerferCode[verfer_code] == seed_code
 
+
+def test_query_defaults_to_json_for_route_topics():
+    """Default queries are JSON, so mailbox route topics such as "/receipt" serialize.
+
+    Strict native CESR field-map labels cannot encode those topic keys, and HTTP
+    query streaming expects JSON bodies; the native default broke kli rotate.
+    """
+    with openHby(name="query-kind", salt=Salter(raw=b'0123456789abcdef').qb64) as hby:
+        hab = hby.makeHab(name="query-kind", isith="1", icount=1)
+
+        msg = hab.query(pre=hab.pre, src=hab.pre, route="mbx",
+                        query=dict(pre=hab.pre, topics={"/receipt": 0, "/replay": 4}))
+
+        serder = SerderKERI(raw=bytes(msg))
+        assert serder.kind == Kinds.json
+        assert serder.pvrsn == TEST_VERSION
+        assert serder.ked["q"]["topics"] == {"/receipt": 0, "/replay": 4}
+
+
 if __name__ == "__main__":
     test_habery()
     test_make_load_hab_with_habery_v2()
