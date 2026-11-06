@@ -5967,6 +5967,40 @@ class Kevery:
                          "receipt of pre= %s sn=%x dig=%s", serder.pre, serder.sn,
                          serder.said)
 
+    def escrowed(self, serder):
+        """Report whether this exact KEL event or receipt waits in a dependency escrow.
+
+        Public read-only contract for intake services that must report a
+        dependency outcome without reading escrow tables. For a key event,
+        True only when its exact SAID at (pre, sn) is retained by the
+        partial-signature, partial-witness, partial-delegation, out-of-order
+        or delegable-approval escrow. For an ``rct``, True only when an
+        unverified witness, non-transferable or transferable receipt of the
+        exact receipted SAID is retained. Duplicity and query-not-found
+        escrows are not dependencies and are not reported. Escrow presence is
+        not acceptance or validity; accepted state stays in ``kels``. No stores
+        change.
+
+        Parameters:
+            serder (SerderKERI): key event or receipt message
+
+        Returns:
+            bool: True when an ordinary dependency escrow retains it
+        """
+        db = self.db
+        if serder.ilk != Ilks.rct:
+            if any(serder.said in escrow.get(keys=serder.pre, on=serder.sn)
+                   for escrow in (db.pses, db.pwes, db.pdes, db.ooes)):
+                return True
+            return serder.said in db.delegables.get(keys=snKey(serder.pre, serder.sn))
+        if any(said == serder.said
+               for said, _ in db.uwes.get(keys=serder.pre, on=serder.sn)):
+            return True
+        receipts = db.ures.get(keys=(serder.pre,
+                                     Number(num=serder.sn, code=NumDex.Huge).qb64))
+        receipts += db.vres.get(keys=snKey(serder.pre, serder.sn))
+        return any(receipt[0].qb64 == serder.said for receipt in receipts)
+
     def processEscrows(self):
         """
         Iterate throush escrows and process any that may now be finalized"""

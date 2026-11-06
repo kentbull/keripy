@@ -159,3 +159,27 @@ def test_registry_accept_occupied_ordinal_preserves_head(tmp_path, registry_even
         assert store.head(rip.said).qb64 == bup.said
         assert store.seqSaider(rip.said, 1).qb64 == bup.said
         assert store.event(sibling.said) is None
+
+
+def test_registry_store_escrowed_reports_exact_dependency(registry_events):
+    """Only the exact escrowed TEL event is reported; acceptance is separate."""
+    rip, bup = registry_events
+    other = Diger(ser=b"other-bup").qb64
+    with openLMDB(cls=RegBaser, name="test-escrowed", temp=True) as baser:
+        store = RegistryStore(baser)
+        store.accept(rip.said, 0, rip)
+        assert store.escrowed(rip.said, 1, bup.said) is False
+
+        store.escrowMissingAnchor(rip.said, 1, bup.said)
+        assert store.escrowed(rip.said, 1, bup.said) is True
+        assert store.escrowed(rip.said, 1, other) is False
+        assert store.escrowed(rip.said, 2, bup.said) is False
+        assert store.seqSaider(rip.said, 1) is None
+
+        store.clearEscrows(rip.said, 1, bup.said)
+        store.escrowOutOfOrder(rip.said, 1, bup.said)
+        assert store.escrowed(rip.said, 1, bup.said) is True
+
+        store.clearEscrows(rip.said, 1, bup.said)
+        assert store.escrowed(rip.said, 1, bup.said) is False
+        assert store.escrowed(rip.said, 0, rip.said) is False

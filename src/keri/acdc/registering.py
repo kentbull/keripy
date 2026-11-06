@@ -167,6 +167,26 @@ class RegistryStore:
     def escrowOutOfOrder(self, regk, sn, said):
         return self.baser.ooes.add(keys=regk, on=sn, val=said)
 
+    def escrowed(self, regk, sn, said):
+        """Report whether this exact TEL event waits in a dependency escrow.
+
+        Public read-only counterpart of ``escrowMissingAnchor`` and
+        ``escrowOutOfOrder``: True only when ``said`` at (regk, sn) is retained
+        by the missing-anchor or out-of-order escrow. Escrow presence is not
+        acceptance; ``seqSaider`` alone reports accepted TEL membership. No
+        stores change.
+
+        Parameters:
+            regk (str): registry SAID (rip.d)
+            sn (int): TEL sequence number
+            said (str): exact TEL event SAID
+
+        Returns:
+            bool: True when an ordinary TEL dependency escrow retains it
+        """
+        return any((said,) in escrow.get(keys=regk, on=sn)
+                   for escrow in (self.baser.maes, self.baser.ooes))
+
     def clearEscrows(self, regk, sn, said):
         self.baser.maes.rem(keys=regk, on=sn, val=said)
         self.baser.ooes.rem(keys=regk, on=sn, val=said)
