@@ -7,15 +7,80 @@ Registrar service support for managing Registries of ACDC state
 
 """
 
+from dataclasses import asdict, dataclass
+
 from hio.help import ogler
 
-from ..kering import ClosedError, ConfigurationError, ValidationError
-from ..core import Blinder, Diger, SerderACDC
+from ..kering import (ClosedError, ConfigurationError, ValidationError, Vrsn_2_0,
+                      Ilks, MissingSignatureError, MissingWitnessSignatureError,
+                      MissingDelegationError, OutOfOrderError,
+                      MissingDelegableApprovalError, UnverifiedReceiptError,
+                      UnverifiedWitnessReceiptError,
+                      UnverifiedTransferableReceiptError)
+from ..core import (Blinder, BlindState, BoundState, Diger, Number, Parser,
+                    SerderACDC)
 from . import messaging, regeventing, scheming
 from .regeventing import _normalizeEventRecord
 from .registering import RegistryStore, openRegistry
 
 logger = ogler.getLogger()
+
+
+# KEL errors whose event the ordinary Kevery escrows may retain as a dependency.
+KelDependencyErrors = (MissingSignatureError, MissingWitnessSignatureError,
+                       MissingDelegationError, OutOfOrderError,
+                       MissingDelegableApprovalError, UnverifiedReceiptError,
+                       UnverifiedWitnessReceiptError,
+                       UnverifiedTransferableReceiptError)
+
+# Public KEL message types accepted alongside v2 TEL evidence.
+PublicKelIlks = (Ilks.icp, Ilks.dip, Ilks.rot, Ilks.drt, Ilks.ixn, Ilks.rct)
+
+
+@dataclass(frozen=True)
+class IntakeOutcome:
+    """Final outcome of one public KEL or v2 TEL frame after escrow retry.
+
+    Fields:
+        serder (SerderKERI | SerderACDC): the frame's message body.
+        status (str): ``accepted``, ``pending`` (an ordinary dependency escrow
+            retains it) or ``rejected``.
+        opening (Blinder | None): the BUP's vetted disclosed opening, if any.
+            It is evidence only; retaining or publishing it is caller policy.
+    """
+    serder: object
+    status: str
+    opening: object = None
+
+
+def disclosedOpening(serder, *, bsqs=(), bsss=()):
+    """Return the single opening disclosed with a v2 TEL event, vetted, or None.
+
+    Core TEL rule: only a BUP may carry a disclosed opening, and at most one.
+    The opening must reproduce the BUP's BLID. Possession authorizes nothing;
+    credential binding and retention or publication belong to the caller.
+
+    Parameters:
+        serder (SerderACDC): the TEL event body.
+        bsqs (Iterable): parsed BlindState attachment tuples.
+        bsss (Iterable): parsed BoundState attachment tuples.
+
+    Returns:
+        Blinder | None: the vetted opening, or None when none is supplied.
+
+    Raises:
+        ValidationError: a non-BUP carries one, or more than one is supplied.
+    """
+    supplied = [(BlindState, values) for values in bsqs]
+    supplied.extend((BoundState, values) for values in bsss)
+    if not supplied:
+        return None
+    if serder.ilk != Ilks.bup or len(supplied) != 1:
+        raise ValidationError("only a BUP may carry one disclosed opening")
+    clan, values = supplied[0]
+    opening = Blinder(data=clan(*values))
+    regeventing.vetBlind(opening, blid=serder.sad["b"])
+    return opening
 
 
 class Regery:
@@ -166,6 +231,82 @@ class Regery:
         if event.ilk == "rip":
             self._processEventerEscrows(eventer)
         return accepted
+
+    def ingest(self, raw, *, kvy):
+        """Process a public KEL and v2 TEL evidence stream and report each outcome.
+
+        Accepts only public KEL messages (icp, dip, rot, drt, ixn, rct) and
+        v2 RIP/BUP events. Kevery and this Regery own acceptance and every
+        dependency escrow; nothing else is retained here. A KEL error whose
+        exact event an ordinary escrow retains continues the stream; any other
+        failure stops it, and frames already processed keep their outcomes.
+        After one escrow retry each frame is classified once: ``accepted``,
+        ``pending`` (``Kevery.escrowed`` / ``RegistryStore.escrowed``) or
+        ``rejected``. Heads, counts and opening retention are caller policy.
+
+        Parameters:
+            raw (bytes | bytearray): framed CESR evidence stream.
+            kvy (Kevery): KEL processor sharing this Regery's Habery.
+
+        Returns:
+            tuple: (list[IntakeOutcome] in stream order, refusal) where
+                refusal is the stream-stopping error text or None.
+        """
+        parser = Parser(kvy=kvy, rgy=self, local=False, version=Vrsn_2_0)
+        ims = bytearray(raw)
+        frames, refusal = [], None
+        while ims:
+            serder = None
+            try:
+                before = len(ims)
+                dom = parser.parseOneBare(ims=ims, processive=False, local=False)
+                if dom is None or dom.serder is None or len(ims) >= before:
+                    raise ValidationError("invalid or incomplete evidence frame")
+                serder = dom.serder
+                if isinstance(serder, SerderACDC):
+                    opening = disclosedOpening(serder, bsqs=dom.bsqs, bsss=dom.bsss)
+                    self.processEvent(serder, sscs=dom.sscs, ssts=dom.ssts)
+                    frames.append((serder, opening, False))
+                else:
+                    if serder.ilk not in PublicKelIlks:
+                        raise ValidationError("intake accepts only public KEL and v2 TEL")
+                    parser.msgProcess(asdict(dom), kvy=kvy, tvy=None,
+                                      exc=None, rvy=None, vry=None)
+                    frames.append((serder, None, False))
+            except KelDependencyErrors as ex:
+                if (serder is not None and not isinstance(serder, SerderACDC)
+                        and kvy.escrowed(serder)):
+                    frames.append((serder, None, True))
+                    continue
+                refusal = str(ex) or type(ex).__name__
+                break
+            except Exception as ex:
+                refusal = str(ex) or type(ex).__name__
+                break
+        kvy.processEscrows()
+        self.processEscrows()
+        outcomes = []
+        for serder, opening, dependency in frames:
+            if isinstance(serder, SerderACDC):
+                regk = serder.said if serder.ilk == Ilks.rip else serder.sad["rd"]
+                sn = Number(numh=serder.sad["n"]).num
+                accepted = self.store.seqSaider(regk, sn)
+                if accepted is not None and accepted.qb64 == serder.said:
+                    status = "accepted"
+                elif self.store.escrowed(regk, sn, serder.said):
+                    status = "pending"
+                else:
+                    status = "rejected"
+            elif not dependency:
+                status = "accepted"
+            elif kvy.escrowed(serder):
+                status = "pending"
+            elif kvy.db.kels.getLast(keys=serder.pre, on=serder.sn) == serder.said:
+                status = "accepted"
+            else:
+                status = "rejected"
+            outcomes.append(IntakeOutcome(serder=serder, status=status, opening=opening))
+        return outcomes, refusal
 
     def _processEventerEscrows(self, eventer):
         """Give pre-inception updates ordinary anchor discovery before replay."""

@@ -18,4 +18,5 @@ from .chaining import (Verdicts, EdgeVerdict, valid, invalid, unknown,
 from .regbasing import RegBaser
 from .webregbasing import WebRegBaser
 from .registering import RegistryStore, openRegistry
-from .registraring import Regery, Registry, Registrar
+from .registraring import (Regery, Registry, Registrar, IntakeOutcome,
+                           disclosedOpening)
