@@ -26,7 +26,7 @@ from .eventing import verifySigs
 
 from ..kering import (KramConfigurationError, KramError,
                       MissingSenderKeyStateError, MissingAuthAttachmentError,
-                      Ilks, Vrsn_2_0)
+                      ConfigurationError, ValidationError, Ilks, Vrsn_2_0)
 from ..help import helping
 from ..recording import CacheTypeRecord, MsgCacheRecord, TxnMsgCacheRecord
 
@@ -1052,6 +1052,49 @@ class Kramer:
             return self.kramit(serder, kwa)
         return serder  # KRAM disabled for all messages return message for further processing
 
+
+    def authenticateQuery(self, serder, kwa, *, hby):
+        """Authenticate one signed ``qry`` under KRAM and its requester's keys.
+
+        Public intake contract for services that answer authenticated queries.
+        KRAM must be enabled: staged configuration is reconciled, then the
+        query must pass ``intake`` (timeliness and replay caching). Attached
+        signatures must then satisfy the requester's current signing threshold
+        (``verifyQueryAttachments``). A query with no signatures authenticates
+        only through source seals, and every seal must be in the requester's
+        own KEL. Route and requester authorization stay with the caller.
+
+        Parameters:
+            serder (SerderKERI): the signed query body.
+            kwa (dict): parser attachments (sigers, cigars, lsgs, tsgs, sscs,
+                ssts); KRAM may normalize it in place.
+            hby (Habery): the verifier's Habery.
+
+        Raises:
+            ConfigurationError: KRAM is disabled.
+            ValidationError: KRAM refused the query or its attachments do
+                not authenticate the requester. KRAM's own dependency errors
+                (e.g. MissingSenderKeyStateError) propagate unchanged.
+        """
+        from ..peer.exchanging import verifyAttachments, verifyQueryAttachments
+
+        if not self.enabled:
+            raise ConfigurationError("KRAM unavailable")
+        self.reconcileConfig()
+        if self.intake(serder, kwa) is None:
+            raise ValidationError("KRAM rejected query")
+        signatures = {key: kwa.get(key) for key in ("sigers", "cigars", "lsgs", "tsgs")}
+        if any(signatures.values()):
+            verified = verifyQueryAttachments(hby, serder, **signatures)
+        else:
+            seals = list(kwa.get("ssts", []))
+            seals += [(Prefixer(qb64=serder.pre), number, diger)
+                      for number, diger in kwa.get("sscs", [])]
+            own = [seal for seal in seals if seal[0].qb64 == serder.pre]
+            _, _, valid, invalid, missing = verifyAttachments(hby, serder, sourceSeals=own)
+            verified = bool(valid) and len(own) == len(seals) and not invalid and not missing
+        if not verified:
+            raise ValidationError("query attachments do not authenticate the requester")
 
     def kramit(self, msg, kwa=None):
         """Core KRAM processing logic.
