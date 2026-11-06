@@ -17,7 +17,8 @@ from keri.kering import Vrsn_1_0, Roles, Schemes, Kinds
 from keri.recording import EndpointRecord, LocationRecord
 
 from keri.core import (Salter, Kevery, Parser, Router,
-                       Revery, MtrDex, reply)
+                       Revery, MtrDex, reply, messagize, Number, Diger)
+from keri.db.dbing import fetchTsgs
 
 from keri.help import helping
 from keri.app import openHby
@@ -1455,6 +1456,47 @@ def test_watcher_add_cut():
         assert observed.enabled is False
         observed = conHab.db.obvs.get(keys=(conHab.pre, wat0hab.pre, obv2hab.pre))
         assert observed.enabled is True
+
+
+def test_reply_loc_scheme_trims_stale_establishment_sigs():
+    """
+    Accept a /loc/scheme reply that carries both a stale establishment
+    signature group (signed before the endorser rotated) and a current one,
+    keeping only the current group for that reply SAID.
+    """
+    url = "http://127.0.0.1:5642/"
+    with (openHby(name="end", base="test", salt=Salter(raw=b'0123456789abcdef').qb64) as endHby,
+          openHby(name="rcv", base="test", salt=Salter(raw=b'abcdef0123456789').qb64) as rcvHby):
+        endHab = endHby.makeHab(name="end", isith="1", icount=1, transferable=True)
+        serder = reply(pre=endHab.pre, route="/loc/scheme", data=dict(eid=endHab.pre, scheme=Schemes.http, url=url),
+                       stamp=helping.nowIso8601())
+
+        def group():
+            est = endHab.kever.lastEst
+            return (endHab.kever.prefixer, Number(sn=est.s), Diger(qb64=est.d),
+                    endHab.sign(ser=serder.raw, indexed=True))
+
+        stale = group()
+        endHab.rotate()
+        assert endHab.kever.sn == 1
+        current = group()
+        msg = messagize(serder=serder, tsgs=[stale, current])
+
+        rvy = Revery(db=rcvHby.db)
+        kvy = Kevery(db=rcvHby.db, lax=False, local=False, rvy=rvy)
+        kvy.registerReplyRoutes(router=rvy.rtr)
+        parser = Parser(kvy=kvy, rvy=rvy)
+        parser.parse(ims=bytearray(endHab.replay()))
+        assert rcvHby.db.kevers[endHab.pre].sn == 1
+        parser.parse(ims=bytearray(msg))
+
+        assert rcvHby.db.rpys.get(keys=(serder.said,)) is not None
+        assert rcvHby.db.lans.get(keys=(endHab.pre, Schemes.http)).qb64 == serder.said
+        assert rcvHby.db.locs.get(keys=(endHab.pre, Schemes.http)).url == url
+        tsgs = fetchTsgs(db=rcvHby.db.tsgs, diger=Diger(qb64=serder.said))
+        assert [(prefixer.qb64, number.sn, diger.qb64) for prefixer, number, diger, _ in tsgs] == [
+            (endHab.pre, 1, endHab.kever.lastEst.d)]
+        assert not list(rcvHby.db.tsgs.getTopItemIter(keys=(serder.said, endHab.pre, f"{0:032x}", "")))
 
 
 if __name__ == "__main__":

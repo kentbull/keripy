@@ -425,7 +425,7 @@ class Revery:
                         snr.sn == snumber.sn and dgr.qb64 != sdiger.qb64
                     ):
                         self.db.tsgs.trim(
-                            keys=(prr.qb64, f"{snr.sn:032h}", dgr.qb64, "")
+                            keys=(saider.qb64, prr.qb64, f"{snr.sn:032x}", dgr.qb64, "")
                         )
 
                 accepted = True
