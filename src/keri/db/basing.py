@@ -1176,7 +1176,8 @@ class Baser(LMDBer):
         self.essrs = subing.CesrIoSetSuber(db=self, subkey="essrs.", klas=coring.Texter)
 
         # /registry/root copies stored in exns/essrs and awaiting automatic
-        # retention, keyed by exn SAID; value is the retry deadline
+        # retention, keyed by exn SAID; value is when the copy entered escrow.
+        # No timeout: entries leave only on retention or refusal.
         self.rrpe = subing.CesrSuber(db=self, subkey="rrpe.", klas=coring.Dater)
 
         # registry state authenticated for each node an accepted grant disclosed,

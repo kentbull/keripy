@@ -15,10 +15,10 @@ Copies are store-and-forward: KRAM exempts the route
 Received copies are accepted automatically, with no approval step: a copy
 that verifies on arrival is retained at once, and one that cannot yet verify
 because local KEL, TEL, group or opening evidence is missing waits in a
-bounded escrow (``Baser.rrpe``) that ``processEscrows`` retries.
+dependency escrow (``Baser.rrpe``, no timeout) that ``processEscrows``
+retries.
 """
 
-import datetime
 
 from ..app.habbing import GroupHab, Hab
 from ..core import Blinder, Dater, MtrDex, Number, Prefixer, Salter
@@ -120,10 +120,12 @@ class RegistryRoot:
     ``ri`` not a local individual habitat, ``i == ri``, ``gid`` a local
     habitat that is not this member's group, a non-Ed25519 recipient key, or
     a membership or sender-authority failure against complete local state.
-    A SAID already stored is ignored, so duplicate deliveries are idempotent.
+    A SAID already stored is ignored while its root is retained or the copy
+    is still escrowed, so duplicate deliveries are idempotent; an identical
+    resend of a stored copy that is neither re-escrows it.
 
     Acceptance is automatic. ``handle`` escrows the stored copy (exchange
-    store plus ``rrpe`` deadline) and immediately tries to retain it: full
+    store plus an ``rrpe`` entry) and immediately tries to retain it: full
     authorization, decryption, plaintext binding and root verification
     against a held opening or by reproducing the BUP ``b`` commitment. On
     success the root is retained and the escrow entry removed; a newly
@@ -132,7 +134,10 @@ class RegistryRoot:
     state, local group habitat, an unaccepted rotation that adds the
     recipient, or missing opening evidence) stays escrowed and
     ``processEscrows`` retries it, which the Exchanger drives from
-    ``processEscrow``, until ``TimeoutRRE`` elapses. A copy refused on any
+    ``processEscrow``. Like the v2 TEL dependency escrows it has no
+    wall-clock timeout: it stays escrowed until retained or refused, so a
+    newcomer that acquires the missing state much later still retains it. A
+    locked Keeper likewise leaves it pending. A copy refused on any
     attempt (plaintext mismatch, undecryptable, membership lost, or a
     different root already retained, which is never replaced) is dropped
     from escrow. ``receive`` is a manual retry that can supply a BUP or
@@ -141,7 +146,6 @@ class RegistryRoot:
 
     Route = "/registry/root"
     Note = "/exn/registry/root"
-    TimeoutRRE = 3600  # seconds a stored copy is retried before it is dropped
     States = ("issued", "revoked")
 
     def __init__(self, hby, rgy, notifier=None):
@@ -353,10 +357,22 @@ class RegistryRoot:
         return hab, gid, registry
 
     def verify(self, serder, attachments=None, essr=None, **kwa):
-        """Store authorized or deferred copies once; refuse the rest; never decrypt here."""
+        """Store authorized or deferred copies once; refuse the rest; never decrypt here.
+
+        A stored SAID is ignored while it is escrowed or its holder already
+        retains a root for that registry. Otherwise an identical resend falls
+        through and ``handle`` escrows it again.
+        """
         if self.hby.db.exns.get(keys=(serder.said,)) is not None:
-            logger.info("Registry root copy %s is already stored", serder.said)
-            return False
+            data = serder.ked.get('a')
+            data = data if isinstance(data, dict) else {}
+            if (self.hby.db.rrpe.get(keys=(serder.said,)) is not None
+                    or self.hby.ks.rroots.get(keys=(data.get('gid', ''), data.get('rd', '')))
+                    is not None):
+                logger.info("Registry root copy %s is already stored", serder.said)
+                return False
+            logger.info("Registry root copy %s is stored but unretained; escrowing it again",
+                        serder.said)
         try:
             self._scope(serder, essr)
         except RootDeferred as ex:
@@ -368,8 +384,7 @@ class RegistryRoot:
 
     def handle(self, serder, attachments=None, essr=None, **kwa):
         """Escrow the stored copy and retain its root now when it verifies."""
-        deadline = helping.nowUTC() + datetime.timedelta(seconds=self.TimeoutRRE)
-        self.hby.db.rrpe.put(keys=(serder.said,), val=Dater(dts=helping.toIso8601(deadline)))
+        self.hby.db.rrpe.put(keys=(serder.said,), val=Dater(dts=helping.nowIso8601()))
         self._attempt(serder.said)
 
     def _stored(self, said):
@@ -446,11 +461,6 @@ class RegistryRoot:
         try:
             self._accept(said)
         except (RootUnverified, AuthError) as ex:
-            deadline = self.hby.db.rrpe.get(keys=(said,))
-            if deadline is None or helping.nowUTC() > deadline.datetime:
-                self.hby.db.rrpe.rem(keys=(said,))
-                logger.info("Registry root copy %s timed out pending: %s", said, ex)
-                return False
             logger.debug("Registry root copy %s stays pending: %s", said, ex)
             return None
         except (KeriError, ValueError, KeyError, TypeError, AttributeError) as ex:
@@ -460,7 +470,7 @@ class RegistryRoot:
         return True
 
     def processEscrows(self):
-        """Retry every escrowed copy; drop refused or timed-out ones.
+        """Retry every escrowed copy; drop refused ones.
 
         The Exchanger calls this from ``processEscrow`` when the handler is
         registered, so ordinary escrow loops drive it.
@@ -506,15 +516,16 @@ class RegistryRoot:
     def pending(self):
         """List escrowed copies awaiting automatic retention, without decrypting.
 
-        Each item has ``said, sender, recipient, gid, registry, dt, deadline``.
+        Each item has ``said, sender, recipient, gid, registry, dt, escrowed``;
+        ``escrowed`` is when the copy last entered escrow.
         """
         items = []
-        for (said,), deadline in self.hby.db.rrpe.getTopItemIter():
+        for (said,), escrowed in self.hby.db.rrpe.getTopItemIter():
             serder = self.hby.db.exns.get(keys=(said,))
             if serder is None:
                 continue
             data = serder.ked.get('a') or {}
             items.append(dict(said=said, sender=serder.pre, recipient=serder.ked.get('ri'),
                               gid=data.get('gid'), registry=data.get('rd'),
-                              dt=serder.ked.get('dt'), deadline=deadline.dts))
+                              dt=serder.ked.get('dt'), escrowed=escrowed.dts))
         return items
