@@ -246,9 +246,10 @@ class GroupAdmission:
                     public = b''.join(owner.hby.db.clonePreIter(self.grant.pre, gvrsn=Vrsn_2_0))
                     public += b''.join(owner.evidence(SerderACDC(raw=raw), issuer=self.grant.pre)
                         for raw in owner.rgy.store.cloneTelIter(registry))
-                    envelope, atc = multisigIpexProofExn(
+                    # Keep the Admit's own attachments in atc; the proof wrapper has separate ones.
+                    envelope, proofAtc = multisigIpexProofExn(
                         self.hab, serializeMessage(owner.hby, self.grant.said))
-                    proof = envelope.raw + atc
+                    proof = envelope.raw + proofAtc
                     for member in self.hab.db.signingMembers(pre=self.hab.pre):
                         if member != self.hab.mhab.pre:
                             yield from owner.send(public, member)
