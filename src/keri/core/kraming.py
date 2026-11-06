@@ -157,9 +157,10 @@ class Kramer:
     # copies are correct whenever they arrive, often from a witness mailbox
     # long after any KRAM window, and the poller never re-fetches a dropped
     # message. Their acceptance model replaces KRAM replay protection: the
-    # exchange store is keyed by SAID and the handler ignores an already
-    # stored SAID, nothing is retained until explicit receiver approval
-    # re-authorizes the copy, and a retained root is immutable.
+    # exchange store is keyed by SAID and the handler ignores a stored SAID
+    # that is escrowed or already retained, every copy is fully
+    # re-authorized against current KEL/TEL state and its root reproduced
+    # before automatic retention, and a retained root is immutable.
     StoreForwardDenials = (
         [[2, 0], Ilks.exn, "/registry/root"],
     )

@@ -13,7 +13,7 @@ from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap
 from keri.acdc.salting import RegistryRoot, RootDeferred, RootRefused, RootUnverified, rootExn
 from keri.app import Notifier, openCF, openHby
-from keri.core import (Codens, Counter, Diger, Kevery, Kramer, MtrDex, Parser, Salter,
+from keri.core import (Codens, Counter, Dater, Diger, Kevery, Kramer, MtrDex, Parser, Salter,
                        SealSource, SerderKERI, Signer, Texter, exchange, messagize)
 from keri.help import helping
 from keri.kering import Ilks, Kinds, ValidationError
@@ -214,13 +214,48 @@ def test_escrowed_copy_is_retried_by_a_fresh_handler_over_the_same_store():
         assert held(w, w.bob).qb64 == w.root.qb64 and restarted.pending() == []
 
 
-def test_escrowed_copy_is_dropped_after_its_timeout(monkeypatch):
+def late(w):
+    for side, kel, tel in w.late:
+        receive(side, kel)
+        receive(side, tel)
+
+
+def test_deferred_copy_is_retained_long_after_it_was_escrowed():
     with world(late=('bob',)) as w:
         seed(w)
-        monkeypatch.setattr(RegistryRoot, 'TimeoutRRE', -1)
         pending = copy(w, w.alice, w.bob)
-        assert stored(w.bob) == []
-        assert w.bob.hby.db.exns.get(keys=(pending,)) is not None and held(w, w.bob) is None
+        # The copy entered escrow two hours ago, before any former timeout.
+        old = helping.toIso8601(helping.nowUTC() - timedelta(hours=2))
+        w.bob.hby.db.rrpe.pin(keys=(pending,), val=Dater(dts=old))
+        w.bob.exc.processEscrow()
+        assert stored(w.bob) == [pending] and held(w, w.bob) is None
+        assert w.bob.root.pending()[0]['escrowed'] == old
+        late(w)
+        w.bob.exc.processEscrow()
+        assert held(w, w.bob).qb64 == w.root.qb64 and stored(w.bob) == []
+        assert [note['d'] for note in notes(w.bob)] == [pending]
+
+
+def test_identical_resend_of_an_unretained_stored_copy_is_escrowed_again():
+    with world(late=('bob',)) as w:
+        seed(w)
+        wire = w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry, td=w.acdc.said)
+        pending = said(wire)
+        receive(w.bob, wire)
+        assert stored(w.bob) == [pending]
+        # The stored copy left escrow without retention (dropped or expired).
+        w.bob.hby.db.rrpe.rem(keys=(pending,))
+        assert stored(w.bob) == [] and w.bob.hby.db.exns.get(keys=(pending,)) is not None
+        receive(w.bob, wire)
+        assert stored(w.bob) == [pending]
+        late(w)
+        receive(w.bob, wire)  # still escrowed: ignored, not escrowed twice
+        assert stored(w.bob) == [pending] and held(w, w.bob) is None
+        w.bob.exc.processEscrow()
+        assert held(w, w.bob).qb64 == w.root.qb64 and stored(w.bob) == []
+        # Once retained, the identical resend is ignored and adds no note.
+        receive(w.bob, wire)
+        assert stored(w.bob) == [] and [note['d'] for note in notes(w.bob)] == [pending]
 
 
 @pytest.mark.parametrize('enabled', [False, True])
