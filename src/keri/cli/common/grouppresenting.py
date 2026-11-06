@@ -8,8 +8,8 @@ from ... import Kinds, Vrsn_2_0
 from ...acdc import ipexing
 from ...app import Multiplexor, multisigExn
 from ...core import Parser
-from ...kering import ConfigurationError, KeriError, MissingSignatureError
-from ...peer.exchanging import loadParsedNestedSubstreams, serializeMessage, serializeParsedSubstream, verify
+from ...kering import ConfigurationError, KeriError
+from ...peer.exchanging import loadParsedNestedSubstreams, serializeMessage, serializeParsedSubstream
 from .credentialing import load, recipient
 from .presenting import admitted, currentIssued, refresh, selected
 
@@ -33,12 +33,7 @@ class GroupPresentation:
                 or args.output and Path(args.output).resolve() == Path(args.proposal_output).resolve()):
             raise ConfigurationError('proposal output already exists or conflicts with --output')
         self.source, nests = admitted(owner.hby, owner.hab, args.from_grant)
-        self.preparation = None
-        if getattr(args, 'prepare', False):
-            from .disclosing import SelectedPreparation
-            self.preparation = SelectedPreparation(owner)
-            self.preparation.checkSource()
-        elif not args.refresh:
+        if not args.refresh:
             currentIssued(owner.exc, self.source.said)
         elif not args.proposal:
             nests = refresh(owner.hab, owner.rgy, nests, openings=args.opening, derive=args.derive)
@@ -150,21 +145,6 @@ class GroupPresentation:
                 yield from owner.send(raw, member, topic='multisig')
         print(json.dumps(dict(grant=self.grant.said, xid=self.grant.said, from_grant=self.source.said,
             phase='group_proposed', locally_accepted=owner.exc.complete(self.grant.said))), flush=True)
-        if self.preparation is not None:
-            while True:
-                owner.check()
-                try:
-                    verify(owner.hby, self.grant)
-                    break
-                except MissingSignatureError:
-                    yield owner.tock
-            # Sender authentication is necessary here; credential acceptance and issuer consent remain pending.
-            from .disclosing import wire
-            item, deadline = self.preparation.capture(self.grant.said)
-            owner.record(wire(item), initial=True)
-            print(json.dumps(dict(grant=self.grant.said, xid=self.grant.said, from_grant=self.source.said,
-                phase='prepared', prepared=True, deadline=deadline, transmitted=False)), flush=True)
-            return
         while not owner.exc.complete(self.grant.said):
             owner.check()
             yield owner.tock

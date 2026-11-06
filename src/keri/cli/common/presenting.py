@@ -5,7 +5,6 @@ from dataclasses import asdict
 import json
 import math
 from pathlib import Path
-from time import monotonic
 from types import SimpleNamespace
 
 from hio.base import doing
@@ -142,8 +141,7 @@ def refresh(hab, rgy, nests, *, openings, derive):
 class NativePresentation(NativeIssuance):
     """Borrow finite transport while native Unblind owns every auxiliary decision."""
     def check(self):
-        if self.tyme >= self.deadline or (getattr(self, 'clockDeadline', None) is not None
-                                         and monotonic() >= self.clockDeadline):
+        if self.tyme >= self.deadline:
             raise TimeoutError('native presentation did not complete before --timeout')
         if getattr(self, 'nativeDeadline', None) is not None and nowUTC() >= self.nativeDeadline:
             raise TimeoutError('presentation reached its original native Grant deadline')
@@ -172,18 +170,8 @@ class NativePresentation(NativeIssuance):
         yield tock
         args = self.args
         evidenceSource = evidencing.settings(args)
-        prepare, resume = getattr(args, 'prepare', False), getattr(args, 'resume', None)
-        staged = prepare or resume or self.verb == 'endorse'
-        if not args.deliver and not (prepare or self.verb == 'endorse'):
+        if not args.deliver:
             raise ConfigurationError('live native presentation requires explicit --deliver')
-        if (prepare or self.verb == 'endorse') and (not args.output or args.deliver):
-            raise ConfigurationError('preparation and endorsement require --output without --deliver')
-        if staged and (getattr(args, 'refresh', False) or getattr(args, 'derive', False)
-                       or getattr(args, 'opening', None)
-                       or not prepare and (getattr(args, 'proposal', None) or getattr(args, 'proposal_output', None))):
-            raise ConfigurationError('prepare/endorse/resume preserve held proofs; proposal options require group --prepare')
-        if prepare and args.respond_unblind or resume and not args.respond_unblind:
-            raise ConfigurationError('--prepare cannot approve Unblind; --resume requires --respond-unblind')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be finite and positive')
         if getattr(args, 'time', None):
@@ -193,8 +181,6 @@ class NativePresentation(NativeIssuance):
         if (self.verb == 'present' and (args.opening or args.derive) and not args.refresh):
             raise ConfigurationError('--opening and --derive require explicit --refresh')
         self.deadline = self.tyme + args.timeout
-        if staged:
-            self.clockDeadline = monotonic() + args.timeout
         self.hby = setupHby(name=args.name, base=args.base, bran=args.bran, version=Vrsn_2_0)
         self.rgy, notifier, background, operation = None, None, [], None
         try:
@@ -203,13 +189,6 @@ class NativePresentation(NativeIssuance):
                     or isinstance(self.hab, (SignifyHab, SignifyGroupHab))):
                 raise ConfigurationError('presentation requires an accepted local signer')
             group = isinstance(self.hab, GroupHab)
-            sendProposal, consent = getattr(args, 'send_proposal', False), getattr(args, 'consent_lifetime', None)
-            if (sendProposal or consent is not None) and not (group and prepare):
-                raise ConfigurationError('--send-proposal and --consent-lifetime require group --prepare')
-            if group and prepare and (not sendProposal or consent is None or not math.isfinite(consent) or consent <= 0):
-                raise ConfigurationError('group --prepare requires --send-proposal and finite positive --consent-lifetime')
-            if group and self.verb == 'present' and bool(getattr(args, 'unblind_proposer', None)) != bool(resume):
-                raise ConfigurationError('group --resume requires explicit --unblind-proposer; other presentation modes forbid it')
             if group and evidenceSource is not None:
                 raise ConfigurationError('group signed observer acquisition is outside this presentation profile')
             if not group and getattr(args, 'unblind_proposer', None):
@@ -219,8 +198,6 @@ class NativePresentation(NativeIssuance):
             self.rgy = Regery(hby=self.hby, name=args.name, base=args.base)
             notifier = Notifier(self.hby)
             self.exc = Exchanger(hby=self.hby, handlers=[])
-            if group and prepare:
-                self.exc.TimeoutPSE = consent  # Signature collection only; authenticated KRAM bounds live Unblind.
             ipexing.loadHandlers(self.hby, self.exc, notifier, rgy=self.rgy)
             self.unblind = Unblind(self.hab, self.exc, self.rgy, states=('issued', 'revoked', ''))
             if self.unblind is not None:
@@ -231,43 +208,14 @@ class NativePresentation(NativeIssuance):
                 exc=self.exc, kvy=kvy, rvy=self.hby.rvy, rgy=self.rgy,
                 version=Vrsn_2_0, gvrsn=Vrsn_2_0, kind=Kinds.json)
             self.psr = mbx.parser
-            if not resume:
-                for filename in args.input:
-                    self.intake(Path(filename).read_bytes())
-            if self.verb == 'endorse':
-                from .disclosing import endorse
-                message, endorsed = endorse(self)
-                result = dict(grant=message.said, xid=xid(message), endorsed=endorsed,
-                              output=args.output, transmitted=False)
-                if group:
-                    result['contributed'] = True
-                print(json.dumps(result), flush=True)
-                return
+            for filename in args.input:
+                self.intake(Path(filename).read_bytes())
             if group:
                 background.append(mbx)
                 self.extend(background)
                 if self.verb == 'present':
-                    if resume:
-                        from .disclosing import SelectedPreparation
-                        from .groupunblinding import GroupUnblind
-                        selection = SelectedPreparation(self)
-                        message, endorsed, operation = selection.resume()
-                        # resume's exact all-node context check authorizes scope; lead only elects delivery.
-                        transmitted = self.exc.lead(self.hab, message.said, pendingPresentation=True)
-                        # Native approve rechecks the existing identical live Grant; it never recreates consent.
-                        coordination = GroupUnblind(self, message, args.unblind_proposer, notifier)
-                        raw = bytes(self.hab.replay(gvrsn=Vrsn_2_0)) + endorsed
-                        self.record(raw, initial=True)
-                        if transmitted:
-                            yield from self.send(raw, selection.recipient)
-                        print(json.dumps(dict(grant=message.said, xid=xid(message), phase='group_resumed',
-                                              transmitted=transmitted)), flush=True)
-                        response = yield from coordination.respond()
-                        print(json.dumps(dict(grant=message.said, xid=xid(message), admit=response.said,
-                                              admitted=True, transmitted=transmitted)), flush=True)
-                    else:
-                        from .grouppresenting import GroupPresentation
-                        yield from GroupPresentation(self, notifier).run()
+                    from .grouppresenting import GroupPresentation
+                    yield from GroupPresentation(self, notifier).run()
                 else:
                     from .groupunblinding import GroupUnblind
                     message = self.hby.db.exns.get((args.said,)) or self.hby.db.epse.get((args.said,))
@@ -277,42 +225,25 @@ class NativePresentation(NativeIssuance):
                     yield from coordination.admit()
                 return
             if self.verb == 'present':
-                if prepare:
-                    from .disclosing import SelectedPreparation
-                    selection = SelectedPreparation(self)
-                    item, raw, deadline = selection.prepare()
-                    self.check()
-                    self.record(raw, initial=True)
-                    print(json.dumps(dict(grant=item.serder.said, xid=xid(item.serder),
-                        from_grant=selection.source.said, phase='prepared', prepared=True,
-                        deadline=deadline, transmitted=False)), flush=True)
-                    return
-                if resume:
-                    from .disclosing import SelectedPreparation
-                    selection = SelectedPreparation(self)
-                    message, endorsed, operation = selection.resume()
-                    recp = selection.recipient
-                    raw = bytes(self.hab.replay(gvrsn=Vrsn_2_0)) + endorsed
+                source, nests = admitted(self.hby, self.hab, args.from_grant)
+                if args.refresh:
+                    nests = refresh(self.hab, self.rgy, nests, openings=args.opening, derive=args.derive)
                 else:
-                    source, nests = admitted(self.hby, self.hab, args.from_grant)
-                    if args.refresh:
-                        nests = refresh(self.hab, self.rgy, nests, openings=args.opening, derive=args.derive)
-                    else:
-                        currentIssued(self.exc, source.said)
-                    nests = selected(nests, args.disclose)
-                    if len(nests) > 1 and args.plan is None:
-                        raise ConfigurationError('multiple disclosed nodes require explicit --plan')
-                    plan = load(args.plan) if args.plan is not None else None
-                    streams = [serializeParsedSubstream(nest) for nest in nests]
-                    recp = recipient(self.hby, args.recipient)
-                    message, atc = ipexing.grant(self.hab, recp=recp, message=args.message,
-                        origin=streams[0], artifacts=streams[1:] or None,
-                        modifiers=dict(dp=plan) if plan is not None else None,
-                        kind=Kinds.json, gvrsn=Vrsn_2_0)
-                    self.intake(message.raw + atc, local=True)
-                    if args.respond_unblind:
-                        operation = self.unblind.approve(message.said)
-                    raw = bytes(self.hab.replay(gvrsn=Vrsn_2_0)) + message.raw + atc
+                    currentIssued(self.exc, source.said)
+                nests = selected(nests, args.disclose)
+                if len(nests) > 1 and args.plan is None:
+                    raise ConfigurationError('multiple disclosed nodes require explicit --plan')
+                plan = load(args.plan) if args.plan is not None else None
+                streams = [serializeParsedSubstream(nest) for nest in nests]
+                recp = recipient(self.hby, args.recipient)
+                message, atc = ipexing.grant(self.hab, recp=recp, message=args.message,
+                    origin=streams[0], artifacts=streams[1:] or None,
+                    modifiers=dict(dp=plan) if plan is not None else None,
+                    kind=Kinds.json, gvrsn=Vrsn_2_0)
+                self.intake(message.raw + atc, local=True)
+                if args.respond_unblind:
+                    operation = self.unblind.approve(message.said)
+                raw = bytes(self.hab.replay(gvrsn=Vrsn_2_0)) + message.raw + atc
                 print(json.dumps(dict(grant=message.said, xid=xid(message), phase='selected',
                                       from_grant=args.from_grant)), flush=True)
                 self.record(raw, initial=True)
