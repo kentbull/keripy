@@ -276,8 +276,11 @@ def _validSingleDagList(value, itemtype):
     return all(isinstance(item, itemtype) for item in value)
 
 
-def _validDisclosurePath(value):
+def validDisclosurePath(value):
     """Validate one DAG's disclose-path plan.
+
+    Public, pure shape check of a signed ``q.dp`` entry; it neither selects
+    nor authorizes disclosure. Builders and consumers share this one rule.
 
     Callers interpret an empty plan as inheriting the prior plan when one
     exists and requesting no disclosure otherwise. Within a plan entry, an
@@ -643,7 +646,7 @@ class IpexHandler:
                 proofs = self._blindProofs(nest)
                 regk = acdc.sad.get("rd")
                 if not regk:
-                    if (proofs or self._verifyIssuerAuthNode(acdc, nest).verdict
+                    if (proofs or self.verifyIssuerAuthNode(acdc, nest).verdict
                             != chaining.Verdicts.valid):
                         return None
                     continue
@@ -658,7 +661,7 @@ class IpexHandler:
                 # Presentation proofs share the node-local attachment stream.
                 # Load their accepted events only when a supplied proof needs it.
                 if any(proof.said not in allowed for proof in proofs):
-                    for issuee, preg in self._presentationRegistries(acdc) or []:
+                    for issuee, preg in self.presentationRegistries(acdc) or []:
                         prip, pups = self._registryEvidence(preg)
                         if prip.said != preg or prip.israid != issuee:
                             return None
@@ -749,7 +752,7 @@ class IpexHandler:
                 continue
             nest = nodes[said]
             acdc = nest["serder"] if isinstance(nest, dict) else nest.serder
-            if self._verifyIssuerAuthNode(acdc, nest).verdict != chaining.Verdicts.valid:
+            if self.verifyIssuerAuthNode(acdc, nest).verdict != chaining.Verdicts.valid:
                 return None
         verdict = self._evaluateNode(order[0], nodes=nodes, memo={}, pending=pending,
                                      pendingValid=authorize)
@@ -826,7 +829,7 @@ class IpexHandler:
         if verb in (Ipex.apply, Ipex.offer, Ipex.agree, Ipex.grant):
             if ("dp" not in q
                     or not _validSingleDagList(q["dp"], list)
-                    or not _validDisclosurePath(q["dp"][0])):
+                    or not validDisclosurePath(q["dp"][0])):
                 return False
 
         # Agree changes no disclosure terms; its empty plan always means ditto.
@@ -1192,7 +1195,7 @@ class IpexHandler:
             # Retrieve the current message's dp and validate it
             plan = current.ked.get("q", {}).get("dp")
             if (not _validSingleDagList(plan, list)
-                    or not _validDisclosurePath(plan[0])):
+                    or not validDisclosurePath(plan[0])):
                 return None
 
             # If dp is non-empty, return it
@@ -1596,7 +1599,7 @@ class IpexHandler:
             auth = (chaining.valid("fresh registry authorized for DH") if pendingValid
                     else chaining.unknown("registry awaits authenticated state", retryable=True))
         else:
-            auth = self._verifyIssuerAuthNode(serder=nserder, nest=nest, records=records)
+            auth = self.verifyIssuerAuthNode(serder=nserder, nest=nest, records=records)
 
         edges = nserder.sad.get("e")
         if not edges:
@@ -2019,6 +2022,44 @@ class IpexHandler:
         # already decide.
         return chaining.reduce(groupOp, results, reducers=self.MAryReducers)
 
+    def verifySelection(self, nests):
+        """Verify exact selected ACDC node bytes as one closed graph, without writes.
+
+        Public read-only contract for a discloser choosing what to present
+        before any Grant exists. ``nests[0]`` is the origin; every edge target
+        must be carried (closed graph) and every carried nest must be reachable
+        from it. Each node must validate against its schema, then the ordinary
+        IPEX m-ary reduction (``verifyIssuerAuthNode`` per node) runs exactly as
+        it does for a received Grant. Registry states are recorded, not judged:
+        issued/revoked policy belongs to the caller. This verifies no Grant
+        context, KRAM lifetime or recipient and authorizes no send.
+
+        Parameters:
+            nests (list): parsed nested ACDC node substreams, origin first.
+
+        Returns:
+            tuple: (EdgeVerdict, records) where records maps node SAID to the
+                ``RegStateRecord`` each registry factor authenticated.
+
+        Raises:
+            MissingSchemaError: a node's schema is not yet held.
+        """
+        nests = list(nests)
+        if not nests:
+            return chaining.invalid("selection carries no ACDC node"), {}
+        origin = (nests[0]["serder"] if isinstance(nests[0], dict) else nests[0].serder).said
+        walked = self._walkGraph(origin, nests, closed=True)
+        if walked is None:
+            return chaining.invalid("selection is not one closed origin graph"), {}
+        nodes, order = walked
+        if not self._verifyNodeSchemas(nodes, order):
+            return chaining.invalid("selected node fails its schema"), {}
+        records = {}
+        verdict = self._evaluateNode(origin, nodes=nodes, memo={}, records=records)
+        if verdict is None:
+            return chaining.invalid("selection has no verdict"), {}
+        return verdict, records
+
     def _verifyNodeSchemas(self, nodes, order):
         """Validate each disclosed ACDC against its embedded or cached schema."""
         for said in order:
@@ -2033,8 +2074,13 @@ class IpexHandler:
 
         return True
 
-    def _verifyIssuerAuthNode(self, serder, nest, *, records=None):
+    def verifyIssuerAuthNode(self, serder, nest, *, records=None):
         """Verify one disclosed ACDC node's issuer authentication, as a verdict.
+
+        Public read-only contract: this is the single issuer-auth check the
+        ordinary IPEX graph reduction applies to each node, and callers that
+        must judge one node outside a whole Grant use it rather than another
+        validator. It writes no stores; ``records`` is a caller-owned dict.
 
         The node authenticates through its declared factor (see
         ._authenticateIssuer). When that factor is a registry, the transaction
@@ -2403,12 +2449,14 @@ class IpexHandler:
                    for section in sections)
 
     @staticmethod
-    def _presentationRegistries(serder):
+    def presentationRegistries(serder):
         """Extract the disclosed Issuee presentation-registry declaration.
 
-        Return ``None`` for an unsupported hidden issuer registry or when a
-        registry-backed ACDC hides the top-level attribute block that carries
-        the presentation requirement.
+        Public, pure: it reads only this ACDC body's disclosed fields and
+        authorizes nothing. Return a list of (issuee, registry) pairs, ``[]``
+        when none is declared, or ``None`` for an unsupported hidden issuer
+        registry or when a registry-backed ACDC hides the top-level attribute
+        block that carries the presentation requirement.
         """
         attribute = serder.sad.get("a")
 
@@ -2467,7 +2515,7 @@ class IpexHandler:
             acdc = nest["serder"] if isinstance(nest, dict) else nest.serder
 
             # Extract this node's Issuee registry declarations.
-            declarations = self._presentationRegistries(acdc)
+            declarations = self.presentationRegistries(acdc)
 
             # Reject hidden or malformed declarations.
             if declarations is None:
@@ -2653,7 +2701,7 @@ def apply(hab, recp, message, modifiers=None, attrs=None, dt=None, kind=None, gv
 
     if ("dp" not in mods
             or not _validSingleDagList(mods["dp"], list)
-            or not _validDisclosurePath(mods["dp"][0])):
+            or not validDisclosurePath(mods["dp"][0])):
         raise ValueError("modifiers['dp'] is required and must carry one disclose-path list per DAG")
 
     # Validate ax and add it to the body
@@ -2753,7 +2801,7 @@ def offer(hab, message, origin, artifacts=None, apply=None, recp=None, dt=None,
             raise ValueError("modifiers['dp'] is required when no prior apply is provided")
 
     # Offer uses the same canonical q.dp builder contract as apply.
-    if not _validSingleDagList(mods["dp"], list) or not _validDisclosurePath(mods["dp"][0]):
+    if not _validSingleDagList(mods["dp"], list) or not validDisclosurePath(mods["dp"][0]):
         raise ValueError("modifiers['dp'] must carry one disclose-path list per DAG")
 
     # Validate ax if present
@@ -2968,7 +3016,7 @@ def grant(hab, recp, message, origin=None, artifacts=None, agree=None,
         else:
             raise ValueError("a bare multi-node Grant requires an explicit disclosure plan")
     if (not _validSingleDagList(mods["dp"], list)
-            or not _validDisclosurePath(mods["dp"][0])):
+            or not validDisclosurePath(mods["dp"][0])):
         raise ValueError("modifiers['dp'] must carry one disclose-path list per DAG")
 
     if previous is None:
