@@ -54,6 +54,26 @@ class Router:
                   blinders=blinders, attachments=attachments)
         )
 
+    def removeRoute(self, resource):
+        """Unregister every route served by this exact resource instance.
+
+        Public counterpart of ``addRoute`` for an owner closing a handler it
+        registered. Matching is by identity, so other resources sharing a
+        template are kept, and route order is preserved. Replies already
+        stored or escrowed are untouched; later replies for a removed route
+        raise ``ValidationError`` on dispatch as for any unregistered route.
+
+        Parameters:
+            resource (object): the resource instance passed to ``addRoute``.
+
+        Returns:
+            int: number of routes removed (0 when none was registered).
+        """
+        kept = [route for route in self.routes if route.resource is not resource]
+        removed = len(self.routes) - len(kept)
+        self.routes[:] = kept
+        return removed
+
     def dispatch(self, serder, diger, cigars, tsgs, *, bsqs=None, bsss=None, attachments=None):
         """
 

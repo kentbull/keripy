@@ -1501,3 +1501,36 @@ def test_reply_loc_scheme_trims_stale_establishment_sigs():
 
 if __name__ == "__main__":
     pytest.main(['-vv', 'test_reply.py::test_reply'])
+
+
+def test_router_remove_route_unregisters_one_resource():
+    """Removing a closed handler keeps other resources and their order."""
+    from keri.core import Router, reply
+    from keri.kering import ValidationError, Vrsn_2_0
+
+    class Handler:
+        def __init__(self):
+            self.seen = []
+
+        def processReply(self, serder, diger, route, cigars, tsgs, **kwa):
+            self.seen.append(serder.said)
+
+    first, second = Handler(), Handler()
+    router = Router()
+    router.addRoute("/shared/reply", first)
+    router.addRoute("/first/{aid}", first)
+    router.addRoute("/shared/reply", second)
+    pre = Salter(raw=b'0123456789abcdef').signer(transferable=False, temp=True).verfer.qb64
+    shared = reply(pre=pre, route="/shared/reply", data=dict(n=1), version=Vrsn_2_0)
+    owned = reply(pre=pre, route="/first/abc", data=dict(n=2), version=Vrsn_2_0)
+
+    router.dispatch(shared, None, [], [])
+    assert first.seen == [shared.said] and second.seen == []
+
+    assert router.removeRoute(first) == 2
+    assert router.removeRoute(first) == 0
+    router.dispatch(shared, None, [], [])
+    assert second.seen == [shared.said]
+    with pytest.raises(ValidationError):
+        router.dispatch(owned, None, [], [])
+    assert first.seen == [shared.said]
