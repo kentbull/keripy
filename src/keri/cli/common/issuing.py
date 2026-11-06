@@ -1,4 +1,4 @@
-"""Finite, explicitly selected individual native issuance over existing mailboxes."""
+"""Finite, explicitly selected individual v2 IPEX issuance over existing mailboxes."""
 import json
 import math
 import time
@@ -6,9 +6,9 @@ from pathlib import Path
 
 from hio.base import doing
 
-from . import evidencing, nativeanchoring, sending, parseVersion, setupHby
+from . import evidencing, registryanchoring, sending, parseVersion, setupHby
 from .credentialing import recipient
-from .negotiating import NativeNegotiation
+from .negotiating import IpexV2Negotiation
 from .witnessing import witnessAuths
 from ... import Kinds, Vrsn_1_0, Vrsn_2_0
 from ...acdc import Regery, Registrar, ipexing, regeventing
@@ -27,7 +27,7 @@ def options(parser):
     parser.add_argument('--input', action='append', default=[], help='signed public KEL/TEL/IPEX CESR intake')
     parser.add_argument('--output', help='exclusive-create public evidence file; never contains registry roots')
     parser.add_argument('--deliver', action='store_true', help='explicitly submit through recipient endpoints/mailboxes')
-    parser.add_argument('--timeout', type=float, default=120.0, help='finite whole-operation wait; preserves the native deadline')
+    parser.add_argument('--timeout', type=float, default=120.0, help='finite whole-operation wait; preserves the Grant exchange deadline')
 
 
 def legacy(args):
@@ -36,13 +36,13 @@ def legacy(args):
                    ('credential', 'prior', 'issue', 'authenticate', 'code', 'code_time', 'unblind',
                     'evidence_url', 'evidence_ca', 'evidence_hostname', 'coordinator', 'custodian',
                     'unblind_proposer', 'proposal', 'proposal_output', 'consent_lifetime'))):
-        raise ConfigurationError('native issuance options require --version 2.0')
+        raise ConfigurationError('v2 IPEX issuance options require --version 2.0')
 
 
-class NativeIssuance(doing.DoDoer):
+class IpexV2Issuance(doing.DoDoer):
     """Keep DH ephemeral keys alive until witnessed issuance and explicit Admit.
 
-    Native Regery, Exchanger, DH and the ordinary KEL receipt/delegation owners
+    v2 ACDC Regery, Exchanger, DH and the ordinary KEL receipt/delegation owners
     decide acceptance. No operation can be resumed by opening a fresh process.
     """
     def __init__(self, args, verb):
@@ -51,16 +51,16 @@ class NativeIssuance(doing.DoDoer):
 
     def check(self):
         if self.tyme >= self.deadline:
-            raise TimeoutError('native issuance did not complete before --timeout')
-        if getattr(self, 'nativeDeadline', None) is not None and nowUTC() >= self.nativeDeadline:
-            raise TimeoutError('selected Grant reached its original native deadline')
+            raise TimeoutError('v2 IPEX issuance did not complete before --timeout')
+        if getattr(self, 'grantDeadline', None) is not None and nowUTC() >= self.grantDeadline:
+            raise TimeoutError('selected Grant reached its original exchange deadline')
 
     def intake(self, raw, *, local=False):
-        NativeNegotiation.intake(self.psr, self.exc, raw, local=local, issuance=True)
+        IpexV2Negotiation.intake(self.psr, self.exc, raw, local=local, issuance=True)
 
     def finish(self, xid, grant):
         if not self.dh.finish(xid) or not self.exc.complete(grant):
-            raise ConfigurationError('native verification has not accepted the selected Grant')
+            raise ConfigurationError('v2 IPEX verification has not accepted the selected Grant')
 
     def evidence(self, event, *, issuer=None):
         sn, said = regeventing.vetAnchor(event, db=self.hby.db, issuer=issuer or self.hab.pre)
@@ -86,20 +86,20 @@ class NativeIssuance(doing.DoDoer):
         args = self.args
         evidenceSource = evidencing.settings(args)
         if not args.deliver:
-            raise ConfigurationError('live native issuance requires explicit --deliver')
+            raise ConfigurationError('live v2 IPEX issuance requires explicit --deliver')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be finite and positive')
         if args.time:
-            raise ConfigurationError('live native issuance uses the native current timestamp')
+            raise ConfigurationError('live v2 IPEX issuance uses the current timestamp')
         if args.output and Path(args.output).exists():
             raise ConfigurationError('output already exists')
         if self.verb == 'grant' and (not args.issue or not args.credential or args.said):
-            raise ConfigurationError('native Grant requires --credential and --issue, without legacy --said')
+            raise ConfigurationError('v2 IPEX Grant requires --credential and --issue, without legacy --said')
         # Never upgrade an unencrypted store implicitly through a global passcode.
         keeper = Keeper(name=args.name, base=args.base, reopen=True)
         try:
             if not keeper.gbls.get('aeid'):
-                raise ConfigurationError('live native issuance requires an encrypted Keeper')
+                raise ConfigurationError('live v2 IPEX issuance requires an encrypted Keeper')
         finally:
             keeper.close()
         self.deadline = self.tyme + args.timeout
@@ -110,7 +110,7 @@ class NativeIssuance(doing.DoDoer):
             if (self.hab is None or not self.hab.accepted
                     or isinstance(self.hab, (SignifyHab, SignifyGroupHab))
                     or isinstance(self.hab, GroupHab) and self.hab.mhab is None):
-                raise ConfigurationError('live native issuance requires an accepted local signer')
+                raise ConfigurationError('live v2 IPEX issuance requires an accepted local signer')
             group = isinstance(self.hab, GroupHab)
             coordinator, custodian = getattr(args, 'coordinator', None), getattr(args, 'custodian', None)
             if group:
@@ -164,7 +164,7 @@ class NativeIssuance(doing.DoDoer):
                 if (body.raw != bodyraw or body.pvrsn != Vrsn_2_0 or not body.verify()
                         or body.ilk not in ('acm', 'act', 'acg') or body.israid != self.hab.pre
                         or body.iseaid != recp or body.regid not in self.rgy.regs):
-                    raise ConfigurationError('native public body must exactly match issuer, recipient and local registry')
+                    raise ConfigurationError('v2 ACDC public body must exactly match issuer, recipient and local registry')
                 registry = self.rgy.regs[body.regid]
                 rip = self.rgy.store.headEvent(registry.regk)
                 if rip is None or rip.ilk != 'rip':
@@ -174,8 +174,8 @@ class NativeIssuance(doing.DoDoer):
                 if args.prior:
                     prior = self.hby.db.exns.get((args.prior,))
                     if prior is None or prior.route not in ('/ipex/apply', '/ipex/agree'):
-                        raise ConfigurationError('--prior requires an exact accepted native Apply or Agree')
-                    prior = NativeNegotiation.prior(self.hby, args.prior, prior.route)
+                        raise ConfigurationError('--prior requires an exact accepted v2 IPEX Apply or Agree')
+                    prior = IpexV2Negotiation.prior(self.hby, args.prior, prior.route)
                     if prior.sad['a'].get('ax', [False])[0]:
                         raise ConfigurationError('anchored Agree is outside live individual issuance')
                     linked['apply' if prior.route == '/ipex/apply' else 'agree'] = prior
@@ -187,7 +187,7 @@ class NativeIssuance(doing.DoDoer):
             else:
                 message = self.hby.db.epse.get((args.said,))
                 if message is None or message.route != '/ipex/grant' or message.sad['ri'] != self.hab.pre:
-                    raise ConfigurationError('--said requires the exact pending native Grant for this recipient')
+                    raise ConfigurationError('--said requires the exact pending v2 IPEX Grant for this recipient')
                 recp = message.pre
             nests = loadParsedNestedSubstreams(self.hby, message.said)
             if message.sad['a'].get('ax', [False])[0]:
@@ -195,7 +195,7 @@ class NativeIssuance(doing.DoDoer):
             if len(nests) != 1:
                 raise ConfigurationError('live issuance supports exactly one disclosed registry node')
             xid = self.dh.approve(message.said, coordinator=coordinator, custodian=custodian)
-            self.nativeDeadline = self.exc.exchangeDeadline(message)
+            self.grantDeadline = self.exc.exchangeDeadline(message)
             admission = None
             if group:
                 from .groupadmitting import GroupAdmission
@@ -240,7 +240,7 @@ class NativeIssuance(doing.DoDoer):
             if self.verb == 'grant':
                 _, event = Registrar(self.rgy).issue(registry, acdc=body,
                     salt=self.hab.mgr.getRegistryRoot(self.hab.pre, registry.regk).qb64)
-                yield from nativeanchoring.anchor(self, registry, event, auths, background)
+                yield from registryanchoring.anchor(self, registry, event, auths, background)
                 self.finish(xid, message.said)
                 print(json.dumps(dict(grant=message.said, xid=xid, phase='registry_witnessed')),
                       flush=True)

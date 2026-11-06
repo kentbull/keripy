@@ -196,7 +196,7 @@ class Parser:
             exc (Exchanger): route EXN message types to this instance
             rvy (Revery): reply (RPY) message handler
             vry (``Verfifier``): credential verifier with wallet storage
-            rgy (Regery | None): native ACDC RIP/BUP registry evidence owner
+            rgy (Regery | None): v2 ACDC RIP/BUP registry evidence owner
             local (bool): True means event source is local (protected) for validation
                 False means event source is remote (unprotected) for validation
             version (Versionage): instance of version portion of genus version code
@@ -1697,7 +1697,7 @@ class Parser:
 
             if ilk in (Ilks.rip, Ilks.bup):
                 if self.rgy is None:
-                    raise ValidationError("No native registry owner to process TEL event")
+                    raise ValidationError("No v2 ACDC registry owner to process TEL event")
                 self.rgy.processEvent(**exts)
             elif ilk is None or ilk in (Ilks.sch, Ilks.att, Ilks.agg, Ilks.edg, Ilks.rul):
                 try:

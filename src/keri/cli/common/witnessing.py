@@ -1,4 +1,4 @@
-"""Collect explicit witness authorization codes for native command owners."""
+"""Collect explicit witness authorization codes for v2 ACDC registry command owners."""
 from ...help import helping
 from ...kering import ConfigurationError
 

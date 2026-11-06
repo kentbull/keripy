@@ -1,4 +1,4 @@
-"""Finite public CESR delivery shared by live native command owners."""
+"""Finite public CESR delivery shared by live v2 command owners."""
 from hio.base import doing
 
 from ... import Kinds, Vrsn_2_0

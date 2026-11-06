@@ -122,7 +122,7 @@ def issue(tmp_path, live_parties, data='{"role":"reader"}', *, admit_options=(),
             assert selected['xid'] == applied['exchange'] != selected['grant']
             refused = kli(tmp_path, 'ipex', 'admit', *holder['args'], '--said', applied['exchange'],
                 '--input', str(issuer['public']), '--input', str(grantfile), '--deliver', succeeds=False)
-            assert 'exact pending native Grant' in refused
+            assert 'exact pending v2 IPEX Grant' in refused
             holderfile = tmp_path / 'holder-evidence.cesr'
             admitted = kli(tmp_path, 'ipex', 'admit', *holder['args'], '--said', selected['grant'],
                 '--output', str(holderfile), '--deliver', '--timeout', '20', *admit_options, succeeds=succeeds)

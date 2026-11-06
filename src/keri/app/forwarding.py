@@ -33,7 +33,7 @@ class Poster(doing.DoDoer):
     to the intended receiver
 
     Forwarding bodies remain V1; attachment framing follows this poster's version.
-    Select send(stream=True) for queued native V2 nested forwarding.
+    Select send(stream=True) for queued KERI v2 nested forwarding.
 
     """
 
@@ -81,14 +81,14 @@ class Poster(doing.DoDoer):
                     hab = self.hby.habs[src]
 
                 if evt.get('stream'):
-                    # Keep queueing distinct from transport; native nested payloads
+                    # Keep queueing distinct from transport; CESR v2 nested payloads
                     # require StreamPoster's V2 forwarding envelope.
                     poster = StreamPoster(hby=self.hby, hab=hab, recp=recp, topic=tpc,
                                           version=self.version, kind=self.kind)
                     poster.send(srdr, attachment=atc, gvrsn=self.version)
                     children = poster.deliver()
                     if not children:
-                        raise ConfigurationError('no finite native member transport was available')
+                        raise ConfigurationError('no finite v2 member transport was available')
                     transport = doing.DoDoer(doers=children)
                     self.extend([transport])
                     try:

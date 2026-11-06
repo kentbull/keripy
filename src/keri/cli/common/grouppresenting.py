@@ -17,7 +17,7 @@ from .presenting import admitted, currentIssued, refresh, selected
 class GroupPresentation:
     """Borrow the live parser; freshly selected wrappers authorize local child intake.
 
-    Protected local intake retains native partial-auth escrow and its deadline;
+    Protected local intake retains v2 IPEX partial-auth escrow and its deadline;
     ordinary KRAM still aggregates signatures before threshold acceptance.
     """
     resource = '/multisig/exn'
@@ -90,7 +90,7 @@ class GroupPresentation:
         frame = Parser(version=Vrsn_2_0).parseOneBare(ims=stream, framed=True, processive=False)
         if (stream or frame.serder.pvrsn != Vrsn_2_0 or frame.serder.route != self.resource
                 or len(frame.nests) != 1):
-            raise ConfigurationError('--proposal requires one exact native /multisig/exn packet')
+            raise ConfigurationError('--proposal requires one exact v2 /multisig/exn packet')
         self.handled = None
         self.owner.psr.parse(ims=bytearray(raw), local=local)
         if self.handled != frame.serder.said:
@@ -107,7 +107,7 @@ class GroupPresentation:
         deadline = self.owner.exc.exchangeDeadline(self.grant)
         if deadline is None and required:
             raise ConfigurationError('selected Grant has no authenticated KRAM lifetime')
-        self.owner.nativeDeadline = deadline
+        self.owner.grantDeadline = deadline
         self.owner.check()
 
     def run(self):
@@ -117,7 +117,7 @@ class GroupPresentation:
             stream = bytearray(raw)
             packet = Parser(version=Vrsn_2_0).parseOneBare(ims=stream, framed=True, processive=False)
             if stream or len(packet.nests) != 1:
-                raise ConfigurationError('--proposal requires one exact native /multisig/exn packet')
+                raise ConfigurationError('--proposal requires one exact v2 /multisig/exn packet')
             self.grant = packet.nests[0].serder
             proposer = packet.serder.pre
             self.proofs = [serializeParsedSubstream(node) for node in packet.nests[0].nests]
@@ -153,7 +153,7 @@ class GroupPresentation:
         self.freezeDeadline(required=True)
         currentIssued(owner.exc, self.grant.said)
         if [serializeParsedSubstream(node) for node in loadParsedNestedSubstreams(owner.hby, self.grant.said)] != self.proofs:
-            raise ConfigurationError('native accepted disclosure differs from the selected proposal proofs')
+            raise ConfigurationError('v2 IPEX accepted disclosure differs from the selected proposal proofs')
         raw = bytes(owner.hab.replay(gvrsn=Vrsn_2_0)) + serializeMessage(owner.hby, self.grant.said)
         coordination = None
         if args.respond_unblind:

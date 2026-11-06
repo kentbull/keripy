@@ -37,7 +37,7 @@ parser.add_argument("--message", "-m", help="optional human readable message to 
 parser.add_argument("--time", help="timestamp", required=False, default=None)
 issuing.options(parser)
 evidencing.options(parser)
-parser.add_argument('--unblind', action='store_true', help='select native presentation admission with live current-state verification')
+parser.add_argument('--unblind', action='store_true', help='select v2 IPEX presentation admission with live current-state verification')
 parser.add_argument('--unblind-proposer', help='group signing member selected to author the exact query and Admit bytes; never a custodian or transmitter election')
 parser.add_argument('--coordinator', help='exact accepted group KEL event SAID fixing this issuance election')
 parser.add_argument('--custodian', help='elected member AID; this finite invocation approves its exact DH and Admit contributions')
@@ -48,10 +48,10 @@ def handler(args):
         if args.unblind:
             if args.coordinator or args.custodian:
                 raise ConfigurationError('group custody selection is only supported for issuance Admit')
-            return [presenting.NativePresentation(args, 'admit')]
+            return [presenting.IpexV2Presentation(args, 'admit')]
         if args.unblind_proposer:
             raise ConfigurationError('--unblind-proposer requires --unblind')
-        return [issuing.NativeIssuance(args, 'admit')]
+        return [issuing.IpexV2Issuance(args, 'admit')]
     issuing.legacy(args)
     ed = AdmitDoer(name=args.name,
                    alias=args.alias,

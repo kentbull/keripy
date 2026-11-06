@@ -12,13 +12,13 @@ from ...core import Parser, SerderACDC, exchange, messagize
 from ...kering import ConfigurationError, KeriError
 from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream, verify
 from .credentialing import recipient
-from .negotiating import NativeNegotiation
+from .negotiating import IpexV2Negotiation
 from .witnessing import witnessAuths
-from . import nativeanchoring, sending
+from . import registryanchoring, sending
 
 
 class _QueryProposal:
-    resource = '/multisig/qry'  # Command coordination extension; the child is ordinary native DH.
+    resource = '/multisig/qry'  # Command coordination extension; the child is ordinary v2 DH.
 
     def __init__(self, operation):
         self.operation = operation
@@ -51,7 +51,7 @@ class _QueryProposal:
 
 
 class GroupIssuance:
-    """Proposal authorship grants no custody; native DH verifies the frozen election."""
+    """Proposal authorship grants no custody; v2 DH verifies the frozen election."""
     resource = '/multisig/exn'
 
     def __init__(self, owner, notifier, coordinator, custodian):
@@ -90,8 +90,8 @@ class GroupIssuance:
         if args.prior:
             prior = owner.hby.db.exns.get((args.prior,))
             if prior is None or prior.route not in ('/ipex/apply', '/ipex/agree'):
-                raise ConfigurationError('--prior requires an exact accepted native Apply or Agree')
-            self.prior = NativeNegotiation.prior(owner.hby, args.prior, prior.route)
+                raise ConfigurationError('--prior requires an exact accepted v2 IPEX Apply or Agree')
+            self.prior = IpexV2Negotiation.prior(owner.hby, args.prior, prior.route)
             if self.prior.sad['a'].get('ax', [False])[0]:
                 raise ConfigurationError('anchored prior is outside live group issuance')
             self.linked['apply' if prior.route == '/ipex/apply' else 'agree'] = self.prior
@@ -139,7 +139,7 @@ class GroupIssuance:
         stream = bytearray(raw)
         packet = Parser(version=Vrsn_2_0).parseOneBare(ims=stream, framed=True, processive=False)
         if stream or packet.serder.route != self.resource or len(packet.nests) != 1:
-            raise ConfigurationError('--proposal requires one exact native /multisig/exn Grant packet')
+            raise ConfigurationError('--proposal requires one exact v2 /multisig/exn Grant packet')
         self.handled = None
         self.owner.psr.parse(ims=bytearray(raw), local=local)
         if self.handled != packet.serder.said:
@@ -154,7 +154,7 @@ class GroupIssuance:
         deadline = self.owner.exc.exchangeDeadline(self.grant)
         if deadline is None and required:
             raise ConfigurationError('selected group Grant has no authenticated KRAM lifetime')
-        self.owner.nativeDeadline = deadline
+        self.owner.grantDeadline = deadline
         self.owner.check()
 
     def broadcastQuery(self, raw):
@@ -180,7 +180,7 @@ class GroupIssuance:
             stream = bytearray(raw)
             packet = Parser(version=Vrsn_2_0).parseOneBare(ims=stream, framed=True, processive=False)
             if stream or len(packet.nests) != 1:
-                raise ConfigurationError('--proposal requires one exact native /multisig/exn Grant packet')
+                raise ConfigurationError('--proposal requires one exact v2 /multisig/exn Grant packet')
             self.grant = packet.nests[0].serder
             if owner.exc.exchangeDeadline(self.grant) is not None:
                 self.freezeDeadline()
@@ -262,7 +262,7 @@ class GroupIssuance:
             yield owner.tock
         _, event = Registrar(owner.rgy).issue(self.registry, acdc=self.body,
             salt=owner.hab.mgr.getRegistryRoot(owner.hab.pre, self.registry.regk).qb64)
-        yield from nativeanchoring.groupAnchor(owner, self.registry, event, self.mux, background,
+        yield from registryanchoring.groupAnchor(owner, self.registry, event, self.mux, background,
                                                grant=self.grant.said, auths=self.auths)
         owner.finish(self.xid, self.grant.said)
         published = owner.public(self.registry.regk)

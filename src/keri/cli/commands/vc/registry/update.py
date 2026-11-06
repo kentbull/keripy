@@ -1,4 +1,4 @@
-"""Update one existing native issuer registry without replacing its root."""
+"""Update one existing v2 ACDC issuer registry without replacing its root."""
 import argparse
 import json
 import math
@@ -7,7 +7,7 @@ from pathlib import Path
 from hio.base import doing
 
 from ....common import Parsery, parseVersion, setupHby
-from ....common.nativeanchoring import anchor, groupAnchor
+from ....common.registryanchoring import anchor, groupAnchor
 from ....common import sending
 from ....common.witnessing import witnessAuths
 from ..... import Kinds, Vrsn_1_0, Vrsn_2_0
@@ -19,12 +19,12 @@ from .....kering import ConfigurationError
 from .....peer import Exchanger
 
 
-parser = argparse.ArgumentParser(description='Update the state of one existing native credential',
+parser = argparse.ArgumentParser(description='Update the state of one existing v2 ACDC credential',
                                  parents=[Parsery.keystore()])
-parser.set_defaults(handler=lambda args: [NativeStateUpdate(args)])
+parser.set_defaults(handler=lambda args: [AcdcV2StateUpdate(args)])
 parser.add_argument('--alias', '-a', required=True, help='accepted local issuer alias; group updates require exact member join')
 parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0)
-parser.add_argument('--credential', required=True, help='exact self-verifying native credential body')
+parser.add_argument('--credential', required=True, help='exact self-verifying v2 ACDC credential body')
 parser.add_argument('--state', required=True, choices=('issued', 'revoked', 'vacuous'))
 parser.add_argument('--output', required=True, help='exclusive-create public KEL/TEL evidence file')
 parser.add_argument('--timeout', type=float, default=120.0, help='finite whole-operation deadline')
@@ -33,7 +33,7 @@ parser.add_argument('--code', action='append', default=[], help='selected witnes
 parser.add_argument('--code-time', default=None, help='ISO8601 capture time of witness codes')
 
 
-class NativeStateUpdate(doing.DoDoer):
+class AcdcV2StateUpdate(doing.DoDoer):
     """Require existing authority and verified current binding before authoring."""
     def __init__(self, args):
         self.args = args
@@ -41,38 +41,38 @@ class NativeStateUpdate(doing.DoDoer):
 
     def check(self):
         if self.tyme >= self.deadline:
-            raise TimeoutError('native state update did not complete before --timeout; staged work may remain')
+            raise TimeoutError('v2 ACDC state update did not complete before --timeout; staged work may remain')
 
     def selected(self, body):
         """Resolve the exact owned registry and its root without generating one."""
         raw = Path(self.args.credential).read_bytes()
         if (body.raw != raw or body.pvrsn != Vrsn_2_0 or not body.verify()
                 or body.ilk not in ('acm', 'act', 'acg') or body.israid != self.hab.pre):
-            raise ConfigurationError('credential must exactly match the local issuer and owned native registry')
+            raise ConfigurationError('credential must exactly match the local issuer and owned v2 ACDC registry')
         rip = self.rgy.store.seqEvent(body.regid, 0)
         if rip is None or rip.said != body.regid or rip.israid != self.hab.pre:
-            raise ConfigurationError('native registry inception does not match its local issuer')
+            raise ConfigurationError('v2 ACDC registry inception does not match its local issuer')
         regeventing.vetAnchor(rip, db=self.hby.db, issuer=self.hab.pre)
         registry = self.rgy.regs.get(body.regid)
         if registry is None:
             if not isinstance(self.hab, GroupHab):
-                raise ConfigurationError('credential must exactly match the local issuer and owned native registry')
+                raise ConfigurationError('credential must exactly match the local issuer and owned v2 ACDC registry')
             # Accepted imported group history needs no new persistent local alias.
             registry = Registry(hab=self.hab, store=self.rgy.store, regk=body.regid)
         root = self.hab.mgr.getRegistryRoot(self.hab.pre, registry.regk)
         if root is None:
-            raise ConfigurationError('native state update requires the existing issuer-owned registry root')
+            raise ConfigurationError('v2 ACDC state update requires the existing issuer-owned registry root')
         head = self.rgy.store.headEvent(registry.regk)
         if head is None or head.ilk != 'bup':
-            raise ConfigurationError('native state update requires an accepted existing BUP, not a RIP-only registry')
+            raise ConfigurationError('v2 ACDC state update requires an accepted existing BUP, not a RIP-only registry')
         regeventing.vetAnchor(head, db=self.hby.db, issuer=self.hab.pre)
         frontier = registry._effectiveFrontier()
         if frontier is None or frontier.said != head.said:
-            raise ConfigurationError('native registry has an outstanding staged successor; refusing another update')
+            raise ConfigurationError('v2 ACDC registry has an outstanding staged successor; refusing another update')
         updates = [self.rgy.store.seqEvent(registry.regk, sn)
                    for sn in range(1, Number(numh=head.sad['n']).num + 1)]
         if any(event is None for event in updates):
-            raise ConfigurationError('native registry accepted history is incomplete')
+            raise ConfigurationError('v2 ACDC registry accepted history is incomplete')
         proofs = []
         for event in reversed(updates):
             proof = self.rgy.store.opening(event.said)
@@ -111,7 +111,7 @@ class NativeStateUpdate(doing.DoDoer):
         yield tock
         args = self.args
         if args.version != Vrsn_2_0:
-            raise ConfigurationError('native state update requires --version 2.0')
+            raise ConfigurationError('v2 ACDC state update requires --version 2.0')
         if not math.isfinite(args.timeout) or args.timeout <= 0:
             raise ConfigurationError('--timeout must be finite and positive')
         self.deadline = self.tyme + args.timeout
@@ -120,7 +120,7 @@ class NativeStateUpdate(doing.DoDoer):
         keeper = Keeper(name=args.name, base=args.base, reopen=True)
         try:
             if not keeper.gbls.get('aeid'):
-                raise ConfigurationError('native state update requires an existing encrypted Keeper')
+                raise ConfigurationError('v2 ACDC state update requires an existing encrypted Keeper')
         finally:
             keeper.close()
         self.hby = setupHby(name=args.name, base=args.base, bran=args.bran, version=Vrsn_2_0)
@@ -131,7 +131,7 @@ class NativeStateUpdate(doing.DoDoer):
                     or isinstance(self.hab, (SignifyHab, SignifyGroupHab))
                     or isinstance(self.hab, GroupHab) and (self.hab.mhab is None
                         or self.hab.mhab.pre not in self.hby.db.signingMembers(pre=self.hab.pre))):
-                raise ConfigurationError('native state update requires an accepted local signer')
+                raise ConfigurationError('v2 ACDC state update requires an accepted local signer')
             group = isinstance(self.hab, GroupHab)
             self.rgy = Regery(self.hby, name=args.name, base=args.base)
             body = SerderACDC(raw=Path(args.credential).read_bytes())

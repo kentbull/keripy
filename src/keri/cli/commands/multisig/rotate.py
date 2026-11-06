@@ -245,7 +245,7 @@ class GroupMultisigRotate(doing.DoDoer):
         if self.rgy is not None:
             self.psr.parse(ims=bytearray(exn.raw + ims), local=True)
             if not self.psr.exc.complete(exn.said):
-                raise ConfigurationError('native rotation proposal did not authenticate local consent')
+                raise ConfigurationError('KERI v2 rotation proposal did not authenticate local consent')
         else:
             local = Parser(version=exn.pvrsn).parse(ims=bytearray(exn.raw + ims),
                                                 framed=True,

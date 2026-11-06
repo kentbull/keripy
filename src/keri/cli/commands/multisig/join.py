@@ -30,7 +30,7 @@ from ....core import (Prefixer, Number, Diger, Tholder,
 
 from ....peer import Exchanger, cloneMessage
 from ....peer.exchanging import loadParsedNestedSubstreams, serializeMessage, serializeParsedSubstream
-from ....acdc.registraring import Regery as NativeRegery
+from ....acdc.registraring import Regery as AcdcV2Regery
 from ....vdr import Verifier, Regery, Credentialer, Registrar
 
 
@@ -95,14 +95,14 @@ class JoinDoer(doing.DoDoer):
         self.version = version
         self.hby = setupHby(name=name, base=base, bran=bran, version=self.version)
         self.rgy = Regery(hby=self.hby, name=name, base=base)
-        self.rgyV2 = NativeRegery(hby=self.hby, name=name, base=base) if version == Vrsn_2_0 else None
+        self.rgyV2 = AcdcV2Regery(hby=self.hby, name=name, base=base) if version == Vrsn_2_0 else None
         self.hbyDoer = HaberyDoer(habery=self.hby)  # setup doer
         self.witq = WitnessInquisitor(hby=self.hby)
         self.org = Organizer(hby=self.hby)
         self.notifier = Notifier(hby=self.hby)
         self.exc = Exchanger(hby=self.hby, handlers=[])
         if self.rgyV2 is not None:
-            # Opening this store must preserve native validation for retained
+            # Opening this store must preserve v2 IPEX validation for retained
             # pending Grants while the member approves its registry anchor.
             from ....acdc import ipexing
             ipexing.loadHandlers(self.hby, self.exc, self.notifier, rgy=self.rgyV2)
@@ -208,7 +208,7 @@ class JoinDoer(doing.DoDoer):
         self.remove(self.toRemove)
 
     def exit(self, deeds=None):
-        """Release the native owner on full exit, including before child entry."""
+        """Release the v2 ACDC Regery on full exit, including before child entry."""
         try:
             super().exit(deeds=deeds)
         finally:
@@ -216,7 +216,7 @@ class JoinDoer(doing.DoDoer):
                 self.rgyV2.close()
 
     def rip(self, attrs):
-        """Approve one exact retained native registry inception."""
+        """Approve one exact retained v2 ACDC registry inception."""
         return (yield from self._registry(attrs, ilk='rip'))
 
     def bup(self, attrs):
@@ -224,13 +224,13 @@ class JoinDoer(doing.DoDoer):
         return (yield from self._registry(attrs, ilk='bup'))
 
     def _registry(self, attrs, *, ilk):
-        """Prompt, contribute and resume native TEL approval through existing owners.
+        """Prompt, contribute and resume v2 ACDC TEL approval through existing owners.
 
         Receive is distinct from consent. New TEL linkage is rechecked after the
         prompt; accepted retries reuse the retained exact local contribution.
         """
         if self.rgyV2 is None:
-            raise ConfigurationError("native registry approval requires --version 2.0")
+            raise ConfigurationError("v2 ACDC registry approval requires --version 2.0")
         wrapper, _ = cloneMessage(self.hby, attrs['d'])
         if wrapper is None or wrapper.route != f'/multisig/{ilk}' or attrs['r'] != wrapper.route:
             raise ValidationError("registry notification has no matching retained proposal")
@@ -562,15 +562,15 @@ class JoinDoer(doing.DoDoer):
         rmids = payload["rmids"]
         ked = exn.ked
 
-        native = exn.pvrsn == Vrsn_2_0
-        if native:
+        v2 = exn.pvrsn == Vrsn_2_0
+        if v2:
             if self.rgyV2 is None:
-                raise ConfigurationError('native group rotation approval requires --version 2.0')
+                raise ConfigurationError('KERI v2 group rotation approval requires --version 2.0')
             children = loadParsedNestedSubstreams(self.hby, said)
             self.mux.validate(exn, nests=children)
             orot = children[0].serder
             if orot.pre != payload['gid']:
-                raise ValidationError('native rotation child does not match its selected group')
+                raise ValidationError('KERI v2 rotation child does not match its selected group')
         else:
             embeds = ked['e']
             orot = SerderKERI(sad=embeds["rot"])
@@ -619,24 +619,24 @@ class JoinDoer(doing.DoDoer):
 
             try:
                 ghab.rotate(serder=orot, smids=smids, rmids=rmids, framed=True,
-                            gvrsn=Vrsn_2_0 if native else orot.pvrsn)
+                            gvrsn=Vrsn_2_0 if v2 else orot.pvrsn)
             except ValueError:
                 return False
 
             rot = ghab.msgOwnEvent(allowPartiallySigned=True, sn=orot.sn,
-                                  gvrsn=Vrsn_2_0 if native else orot.pvrsn)
+                                  gvrsn=Vrsn_2_0 if v2 else orot.pvrsn)
 
             exn, ims = multisigRotateExn(ghab,
                                          smids=ghab.smids,
                                          rmids=ghab.rmids,
                                          rot=rot,
-                                         version=Vrsn_2_0 if native else Vrsn_1_0,
-                                         gvrsn=Vrsn_2_0 if native else orot.pvrsn,
+                                         version=Vrsn_2_0 if v2 else Vrsn_1_0,
+                                         gvrsn=Vrsn_2_0 if v2 else orot.pvrsn,
                                          kind=orot.kind)
-            if native:
+            if v2:
                 self.psr.parse(ims=bytearray(exn.raw + ims), local=True)
                 if not self.exc.complete(exn.said):
-                    raise ValidationError('native rotation approval did not authenticate local consent')
+                    raise ValidationError('KERI v2 rotation approval did not authenticate local consent')
             else:
                 local = Parser(version=exn.pvrsn).parse(ims=bytearray(exn.raw + ims),
                                                     framed=True,
@@ -654,7 +654,7 @@ class JoinDoer(doing.DoDoer):
                                   dest=recpt,
                                   topic="multisig",
                                   serder=exn,
-                                  attachment=ims, stream=native)
+                                  attachment=ims, stream=v2)
 
                 while not self.postman.sent(said=exn.said):
                     yield self.tock

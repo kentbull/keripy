@@ -6,7 +6,7 @@ from hio.base import doing
 from hio.help import ogler
 
 from ...common import existing, parseVersion
-from ...common.credentialing import NativeCredential
+from ...common.credentialing import AcdcV2Credential
 from ...common.parsing import Parsery
 
 from ....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0
@@ -53,15 +53,15 @@ parser.add_argument("--time", help="timestamp for the credential creation", requ
 
 parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0,
                     help='Credential version: 1.0 (legacy issuance) or 2.0 (public body only)')
-parser.add_argument('--output', help='Native public body file to create; no registry issuance or Admit')
-parser.add_argument('--ilk', choices=('acm', 'act', 'acg'), help='Native body type, defaults to acm')
+parser.add_argument('--output', help='v2 ACDC public body file to create; no registry issuance or Admit')
+parser.add_argument('--ilk', choices=('acm', 'act', 'acg'), help='v2 ACDC body type, defaults to acm')
 
 
 def issueCredential(args):
     if getattr(args, 'version', Vrsn_1_0) == Vrsn_2_0:
-        return [NativeCredential(args)]
+        return [AcdcV2Credential(args)]
     if getattr(args, 'output', None) or getattr(args, 'ilk', None):
-        raise ConfigurationError('--output and --ilk require native --version 2.0')
+        raise ConfigurationError('--output and --ilk require v2 ACDC --version 2.0')
     name = args.name
     data = None
     rules = None

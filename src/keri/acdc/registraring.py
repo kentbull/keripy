@@ -135,10 +135,10 @@ class Regery:
                                        store=self.store, regk=regk)
 
     def processEvent(self, serder, *, sscs=None, ssts=None, **kwa):
-        """Receive native RIP/BUP evidence and accept only its authenticated TEL.
+        """Receive v2 ACDC RIP/BUP evidence and accept only its authenticated TEL.
 
         Parameters:
-            serder (SerderACDC): incoming native registry event.
+            serder (SerderACDC): incoming v2 ACDC registry event.
             sscs (list | None): issuer-implied KEL source couples.
             ssts (list | None): explicit-controller KEL source triples.
             **kwa: other parser attachments, which do not establish a TEL anchor.
@@ -164,10 +164,10 @@ class Regery:
             return False
         accepted = eventer.processEvent(serder)
         if event.ilk == "rip":
-            self._processNativeEscrows(eventer)
+            self._processEventerEscrows(eventer)
         return accepted
 
-    def _processNativeEscrows(self, eventer):
+    def _processEventerEscrows(self, eventer):
         """Give pre-inception updates ordinary anchor discovery before replay."""
         for _, sn, said in list(self.baser.ooes.getTopItemIter(keys=eventer.regk)):
             if self.store.anchor(said) is None:
@@ -184,13 +184,13 @@ class Regery:
             None
         """
         for reg in self.regs.values():
-            self._processNativeEscrows(reg._eventer)
+            self._processEventerEscrows(reg._eventer)
         pending = {keys[0] for escrow in (self.baser.maes, self.baser.ooes)
                    for keys, _, _ in escrow.getTopItemIter()}
         for regk in sorted(pending - self.regs.keys()):
             eventer = self._eventer(regk)
             if eventer is not None:
-                self._processNativeEscrows(eventer)
+                self._processEventerEscrows(eventer)
 
     def close(self):
         """Close the underlying registry storage backend.

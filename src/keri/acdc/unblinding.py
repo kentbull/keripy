@@ -236,7 +236,7 @@ class Unblind:
         return carried
 
     def _receiveEvents(self, requested, nests):
-        """Verify all named public bodies before ordinary native TEL intake."""
+        """Verify all named public bodies before ordinary v2 ACDC TEL intake."""
         nests = [MsgParseDom(**nest) if isinstance(nest, dict) else nest for nest in nests]
         if [nest.serder.said for nest in nests] != [said for saids in requested.values() for said in saids]:
             raise ValidationError("nested events differ from the exact unblind request")

@@ -521,7 +521,7 @@ class MailboxDirector(doing.DoDoer):
 
         Parameters:
             hab: Habitat instance of local controller's context
-            rgy: optional borrowed native Regery, sharing this Habery's KEL evidence.
+            rgy: optional borrowed v2 ACDC Regery, sharing this Habery's KEL evidence.
                 Parser intake and escrow retries use it; the caller owns closing it.
             rvy: optional borrowed Revery; register reply handlers on its actual router.
             client: TCP Client instance

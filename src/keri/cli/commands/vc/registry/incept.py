@@ -15,7 +15,7 @@ from .....kering import ConfigurationError, Vrsn_1_0, Vrsn_2_0, Kinds
 from .....core import SerderKERI, SealEvent, SealSource, Number, NumDex, Diger, messagize
 from .....peer import Exchanger
 from .....vdr import Regery, Registrar
-from .....acdc import Regery as NativeRegery, Registrar as NativeRegistrar
+from .....acdc import Regery as AcdcV2Regery, Registrar as AcdcV2Registrar
 
 
 logger = ogler.getLogger()
@@ -40,9 +40,9 @@ parser.add_argument('--usage', '-u', help='For multisig issuers, a message to ot
                     default=None)
 
 parser.add_argument('--version', type=parseVersion, default=Vrsn_1_0,
-                    help='Registry protocol version: 1.0 (default) or native 2.0')
+                    help='Registry protocol version: 1.0 (default, v1 VDR) or 2.0 (v2 ACDC)')
 parser.add_argument('--authenticate', '-z', action='store_true',
-                    help='Supply or prompt for native individual witness authorization codes')
+                    help='Supply or prompt for v2 ACDC individual witness authorization codes')
 parser.add_argument('--code', default=[], action='append',
                     help='Witness AID:code; may appear multiple times with --authenticate')
 parser.add_argument('--code-time', default=None, help='ISO8601 time the supplied witness codes were captured')
@@ -65,12 +65,12 @@ def registryIncept(args):
     if getattr(args, 'version', Vrsn_1_0) == Vrsn_2_0:
         if backers or noBackers is not True or estOnly is not False:
             raise ConfigurationError("legacy backers and registry establishment-only options are not supported "
-                                     "by native registries; the controller's accepted KEL policy selects anchors")
-        return [NativeRegistryInceptor(name=name, base=base, bran=bran, alias=alias,
+                                     "by v2 ACDC registries; the controller's accepted KEL policy selects anchors")
+        return [AcdcV2RegistryInceptor(name=name, base=base, bran=bran, alias=alias,
                                         registryName=registryName, nonce=nonce, usage=usage, **auth)]
 
     if auth['authenticate'] or auth['codes'] or auth['codeTime'] is not None:
-        raise ConfigurationError('registry witness authentication options require native --version 2.0')
+        raise ConfigurationError('registry witness authentication options require v2 ACDC --version 2.0')
 
     if noBackers and backers:
         print("--no-backers and --backers can not both be provided")
@@ -204,11 +204,11 @@ class RegistryInceptor(doing.DoDoer):
         self.remove(self.toRemove)
 
 
-class NativeRegistryInceptor(doing.DoDoer):
-    """Own native RIP authoring and ordinary controller KEL completion in this command.
+class AcdcV2RegistryInceptor(doing.DoDoer):
+    """Own v2 ACDC RIP authoring and ordinary controller KEL completion in this command.
 
     The Registrar creates the registry; existing receipting/delegation owners
-    complete the exact controller event, and native Regery owns TEL acceptance.
+    complete the exact controller event, and v2 ACDC Regery owns TEL acceptance.
     """
 
     def __init__(self, name, base, bran, alias, registryName, nonce=None, usage=None,
@@ -221,17 +221,17 @@ class NativeRegistryInceptor(doing.DoDoer):
             if self.hab is None or not self.hab.accepted:
                 raise ConfigurationError(f"{alias} is not an accepted local AID alias")
             if isinstance(self.hab, SignifyGroupHab):
-                raise ConfigurationError("native registry CLI cannot sign for a remote Signify group")
+                raise ConfigurationError("v2 ACDC registry CLI cannot sign for a remote Signify group")
             if isinstance(self.hab, GroupHab) and (self.hab.mhab is None or self.hab.mhab.pre not in
                                                    self.hby.db.signingMembers(pre=self.hab.pre)):
-                raise ConfigurationError("native registry CLI requires a local group signing member")
+                raise ConfigurationError("v2 ACDC registry CLI requires a local group signing member")
             self.auths = witnessAuths(self.hab.kever.wits, authenticate=authenticate,
                                       codes=codes, codeTime=codeTime)
-            self.rgy = NativeRegery(hby=self.hby, name=name, base=base)
+            self.rgy = AcdcV2Regery(hby=self.hby, name=name, base=base)
         except Exception:
             self.hby.close()
             raise
-        self.registrar = NativeRegistrar(self.rgy)
+        self.registrar = AcdcV2Registrar(self.rgy)
         doers = [HaberyDoer(habery=self.hby)]
         if isinstance(self.hab, GroupHab):
             self.counselor = Counselor(hby=self.hby, version=Vrsn_2_0, kind=Kinds.json)

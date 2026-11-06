@@ -1,4 +1,4 @@
-"""Cooperative ordinary KEL completion for individual native registry events."""
+"""Cooperative ordinary KEL completion for individual v2 ACDC registry events."""
 from ... import Kinds, Vrsn_2_0
 from ...app import Anchorer, Receiptor
 from ...core import Diger, Number, NumDex, SerderKERI
@@ -29,11 +29,11 @@ def anchor(owner, registry, event, auths, background):
             yield tick
     if not registry.anchorMsg(event.said, number=Number(num=signed.sn),
                               diger=Diger(qb64=signed.said)):
-        raise ConfigurationError('native registry did not accept the exact witnessed BUP anchor')
+        raise ConfigurationError('v2 ACDC registry did not accept the exact witnessed BUP anchor')
     owner.rgy.processEscrows()
     accepted = owner.rgy.store.headEvent(registry.regk)
     if accepted is None or accepted.said != event.said:
-        raise ConfigurationError('native registry has not accepted the selected BUP')
+        raise ConfigurationError('v2 ACDC registry has not accepted the selected BUP')
     return signed
 
 

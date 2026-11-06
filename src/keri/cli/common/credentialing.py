@@ -1,4 +1,4 @@
-"""Create a public native credential body without issuing a registry event."""
+"""Create a public v2 ACDC credential body without issuing a registry event."""
 import json
 from pathlib import Path
 
@@ -20,7 +20,7 @@ def load(value):
 def recipient(hby, value):
     """Resolve a local/contact alias or require one complete canonical AID."""
     if not value:
-        raise ConfigurationError('native body creation requires --recipient')
+        raise ConfigurationError('v2 ACDC body creation requires --recipient')
     try:
         literal = Prefixer(qb64=value)
     except (KeriError, ValueError):
@@ -42,7 +42,7 @@ def recipient(hby, value):
     return value
 
 
-class NativeCredential(doing.Doer):
+class AcdcV2Credential(doing.Doer):
     """Own one unsigned public-body output using existing issuer/registry state.
 
     Schema policy and commitments belong to ordinary constructors/validators.
@@ -58,17 +58,17 @@ class NativeCredential(doing.Doer):
         if not args.output or Path(args.output).exists():
             raise ConfigurationError('--output must name a new public body file')
         if args.private or args.private_credential_nonce or args.private_subject_nonce or args.time:
-            raise ConfigurationError('native public body creation does not use legacy private/time options')
+            raise ConfigurationError('v2 ACDC public body creation does not use legacy private/time options')
         if (args.data is None) == (args.credential is None):
             raise ConfigurationError('provide exactly one of --data or --credential')
         if not args.registry_name:
-            raise ConfigurationError('native body creation requires --registry-name')
+            raise ConfigurationError('v2 ACDC body creation requires --registry-name')
         # Like schema import, preserve existing AEID policy even with a global passcode.
         keeper = Keeper(name=args.name, base=args.base, reopen=True)
         try:
             aeid = keeper.gbls.get('aeid')
             if aeid is None:
-                raise ConfigurationError('native body creation requires an existing Keeper')
+                raise ConfigurationError('v2 ACDC body creation requires an existing Keeper')
         finally:
             keeper.close()
         bran = args.bran if aeid else None
@@ -100,7 +100,7 @@ class NativeCredential(doing.Doer):
                            rule=load(args.rules) if args.rules is not None else None)
                 if ilk == 'acg':
                     if not isinstance(payload, list):
-                        raise ConfigurationError('acg --data must be a native aggregate section list')
+                        raise ConfigurationError('acg --data must be a v2 ACDC aggregate section list')
                     body = acdcagg(aggregate=payload, **kwa)
                 else:
                     if not isinstance(payload, dict) or payload.get('i', issuee) != issuee:
@@ -109,7 +109,7 @@ class NativeCredential(doing.Doer):
                     body = build(attribute=payload, iseaid=issuee, **kwa)
             if (body.pvrsn != Vrsn_2_0 or body.ilk not in ('acm', 'act', 'acg') or not body.verify()
                     or body.israid != hab.pre or body.regid != reg.regk or body.iseaid != issuee):
-                raise ConfigurationError('verified native body must match the selected issuer, registry and recipient')
+                raise ConfigurationError('verified v2 ACDC body must match the selected issuer, registry and recipient')
             scheming.validateSchema(body, hby.db)
             with Path(args.output).open('xb') as output:
                 output.write(body.raw)
