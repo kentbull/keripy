@@ -119,7 +119,10 @@ class RegistryStore:
         raw = self.baser.openings.get(said)
         if raw is None:
             return None
-        event = self._openingEvent(said)
+        return self._loadOpening(raw, self._openingEvent(said))
+
+    def _loadOpening(self, raw, event):
+        """Decode one stored opening encoding that must reproduce event's BLID."""
         vetBlind(raw, blid=event.sad['b'])
         for clan in (BlindState, BoundState):
             try:
@@ -129,6 +132,53 @@ class RegistryStore:
             if candidate.qb64 == raw:
                 return candidate
         raise ValidationError("invalid held event opening")
+
+    def _pendingOpeningEvent(self, said):
+        """Require the stored BUP body named by ``said``."""
+        event = self.event(said)
+        if event is None or event.ilk != Ilks.bup or event.said != said:
+            raise ValidationError("pending opening requires a known BUP")
+        return event
+
+    def escrowOpening(self, said, blinder):
+        """Retain one immutable disclosed opening for a BUP still in dependency escrow.
+
+        ``said`` names a stored BUP body that ``escrowed(regk, sn, said)`` reports
+        as retained by .maes or .ooes; ``blinder`` must reproduce that BUP's BLID.
+        Return True on first insertion, False on exact replay. A BUP already
+        accepted belongs to ``putOpening``; an unknown or non-escrowed body raises.
+        Retaining is caller policy: the caller has decided to publish this opening.
+
+        Raises:
+            ValidationError: not a Blinder; no stored BUP for ``said``; BLID
+                mismatch; body accepted or not escrowed; a different opening is
+                already escrowed for ``said`` ("pending opening is immutable").
+        """
+        if not isinstance(blinder, Blinder):
+            raise ValidationError("opening must be a Blinder")
+        event = self._pendingOpeningEvent(said)
+        vetBlind(blinder, blid=event.sad['b'])
+        regk, sn = event.sad['rd'], Number(numh=event.sad['n']).num
+        accepted = self.seqSaider(regk, sn)
+        if accepted is not None and accepted.qb64 == said:
+            raise ValidationError("accepted BUP opening belongs to putOpening")
+        if not self.escrowed(regk, sn, said):
+            raise ValidationError("pending opening requires an escrowed BUP")
+        inserted = self.baser.opes.put(said, blinder.qb64)
+        if not inserted and self.baser.opes.get(said) != blinder.qb64:
+            raise ValidationError("pending opening is immutable")
+        return inserted
+
+    def pendingOpening(self, said):
+        """Return the escrowed opening for ``said`` as a verified Blinder, or None.
+
+        Read-only; presence is not acceptance and not publication. Rechecks the
+        stored BUP body and BLID on every read like ``opening``.
+        """
+        raw = self.baser.opes.get(said)
+        if raw is None:
+            return None
+        return self._loadOpening(raw, self._pendingOpeningEvent(said))
 
     def cloneTelIter(self, regk, sn=0):
         """Yield accepted TEL event bodies in sequence from sn inclusive.

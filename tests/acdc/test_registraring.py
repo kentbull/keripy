@@ -1127,3 +1127,129 @@ def test_regery_ingest_reports_per_event_outcomes():
         finally:
             source.close()
             rgy.close()
+
+
+def _issuedWithKel(hab, source):
+    """Issue one anchored BUP and return the issuer's KEL and TEL evidence."""
+    registrar = Registrar(rgy=source)
+    registry = registrar.makeRegistry(name="opening-escrow", prefix=hab.pre)
+    rip = _anchor(hab, registry, source.store.event(registry.regk))
+    acdc = acdcmap(israid=hab.pre, regid=registry.regk,
+                   attribute=dict(d="", LEI="254900OPPU84GM83MG36"), iseaid=hab.pre)
+    opening, bup = registrar.issue(registry, acdc=acdc, state="issued")
+    _anchor(hab, registry, bup)
+    return registry, rip, bup, opening, acdc
+
+
+@pytest.mark.parametrize("reopen", [False, True])
+def test_regery_promotes_escrowed_opening_on_acceptance(tmp_path, reopen):
+    """A pending BUP's escrowed opening becomes readable when its KEL arrives."""
+    from keri.acdc import RegBaser
+    from keri.core import Kevery
+    options = dict(name="opening-receiver", temp=False, headDirPath=str(tmp_path))
+    with (openHby(name="opening-issuer", temp=True, version=Vrsn_2_0) as issuerHby,
+          openHby(name="opening-receiver", temp=True, version=Vrsn_2_0) as receiverHby):
+        hab = issuerHby.makeHab(name="issuer")
+        source = Regery(hby=issuerHby, name="opening-issuer", temp=True)
+        try:
+            registry, rip, bup, opening, _ = _issuedWithKel(hab, source)
+            kel = b"".join(issuerHby.db.clonePreIter(pre=hab.pre, gvrsn=Vrsn_2_0))
+            tel = _framed(rip) + _framed(bup, [opening])
+            kvy = Kevery(db=receiverHby.db, lax=False, local=False)
+
+            baser = RegBaser(**options)
+            rgy = Regery(hby=receiverHby, baser=baser)
+            outcomes, refusal = rgy.ingest(tel, kvy=kvy)
+            assert refusal is None
+            assert outcomes[1].status == "pending"
+            assert rgy.store.escrowOpening(outcomes[1].serder.said,
+                                           outcomes[1].opening) is True
+            assert rgy.store.opening(bup.said) is None
+            assert rgy.store.pendingOpening(bup.said).qb64 == opening.qb64
+
+            # An escrow pass without the KEL keeps the pending opening.
+            rgy.processEscrows()
+            assert rgy.store.pendingOpening(bup.said).qb64 == opening.qb64
+            if reopen:
+                rgy.close()
+                baser = RegBaser(**options)
+                rgy = Regery(hby=receiverHby, baser=baser)
+                assert rgy.store.pendingOpening(bup.said).qb64 == opening.qb64
+
+            # KEL intake runs processEscrows, which accepts the BUP and promotes.
+            outcomes, refusal = rgy.ingest(kel, kvy=kvy)
+            assert refusal is None
+            assert rgy.store.headEvent(registry.regk).said == bup.said
+            assert rgy.store.opening(bup.said).qb64 == opening.qb64
+            assert rgy.store.pendingOpening(bup.said) is None
+            rgy.close()
+        finally:
+            source.close()
+
+
+def test_regery_escrowed_openings_follow_sibling_arbitration():
+    """Only the arbitration winner's escrowed opening is promoted and exported."""
+    from keri.core import Kevery
+    with (openHby(name="sibling-issuer", temp=True, version=Vrsn_2_0) as issuerHby,
+          openHby(name="sibling-receiver", temp=True, version=Vrsn_2_0) as receiverHby):
+        hab = issuerHby.makeHab(name="issuer")
+        source = Regery(hby=issuerHby, name="sibling-issuer", temp=True)
+        rgy = Regery(hby=receiverHby, name="sibling-receiver", temp=True)
+        try:
+            registry, rip, winner, opening, acdc = _issuedWithKel(hab, source)
+            rivalOpening = Blinder.blind(acdc=acdc.said, state="revoked", sn=1)
+            rival = regbup(regid=registry.regk, prior=rip.said,
+                           blid=rivalOpening.said, sn=1)
+            hab.interact(data=[dict(i=registry.regk, s=rival.sad["n"], d=rival.said)],
+                         framed=True, gvrsn=Vrsn_2_0)
+            kel = b"".join(issuerHby.db.clonePreIter(pre=hab.pre, gvrsn=Vrsn_2_0))
+            kvy = Kevery(db=receiverHby.db, lax=False, local=False)
+
+            # Reversed arrival order: the later-anchored rival arrives first.
+            tel = (_framed(rip) + _framed(rival, [rivalOpening])
+                   + _framed(winner, [opening]))
+            outcomes, refusal = rgy.ingest(tel, kvy=kvy)
+            assert refusal is None
+            assert [o.status for o in outcomes] == ["pending"] * 3
+            for outcome in outcomes[1:]:
+                assert rgy.store.escrowOpening(outcome.serder.said, outcome.opening)
+
+            outcomes, refusal = rgy.ingest(kel, kvy=kvy)
+            assert refusal is None
+            assert rgy.store.headEvent(registry.regk).said == winner.said
+            assert rgy.store.opening(winner.said).qb64 == opening.qb64
+            assert rgy.store.pendingOpening(winner.said) is None
+            assert rgy.store.pendingOpening(rival.said) is None
+            assert rgy.store.opening(rival.said) is None
+            exported = [rgy.store.opening(SerderACDC(raw=raw).said)
+                        for raw in rgy.store.cloneTelIter(registry.regk)]
+            assert [o.qb64 if o else None for o in exported] == [None, opening.qb64]
+        finally:
+            source.close()
+            rgy.close()
+
+
+def test_regery_drops_dangling_escrowed_opening():
+    """An opening whose body left dependency escrow unaccepted is dropped."""
+    from keri.core import Kevery
+    with (openHby(name="dangling-issuer", temp=True, version=Vrsn_2_0) as issuerHby,
+          openHby(name="dangling-receiver", temp=True, version=Vrsn_2_0) as receiverHby):
+        hab = issuerHby.makeHab(name="issuer")
+        source = Regery(hby=issuerHby, name="dangling-issuer", temp=True)
+        rgy = Regery(hby=receiverHby, name="dangling-receiver", temp=True)
+        try:
+            registry, rip, bup, opening, _ = _issuedWithKel(hab, source)
+            kvy = Kevery(db=receiverHby.db, lax=False, local=False)
+            outcomes, _ = rgy.ingest(_framed(rip) + _framed(bup, [opening]), kvy=kvy)
+            assert rgy.store.escrowOpening(bup.said, outcomes[1].opening) is True
+            unknown = Diger(ser=b"no such bup").qb64
+            rgy.baser.opes.pin(unknown, opening.qb64)
+
+            rgy.store.clearEscrows(registry.regk, 1, bup.said)
+            rgy.processEscrowOpenings()
+            assert rgy.store.pendingOpening(bup.said) is None
+            assert rgy.baser.opes.get(unknown) is None
+            assert rgy.store.opening(bup.said) is None
+        finally:
+            source.close()
+            rgy.close()

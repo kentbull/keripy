@@ -76,6 +76,14 @@ class RegBaser(LMDBer):
             ordinary public TEL cloning never includes them. Intake does not
             retain incoming openings implicitly.
 
+        .opes is a Suber of exact CESR opening encodings keyed by BUP SAID for a
+            disclosed opening whose BUP an ordinary dependency escrow (.maes/.ooes)
+            still retains. Written only by RegistryStore.escrowOpening at a caller's
+            explicit request. Regery.processEscrowOpenings promotes an entry into
+            .openings when the BUP is accepted and drops it when the BUP is no longer
+            escrowed. Presence is not acceptance. No independent timeout: the entry
+            lives exactly as long as its body's dependency escrow.
+
     """
 
     TailDirPath = os.path.join("keri", "acdc", "reg")
@@ -118,6 +126,7 @@ class RegBaser(LMDBer):
         self.maes = B64OnIoSetSuber(db=self, subkey='maes.')
         self.ooes = B64OnIoSetSuber(db=self, subkey='ooes.')
         self.openings = Suber(db=self, subkey='opns.')
+        self.opes = Suber(db=self, subkey='opes.')
 
         return self.opened
 
