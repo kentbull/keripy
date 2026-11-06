@@ -298,7 +298,13 @@ class MultisigNotificationHandler:
         self.mux = mux
 
     def verify(self, serder, attachments=None, nests=None):
-        """Validate a multisig EXN before the exchanger saves it."""
+        """Validate a multisig EXN before the exchanger saves it.
+
+        A child handler registered with ``Multiplexor.addChildHandler`` for this
+        wrapper route and the nested child's route owns verification instead.
+        """
+        if (delegate := self.mux.childHandlerFor(serder, nests)) is not None:
+            return delegate.verify(serder, attachments=attachments, nests=nests)
         try:
             return self.mux.validate(serder=serder, nests=nests) is not None
         except (ValidationError, ValueError, KeyError, TypeError, AttributeError):
@@ -314,6 +320,8 @@ class MultisigNotificationHandler:
                 use the single-child V2 multisig envelope
 
         """
+        if (delegate := self.mux.childHandlerFor(serder, nests)) is not None:
+            return delegate.handle(serder, attachments=attachments, nests=nests)
         logger.info("Notification for %s event SAID=%s", self.resource, serder.said)
         logger.debug("EXN Body=\n%s\n", serder.pretty())
         self.mux.add(serder=serder, nests=nests)
@@ -337,6 +345,9 @@ def loadHandlers(exc, mux):
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rev", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/exn", mux=mux))
     exc.addHandler(MultisigNotificationHandler(resource="/multisig/rpy", mux=mux))
+    # Local v2 coordination profile routes; not upstream KERI or #1740 routes.
+    exc.addHandler(MultisigNotificationHandler(resource="/multisig/qry", mux=mux))
+    exc.addHandler(MultisigNotificationHandler(resource="/multisig/ipex-proof", mux=mux))
 
 
 def multisigInceptExn(hab, smids, rmids, icp, delegator=None, version=None, gvrsn=None, kind=None):
@@ -882,6 +893,67 @@ def multisigRpyExn(ghab, rpy, version=None, gvrsn=None, kind=None):
     return exn, bytearray(ims[exn.size:])
 
 
+def _multisigV2Exn(ghab, route, field, raw, kind=None):
+    """Endorse one v2 coordination wrapper committing to exactly one child stream."""
+    ims = bytearray(raw)
+    child = Parser(version=Vrsn_2_0).parseOneBare(ims=ims, framed=True, processive=False)
+    if ims:
+        raise ValidationError(f"{route} requires exactly one framed child")
+    serder = child.serder
+    wrapper = exchange(sender=ghab.mhab.pre, route=route,
+                       attributes={'gid': ghab.pre, field: serder.said},
+                       version=Vrsn_2_0, gvrsn=Vrsn_2_0,
+                       kind=kind if kind is not None else Kinds.json)
+    stream = ghab.mhab.endorse(wrapper, last=False, framed=False, gvrsn=Vrsn_2_0,
+                               nests=[serializeParsedSubstream(child)])
+    return wrapper, bytearray(stream[wrapper.size:])
+
+
+def multisigQueryExn(ghab, qry, kind=None):
+    """Propose one exact signed v2 query authored by the group to its members.
+
+    Local v2 coordination profile route ``/multisig/qry``: ``a`` is
+    ``{gid, qry}`` and the single nested substream is the query stream.
+
+    Parameters:
+        ghab (GroupHab): group Hab whose member endorses the wrapper
+        qry (bytes): one framed v2 ``qry`` with its attachments
+        kind (str | None): wrapper serialization kind
+
+    Returns:
+        tuple: (SerderKERI, bytearray) wrapper and its attachments
+    """
+    child = Parser(version=Vrsn_2_0).parseOneBare(ims=bytearray(qry), framed=True,
+                                                  processive=False).serder
+    if child.pvrsn != Vrsn_2_0 or child.ilk != Ilks.qry or child.pre != ghab.pre:
+        raise ValidationError("multisig query requires a v2 query authored by the group")
+    return _multisigV2Exn(ghab, '/multisig/qry', 'qry', qry, kind=kind)
+
+
+def multisigIpexProofExn(ghab, grant, kind=None):
+    """Share one exact accepted v2 IPEX Grant stream, with its proofs, with group members.
+
+    Local v2 coordination profile route ``/multisig/ipex-proof``: ``a`` is
+    ``{gid, grant}`` and the single nested substream is the complete Grant
+    stream. The Grant is authored by the group or addressed to it.
+
+    Parameters:
+        ghab (GroupHab): group Hab whose member endorses the wrapper
+        grant (bytes): one framed v2 Grant with its attachments and nests
+        kind (str | None): wrapper serialization kind
+
+    Returns:
+        tuple: (SerderKERI, bytearray) wrapper and its attachments
+    """
+    child = Parser(version=Vrsn_2_0).parseOneBare(ims=bytearray(grant), framed=True,
+                                                  processive=False).serder
+    if (child.pvrsn != Vrsn_2_0 or child.ilk not in (Ilks.xip, Ilks.exn)
+            or child.ked.get('r') != '/ipex/grant'
+            or ghab.pre not in (child.pre, child.ked.get('ri'))):
+        raise ValidationError("multisig IPEX proof requires a v2 Grant for the group")
+    return _multisigV2Exn(ghab, '/multisig/ipex-proof', 'grant', grant, kind=kind)
+
+
 def multisigExn(ghab, exn, version=None, kind=None):
     """Propose the exact signed exchange stream for ordinary group contribution.
 
@@ -974,6 +1046,22 @@ class Multiplexor:
 
     """
 
+    # Single-child v2 wrapper routes and the child ilks each accepts.
+    V2Children = {
+        "/multisig/icp": (Ilks.icp, Ilks.dip),
+        "/multisig/rot": (Ilks.rot,),
+        "/multisig/ixn": (Ilks.ixn,),
+        "/multisig/rpy": (Ilks.rpy,),
+        "/multisig/exn": (Ilks.xip, Ilks.exn),
+        # Local v2 coordination profile, not upstream KERI or #1740 routes.
+        "/multisig/qry": (Ilks.qry,),
+        "/multisig/ipex-proof": (Ilks.xip, Ilks.exn),
+    }
+    # Payload field carrying the child SAID when it is not the route's last segment.
+    V2Fields = {"/multisig/ipex-proof": "grant"}
+    # Children whose verification needs caller-owned processors, never this mux's private ones.
+    Unreplayed = ("/multisig/qry", "/multisig/ipex-proof")
+
     def __init__(self, hby, notifier, rgy=None, replay=None):
         """ Create Multiplexor for local database and Habs
 
@@ -997,6 +1085,36 @@ class Multiplexor:
         self.notifier = notifier
         self.rgy = rgy
         self.replay = replay
+        self.childHandlers = {}
+
+    def addChildHandler(self, route, child, handler):
+        """Delegate one wrapper route's v2 children with route ``child`` to ``handler``.
+
+        Lets several owners share one registered ``/multisig/*`` Exchanger route
+        without replacing ``Exchanger.routes`` entries. The delegate supplies
+        ``verify`` and ``handle`` with the Exchanger handler signature and owns
+        all validation, indexing and notification for those children; the
+        Multiplexor performs none of them. Registering a key twice is refused.
+
+        Parameters:
+            route (str): wrapper route, such as ``/multisig/qry``
+            child (str): nested child ``r`` route, such as ``/ipex/dhke``
+            handler (object): delegate with ``verify`` and ``handle`` methods
+        """
+        if (route, child) in self.childHandlers:
+            raise ValidationError(f"child handler for {route} {child} already registered")
+        self.childHandlers[(route, child)] = handler
+
+    def childHandlerFor(self, serder, nests=None):
+        """Return the delegate for this v2 wrapper's single child route, if any."""
+        if not self.childHandlers or serder.pvrsn != Vrsn_2_0 or len(nests or []) != 1:
+            return None
+        nest = nests[0]
+        try:
+            child = nest["serder"] if isinstance(nest, dict) else nest.serder
+            return self.childHandlers.get((serder.ked["r"], child.ked.get("r")))
+        except (KeyError, TypeError, AttributeError):
+            return None
 
     def _ipexV2Replay(self, child):
         """Require the v2 IPEX verifier owners before retaining a group proposal."""
@@ -1103,11 +1221,10 @@ class Multiplexor:
                 raise ValidationError(f"invalid multisig nested substreams count={len(nests)}, expected 1")
 
             # Allow only supported routes through v2 path
-            supported = ("/multisig/icp", "/multisig/rot", "/multisig/ixn", "/multisig/rpy", "/multisig/exn")
-            if route not in supported:
+            if route not in self.V2Children:
                 raise ValidationError(f"unsupported V2 multisig route {route}")
 
-            field = route.rsplit("/", 1)[-1]
+            field = self.V2Fields.get(route, route.rsplit("/", 1)[-1])
 
             # Retrieve the child SAID from the route-specific field in `a`
             signed = payload.get(field) if isinstance(payload, dict) else None
@@ -1118,14 +1235,7 @@ class Multiplexor:
             nserder = nests[0]["serder"] if isinstance(nests[0], dict) else nests[0].serder
 
             # Validate child ilks
-            allowed = {
-                "/multisig/icp": (Ilks.icp, Ilks.dip),
-                "/multisig/rot": (Ilks.rot,),
-                "/multisig/ixn": (Ilks.ixn,),
-                "/multisig/rpy": (Ilks.rpy,),
-                "/multisig/exn": (Ilks.xip, Ilks.exn),
-            }
-            if nserder.ilk not in allowed[route]:
+            if nserder.ilk not in self.V2Children[route]:
                 raise ValidationError(f"invalid multisig nested substream ilk {nserder.ilk} for route {route}")
 
             # Make sure the child event is saidive before validating the signed child SAID
@@ -1141,6 +1251,13 @@ class Multiplexor:
                 if nserder.pvrsn != Vrsn_2_0 or nserder.pre != payload.get('gid'):
                     raise ValidationError("v2 IPEX child must be authored by the selected group")
                 self._ipexV2Replay(nserder)
+            elif route == '/multisig/qry':
+                if nserder.pvrsn != Vrsn_2_0 or nserder.pre != payload.get('gid'):
+                    raise ValidationError("v2 query child must be authored by the selected group")
+            elif route == '/multisig/ipex-proof':
+                if (nserder.pvrsn != Vrsn_2_0 or nserder.ked.get('r') != '/ipex/grant'
+                        or payload.get('gid') not in (nserder.pre, nserder.ked.get('ri'))):
+                    raise ValidationError("v2 IPEX proof child must be a Grant for the selected group")
 
             # Use the signed child SAID as the V2 proposal identity
             esaid = signed
@@ -1170,7 +1287,7 @@ class Multiplexor:
                 gid = payload["gid"]
                 if gid not in self.hby.habs:
                     raise ValueError(f"invalid request to participate in group, not member of gid={gid}")
-                if (route in ('/multisig/rip', '/multisig/bup') or
+                if (route in ('/multisig/rip', '/multisig/bup', '/multisig/qry', '/multisig/ipex-proof') or
                         route == '/multisig/exn' and ovrsn == Vrsn_2_0):
                     if sender not in self.hby.db.signingMembers(pre=gid):
                         raise ValidationError("proposal sender is not a group signing member")
@@ -1238,14 +1355,15 @@ class Multiplexor:
             # Only a locally controlled submitter counts as approval.
             approved = any([True for sub in submitters if sub.qb64 in self.hby.habs])
 
-            if approved:
+            if approved and route not in self.Unreplayed:
                 self._replayApproved(exnSaid)
             else:
                 if firstSeen:
                     self.notifier.add(attrs=dict(r=route, d=exnSaid))
                 else:
                     self.notifier.add(attrs=dict(r=route, d=exnSaid, e=esaid))
-        elif not firstSeen and any([True for sub in submitters if sub.qb64 not in self.hby.habs]):
+        elif (route not in self.Unreplayed and not firstSeen
+              and any([True for sub in submitters if sub.qb64 not in self.hby.habs])):
             # If a remote copy arrived before we registered our local approval, replay it now.
             for diger in digers:
                 self._replayApproved(diger.qb64)
