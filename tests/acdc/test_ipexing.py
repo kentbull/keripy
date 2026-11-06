@@ -15,7 +15,7 @@ from keri.acdc import (IpexHandler, Regery, Registrar, acdcagg, acdcatt, acdcmap
                        agree as ipexAgree, grant as ipexGrant,
                        loadHandlers, offer as ipexOffer, regcept,
                        spurn as ipexSpurn)
-from keri.acdc.ipexing import _validDisclosurePath
+from keri.acdc.ipexing import validDisclosurePath
 from keri.app import openCF, openHby
 from keri.core import (Aggor, Blinder, Codens, Compactor, Counter, Diger, GenDex,
                        Kevery, Kramer, Noncer, Number, Parser, Schemer, SealEvent,
@@ -3964,7 +3964,7 @@ def test_ipex_v2_grant_validates_disclosed_node_schema(monkeypatch):
         # Shared context validates schemas before final issuer-state reduction,
         # so an unresolved schema cannot authorize a pending issuance context.
         stages = []
-        verifyIssuerAuth = IpexHandler._verifyIssuerAuthNode
+        verifyIssuerAuth = IpexHandler.verifyIssuerAuthNode
         verifyNodeSchemas = IpexHandler._verifyNodeSchemas
 
         def recordIssuerAuth(self, *args, **kwa):
@@ -3975,7 +3975,7 @@ def test_ipex_v2_grant_validates_disclosed_node_schema(monkeypatch):
             stages.append("node-schema")
             return verifyNodeSchemas(self, *args, **kwa)
 
-        monkeypatch.setattr(IpexHandler, "_verifyIssuerAuthNode", recordIssuerAuth)
+        monkeypatch.setattr(IpexHandler, "verifyIssuerAuthNode", recordIssuerAuth)
         monkeypatch.setattr(IpexHandler, "_verifyNodeSchemas", recordNodeSchemas)
 
         # Set up the IPEX receiver
@@ -4430,7 +4430,7 @@ def test_ipex_v2_disclosure_plan_distinguishes_presence_from_whole_node():
         compactNodes = {compact.said: dict(serder=compact)}
 
         presencePlan = [[schema, "/", []]]
-        assert _validDisclosurePath(presencePlan) is True
+        assert validDisclosurePath(presencePlan) is True
         assert handler._verifyDisclosurePlan(
             plan=presencePlan,
             origin=full.said,
@@ -4445,8 +4445,8 @@ def test_ipex_v2_disclosure_plan_distinguishes_presence_from_whole_node():
         ) is True
 
         wholeNodePlan = [[schema, "/", [""]]]
-        assert _validDisclosurePath(wholeNodePlan) is True
-        assert _validDisclosurePath([[schema, "/", ["", "a/status/"]]]) is False
+        assert validDisclosurePath(wholeNodePlan) is True
+        assert validDisclosurePath([[schema, "/", ["", "a/status/"]]]) is False
         assert handler._verifyDisclosurePlan(
             plan=wholeNodePlan,
             origin=full.said,
@@ -5758,7 +5758,7 @@ def test_ipex_v2_requires_an_issuer_authentication_factor():
             framed=True,
             processive=False,
         )
-        assert handler._verifyIssuerAuthNode(serder=acdc, nest=unsigned).verdict == Verdicts.invalid
+        assert handler.verifyIssuerAuthNode(serder=acdc, nest=unsigned).verdict == Verdicts.invalid
 
         # A valid signature from an AID other than the issuer is insufficient.
         wrongSigner, = Parser(version=Vrsn_2_0).parse(
@@ -5766,7 +5766,7 @@ def test_ipex_v2_requires_an_issuer_authentication_factor():
             framed=True,
             processive=False,
         )
-        assert handler._verifyIssuerAuthNode(serder=acdc, nest=wrongSigner).verdict == Verdicts.invalid
+        assert handler.verifyIssuerAuthNode(serder=acdc, nest=wrongSigner).verdict == Verdicts.invalid
 
         # The issuer's current transferable signature authenticates the node.
         signed, = Parser(version=Vrsn_2_0).parse(
@@ -5774,7 +5774,7 @@ def test_ipex_v2_requires_an_issuer_authentication_factor():
             framed=True,
             processive=False,
         )
-        assert handler._verifyIssuerAuthNode(serder=acdc, nest=signed).verdict == Verdicts.valid
+        assert handler.verifyIssuerAuthNode(serder=acdc, nest=signed).verdict == Verdicts.valid
 
         # An inner rd without top-level rd declares the unsupported hidden
         # issuer-registry form, so even a valid issuer signature cannot replace it.
@@ -5788,7 +5788,7 @@ def test_ipex_v2_requires_an_issuer_authentication_factor():
             framed=True,
             processive=False,
         )
-        assert handler._verifyIssuerAuthNode(
+        assert handler.verifyIssuerAuthNode(
             serder=hidden, nest=hiddenSigned).verdict == Verdicts.invalid
 
         # A source couple points to the issuer event that permanently seals it.
@@ -5806,15 +5806,15 @@ def test_ipex_v2_requires_an_issuer_authentication_factor():
             framed=True,
             processive=False,
         )
-        assert handler._verifyIssuerAuthNode(serder=acdc, nest=anchored).verdict == Verdicts.valid
+        assert handler.verifyIssuerAuthNode(serder=acdc, nest=anchored).verdict == Verdicts.valid
 
         # Bare signatures expire when the issuer rotates, but the historical KEL
         # event continues to authenticate the ACDC it permanently anchored.
         issuer.rotate(version=Vrsn_2_0,
                       kind=issuer.kever.serder.kind,
                       gvrsn=Vrsn_2_0)
-        assert handler._verifyIssuerAuthNode(serder=acdc, nest=signed).verdict == Verdicts.invalid
-        assert handler._verifyIssuerAuthNode(serder=acdc, nest=anchored).verdict == Verdicts.valid
+        assert handler.verifyIssuerAuthNode(serder=acdc, nest=signed).verdict == Verdicts.invalid
+        assert handler.verifyIssuerAuthNode(serder=acdc, nest=anchored).verdict == Verdicts.valid
 
 
 def test_ipex_v2_rejects_hidden_issuer_registry_signature_fallback():
@@ -8456,13 +8456,13 @@ def test_ipex_v2_finds_attribute_presentation_registry():
         # The attribute pair selects the registry. Aggregate disclosure state
         # cannot add, remove, or hide that presentation requirement.
         expected = [(issuee.pre, presentationReg)]
-        assert IpexHandler._presentationRegistries(attribute) == expected
-        assert IpexHandler._presentationRegistries(aggregate) == []
-        assert IpexHandler._presentationRegistries(selectiveAggregate) == []
-        assert IpexHandler._presentationRegistries(hiddenIssuer) is None
-        assert IpexHandler._presentationRegistries(compactAttribute) is None
-        assert IpexHandler._presentationRegistries(compactAggregate) == []
-        assert IpexHandler._presentationRegistries(partialAggregate) == []
+        assert IpexHandler.presentationRegistries(attribute) == expected
+        assert IpexHandler.presentationRegistries(aggregate) == []
+        assert IpexHandler.presentationRegistries(selectiveAggregate) == []
+        assert IpexHandler.presentationRegistries(hiddenIssuer) is None
+        assert IpexHandler.presentationRegistries(compactAttribute) is None
+        assert IpexHandler.presentationRegistries(compactAggregate) == []
+        assert IpexHandler.presentationRegistries(partialAggregate) == []
 
 
 def test_ipex_v2_presentation_registry_binds_proxy_grant():
@@ -10502,6 +10502,46 @@ def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault):
         _receive_ipex(exc, message, signed[message.size:])
         assert hby.db.exns.get((message.said,)).raw == message.raw
         assert hby.db.epse.get((message.said,)) is None
+
+
+def test_verify_selection_checks_exact_closed_graph_without_writes(fresh_issuance):
+    """Selected node bytes get the ordinary graph verdict before any Grant exists."""
+    hby, issuer, issuee, rgy, registrar, registry, acdc, exc, _ = fresh_issuance
+    opening, update = registrar.issue(registry, acdc=acdc, state="issued")
+    _anchor(issuer, registry, update)
+    ready = acdcmap(israid=issuer.pre, iseaid=issuee.pre,
+                    attribute=dict(d="", role="ready"))
+    edges = dict(d="", ready=dict(d="", n=ready.said, o="E1E"),
+                 member=dict(d="", n=acdc.said, o="E1E"))
+    origin = acdcmap(israid=issuer.pre, iseaid=issuee.pre, edge=edges,
+                     attribute=dict(d="", role="origin"))
+
+    def parsed(stream):
+        ims = bytearray(stream)
+        nest = Parser(version=Vrsn_2_0).parse(ims=ims, processive=False)[0]
+        assert not ims
+        return nest
+
+    handler = exc.routes["/ipex/grant"]
+    selected = [parsed(_signed(origin, issuer)), parsed(_signed(ready, issuer)),
+                parsed(_proofed(acdc, opening))]
+    before = hby.db.env.info()['last_txnid']
+    verdict, records = handler.verifySelection(selected)
+    assert verdict.verdict == Verdicts.valid
+    assert set(records) == {acdc.said}
+    assert records[acdc.said].regid == registry.regk
+    assert records[acdc.said].state == "issued"
+
+    # The graph must be closed, rooted at the first node and fully reachable.
+    assert handler.verifySelection([])[0].verdict == Verdicts.invalid
+    assert handler.verifySelection(selected[:2])[0].verdict == Verdicts.invalid
+    assert handler.verifySelection(selected[::-1])[0].verdict == Verdicts.invalid
+    # A wrong signer fails the same issuer-auth check used for a received Grant.
+    forged = [selected[0], parsed(_signed(ready, issuee)), selected[2]]
+    assert handler.verifySelection(forged)[0].verdict == Verdicts.invalid
+    assert handler.verifyIssuerAuthNode(ready, forged[1]).verdict == Verdicts.invalid
+    assert handler.verifyIssuerAuthNode(ready, selected[1]).verdict == Verdicts.valid
+    assert hby.db.env.info()['last_txnid'] == before
 
 
 @pytest.mark.parametrize("fresh", [False, True])

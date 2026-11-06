@@ -781,7 +781,7 @@ def test_ipex_v2_rejects_schema_invalid_sedi_with_valid_issuer_registry():
                 rgy=recipientRgy,
             )
             node = parsed.nests[0]
-            assert handler._verifyIssuerAuthNode(
+            assert handler.verifyIssuerAuthNode(
                 serder=node.serder,
                 nest=node,
             ).verdict == Verdicts.valid
