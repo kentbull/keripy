@@ -9,7 +9,7 @@ import pytest
 from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, admit, chaining, grant, loadHandlers, regeventing
 from keri.acdc.dhking import Dhke
-from keri.acdc.salting import RegistrySalt
+from keri.acdc.salting import RegistryRoot
 from keri.acdc.unblinding import Unblind
 from keri.app import Notifier, grouping, openCF, openHby
 from keri.core import (Blinder, Diger, Kevery, Kramer, Matter, MtrDex, Number, Parser, Salter,
@@ -209,17 +209,16 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(fakeHelpingClock)
             receive(side, wire)
             assert side.hby.db.exns.get((admission.said,)) is not None
         recipient = h.issuees[1]
-        sender = RegistrySalt(issuee.hab, issuee.rgy)
-        receiver = RegistrySalt(recipient.hab, recipient.rgy)
-        recipient.hby.rtr.addRoute(RegistrySalt.Route, receiver, attachments=True)
-        receiver.approve(h.registry.regk, issuee.hab.pre, event=event.said, opening=opening)
-        coord = h.coordinators[1]
-        wire = sender.prepare(h.registry.regk, issuee.hab.pre, recipient.member.pre,
-                              coordinator=(coord.sn, coord.said))
+        receiver = RegistryRoot(recipient.hby, recipient.rgy)
+        recipient.exc.addHandler(receiver)
+        wire = RegistryRoot(issuee.hby, issuee.rgy).prepare(
+            issuee.member, recipient.member.pre, issuee.hab.pre, h.registry.regk, event=event.said)
         receive(recipient, wire)
+        # Stored pending: nothing is decrypted or retained before explicit approval.
         assert root(recipient, h) is None
         assert not recipient.dh._operations[h.xid]['private']
-        receive(recipient, recipient.hab.endorse(parsed(wire).serder, gvrsn=V2))
+        (pending,) = receiver.pending()
+        assert receiver.receive(pending['said'], event=event.said, opening=opening) is True
         matching = root(recipient, h).qb64 == root(issuee, h).qb64
         assert matching
 

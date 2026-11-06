@@ -8,7 +8,7 @@ import pytest
 
 from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, admit, agree, blindate, chaining, grant, loadHandlers, offer
-from keri.acdc.salting import RegistrySalt
+from keri.acdc.salting import RegistryRoot
 from keri.acdc.unblinding import Unblind
 from keri.cli.common.sending import messageParts
 from keri.app import openCF, openHby
@@ -203,15 +203,16 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         assert disclosed == held
         snapshots = [(holder, issued.said, held), (discloser, forwarded.said, disclosed)]
 
-        # The v2 ACDC RegistrySalt copies the root to the discloser's encrypted Keeper only.
-        sender = RegistrySalt(issuer.hab, issuer.rgy)
-        recipient = RegistrySalt(discloser.hab, discloser.rgy)
-        discloser.hby.rtr.addRoute(RegistrySalt.Route, recipient, attachments=True)
+        # The issuer's /registry/root ESSR copy reaches the discloser's encrypted Keeper only.
+        recipient = RegistryRoot(discloser.hby, discloser.rgy)
+        discloser.exc.addHandler(recipient)
         opening = Blinder(data=BlindState(*selected.bsqs[0]), verify=False)
-        recipient.approve(registry.regk, issuer.hab.pre, event=event1.said, opening=opening)
-        root_copy = sender.prepare(registry.regk, discloser.hab.pre, discloser.hab.pre)
+        root_copy = RegistryRoot(issuer.hby, issuer.rgy).prepare(
+            issuer.hab, discloser.hab.pre, discloser.hab.pre, registry.regk, event=event1.said)
         assert root.qb64b not in root_copy
         receive(discloser, root_copy)
+        (pending,) = recipient.pending()
+        assert recipient.receive(pending['said'], event=event1.said, opening=opening) is True
         assert discloser.hab.mgr.getRegistryRoot(discloser.hab.pre, registry.regk).qb64 == root.qb64
         cipher = discloser.hab.mgr.ks.rroots.get((discloser.hab.pre, registry.regk))
         assert cipher.qb64 != root.qb64

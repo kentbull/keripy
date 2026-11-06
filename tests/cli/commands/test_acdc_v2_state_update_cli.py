@@ -12,7 +12,7 @@ from keri.core import Blinder, Kevery, Parser, Salter, messagize
 from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, issue
 from tests.cli.commands.test_ipex_v2_issuance_cli import live_parties as live_parties
 from tests.cli.commands.test_ipex_v2_negotiation_cli import enable_kram, kli
-from tests.cli.commands.test_acdc_v2_registry_root_cli import last_result
+from tests.cli.commands.test_registry_root_cli import last_result
 
 
 pytestmark = pytest.mark.real_store_roots
@@ -164,7 +164,7 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
     from keri.peer.exchanging import loadParsedNestedSubstreams
     from tests.cli.commands.test_ipex_v2_issuance_cli import group_issuer_issue, witnessed
     from tests.cli.commands.test_ipex_v2_presentation_cli import intake, inspect, present
-    from tests.cli.commands.test_acdc_v2_registry_root_cli import retained
+    from tests.cli.commands.test_registry_root_cli import retained
 
     issuers, holder, body, selected = group_issuer_issue(tmp_path, live_parties)
     lead, peer = issuers
@@ -181,7 +181,6 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
     rgy = Regery(hby, name=lead['name'], base=lead['base'])
     notifier = Notifier(hby)
     try:
-        coordinator = hby.habByName(lead['alias']).kever.serder.said
         first = rgy.store.headEvent(body.regid)
         proof = Blinder(data=BlindState(*loadParsedNestedSubstreams(hby, selected['grant'])[0].bsqs[0]))
         held = tmp_path / 'issuer-held-opening.cesr'
@@ -194,27 +193,20 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
         rgy.close()
         hby.close()
 
-    # Existing provision/contribute/receive commands carry ciphertext and require current group signatures.
-    scope = ['--registry', body.regid, '--recipient', lead['pre'], '--target', peer['member'],
-             '--coordinator', coordinator]
-    partial, proposal = tmp_path / 'issuer-copy-partial.cesr', tmp_path / 'issuer-copy-proposal.cesr'
-    prepared = last_result(kli(tmp_path, 'vc', 'registry', 'provision', *lead['args'], *scope,
-        '--output', str(partial), '--proposal-output', str(proposal), '--deliver'))
-    receive = ['vc', 'registry', 'receive', *peer['args'], '--registry', body.regid,
-               '--sender', lead['pre'], '--event', first.said, '--opening', str(held)]
-    refused = kli(tmp_path, *receive, '--message', str(partial), succeeds=False)
-    assert 'not successfully received' in refused and retained(peer, body)[0] is None
-    contribution = tmp_path / 'issuer-copy-contribution.cesr'
-    contributed = last_result(kli(tmp_path, 'vc', 'registry', 'provision', *peer['args'], *scope,
-        '--proposal', str(proposal), '--output', str(contribution), '--deliver'))
-    assert contributed['contributed'] and contributed['reply'] == prepared['reply']
+    # The lead member copies the group root to the rootless member as one ESSR exn.
+    copy = tmp_path / 'issuer-root-copy.cesr'
+    sent = last_result(kli(tmp_path, 'vc', 'registry', 'root', 'send', *lead['args'],
+        '--registry', body.regid, '--out', str(copy)))
+    assert sent['recipient'] == peer['member'] and sent['gid'] == lead['pre']
     assert retained(peer, body)[0] is None
-    received = last_result(kli(tmp_path, *receive, '--listen', '--timeout', '15'))
-    assert received['received'] and received['reply'] == prepared['reply']
+    received = last_result(kli(tmp_path, 'vc', 'registry', 'root', 'receive', *peer['args'],
+        '--registry', body.regid, '--sender', lead['member'], '--event', first.said,
+        '--opening', str(held), '--message', str(copy)))
+    assert received['received'] and received['said'] == sent['exchange']
     root, encrypted, _ = retained(peer, body)
     assert root == before[0][0] and encrypted != root
     assert Blinder.unblind(first.sad['b'], salt=root, sn=1, acdc=body.said, states=('issued',)).qb64 == proof.qb64
-    assert all(root.encode() not in p.read_bytes() for p in (partial, proposal, contribution, held))
+    assert all(root.encode() not in p.read_bytes() for p in (copy, held))
 
     # With the root present, wrong-witness authorization still fails before staging.
     refused = kli(tmp_path, *update_args, '--authenticate', '--code', 'unsupported:code', succeeds=False)

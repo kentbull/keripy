@@ -5,18 +5,99 @@ import subprocess
 import time
 
 import pytest
+from hio.base import doing
 
 from keri import Vrsn_2_0 as V2
-from keri.acdc import Regery
+from keri.acdc import Regery, Registrar, acdcmap, regeventing
+from keri.app import Receiptor
 from keri.cli.common import setupHby
-from keri.core import Kevery, Parser, Salter
-from tests.cli.commands.test_acdc_v2_registry_root_cli import existing_registry
-from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, holder_group
+from keri.core import Kevery, Parser, Salter, SealSource, messagize
+from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, group_issue, holder_group
 from tests.cli.commands.test_ipex_v2_issuance_cli import live_parties as live_parties
 from tests.cli.commands.test_ipex_v2_negotiation_cli import kli
 
 
 pytestmark = pytest.mark.real_store_roots
+
+
+def last_result(output):
+    return json.loads([line for line in output.splitlines() if line.startswith('{')][-1])
+
+
+def existing_registry(tmp_path, sides):
+    """Author and witness the existing registry before either provisioning command."""
+    issuer, receiver = sides
+    hby = setupHby(name=issuer['name'], base=issuer['base'], bran=PASSCODE, noPrompt=True, version=V2)
+    rgy = Regery(hby, name=issuer['name'], base=issuer['base'])
+    try:
+        hab = hby.habByName('issuer')
+        hby.psr.parse(ims=bytearray(receiver['public'].read_bytes()), framed=False)
+        registry = Registrar(rgy).makeRegistry('existing', hab.pre)
+
+        def seal(event):
+            hab.interact(data=[dict(i=registry.regk, s=event.sad['n'], d=event.said)], gvrsn=V2)
+            receipts = Receiptor(hby=hby)
+            def collect(tymth, tock=0.03125, **kwa):
+                yield tock
+                yield from receipts.receipt(hab.pre, sn=hab.kever.sn)
+                owner.remove([receipts])
+            owner = doing.DoDoer(doers=[receipts, doing.doify(collect)])
+            doing.Doist(real=True, tock=0.03125, limit=10).do(doers=[owner])
+            assert owner.done and registry.anchorMsg(event.said)
+
+        seal(rgy.store.event(registry.regk))
+        root = Salter()
+        hab.mgr.putRegistryRoot(hab.pre, registry.regk, root)
+        body = acdcmap(israid=hab.pre, iseaid=receiver['pre'], regid=registry.regk,
+                       attribute=dict(d='', role='reader'))
+        opening, event = Registrar(rgy).issue(registry, body, salt=root.qb64)
+        seal(event)
+        evidence = bytearray(hab.replay(gvrsn=V2))
+        for raw in rgy.store.cloneTelIter(registry.regk):
+            node = type(event)(raw=raw)
+            sn, said = regeventing.vetAnchor(node, db=hby.db, issuer=hab.pre)
+            evidence.extend(messagize(node, bonds=[SealSource(s=f'{sn:x}', d=said)], gvrsn=V2))
+        public = tmp_path / 'public.cesr'
+        public.write_bytes(evidence)
+        held = tmp_path / 'held-opening.cesr'
+        held.write_bytes(opening.qb64b)
+        return body, event, opening, root.qb64, public, held
+    finally:
+        rgy.close()
+        hby.close()
+
+
+def retained(side, body):
+    hby = setupHby(name=side['name'], base=side['base'], bran=PASSCODE, noPrompt=True, version=V2)
+    rgy = Regery(hby, name=side['name'], base=side['base'])
+    try:
+        hab = hby.habByName(side['alias'])
+        root = hab.mgr.getRegistryRoot(hab.pre, body.regid)
+        return (root.qb64 if root else None,
+                hby.ks.rroots.get((hab.pre, body.regid)).qb64 if root else None,
+                tuple(rgy.store.cloneTelIter(body.regid)))
+    finally:
+        rgy.close()
+        hby.close()
+
+
+def group_copy(tmp_path, live_parties, data='{"role":"group reader"}'):
+    """Continue the real 2of2 issuance; the lead copies its root to the rootless member."""
+    issuer, holders, body, selected = group_issue(tmp_path, live_parties, data=data)
+    lead, target = holders
+    before = retained(lead, body)
+    assert before[0] is not None and retained(target, body)[0] is None
+    wire = tmp_path / 'group-root.cesr'
+    sent = results(kli(tmp_path, 'vc', 'registry', 'root', 'send', *lead['args'],
+        '--registry', body.regid, '--acdc', body.said, '--out', str(wire)))
+    assert [(item['recipient'], item['gid']) for item in sent] == [(target['member'], target['pre'])]
+    received = results(kli(tmp_path, 'vc', 'registry', 'root', 'receive', *target['args'],
+        '--registry', body.regid, '--sender', lead['member'], '--message', str(wire)))[-1]
+    assert received['received'] and received['said'] == sent[0]['exchange']
+    saved = retained(target, body)
+    assert saved[0] == before[0] and saved[1] != before[0] and saved[2] == before[2]
+    assert retained(lead, body) == before and before[0].encode() not in wire.read_bytes()
+    return issuer, holders, body, selected
 
 
 def results(output):
