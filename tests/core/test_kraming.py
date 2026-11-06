@@ -6307,3 +6307,108 @@ def test_partial_multisig_survives_an_anchor_during_collection(mockHelpingNowUTC
             assert receiverHby.db.kramPMKS.get(rotKey) == []
             assert receiverHby.db.kramPMSK.get(rotKey) is None
             assert receiverHby.db.kramMSGC.get(rotKey) is not None
+
+
+def test_authenticate_query_and_parse_signed_query():
+    """Services authenticate one signed V2 qry through public core intake."""
+    import falcon
+    from falcon import testing
+    from keri.app.httping import CESR_CONTENT_TYPE, parseSignedQuery
+    from keri.kering import ConfigurationError
+
+    with (openHby(name="query-requester", temp=True, version=V2) as requesterHby,
+          openHby(name="query-verifier", temp=True, version=V2) as verifierHby,
+          openCF(name="query-authenticate", temp=True) as cf):
+        requester = requesterHby.makeHab(name="requester", version=V2, kind=Kinds.cesr)
+        other = requesterHby.makeHab(name="other", version=V2, kind=Kinds.cesr)
+        kvy = Kevery(db=verifierHby.db, lax=False, local=False)
+        Parser(version=V2).parse(ims=bytearray(
+            requester.msgOwnEvent(sn=0, framed=True, gvrsn=V2)), kvy=kvy)
+
+        def signed(hab, sender=None):
+            qry = query(pre=sender or hab.pre, route="tels", query=dict(i=requester.pre),
+                        stamp=helping.nowIso8601(), version=V2, kind=Kinds.cesr)
+            return qry, bytes(hab.endorse(qry, last=True, framed=False, gvrsn=V2))
+
+        def parsed(raw, **headers):
+            req = testing.create_req(method="POST", body=raw,
+                                     headers=dict(headers) or {"Content-Type": CESR_CONTENT_TYPE})
+            return parseSignedQuery(req)
+
+        def attachments(dom):
+            return {key: list(getattr(dom, key))
+                    for key in ("sigers", "cigars", "lsgs", "tsgs", "sscs", "ssts")}
+
+        qry, raw = signed(requester)
+        dom = parsed(raw)
+        assert dom.serder.said == qry.said
+
+        # Transport shape: one complete V2 qry only, and only CESR media.
+        for bad in (raw + raw, raw[:-4], bytes(requester.msgOwnEvent(sn=0, framed=True, gvrsn=V2))):
+            with pytest.raises(falcon.HTTPBadRequest):
+                parsed(bad)
+        with pytest.raises(falcon.HTTPError) as ex:
+            parsed(raw, **{"Content-Type": "application/json"})
+        assert ex.value.status == falcon.HTTP_NOT_ACCEPTABLE
+
+        disabled = Kramer(db=verifierHby.db)
+        assert not disabled.enabled
+        with pytest.raises(ConfigurationError):
+            disabled.authenticateQuery(dom.serder, attachments(dom), hby=verifierHby)
+
+        cf.put(KRAM_INTEGRATION_CONFIG)
+        kramer = Kramer(db=verifierHby.db, cf=cf)
+        kramer.authenticateQuery(dom.serder, attachments(dom), hby=verifierHby)
+        assert verifierHby.db.kramMSGC.get(keys=(requester.pre, qry.said)) is not None
+
+        # A replay fails; another AID's signature is no requester authentication.
+        with pytest.raises(ValidationError):
+            kramer.authenticateQuery(dom.serder, attachments(dom), hby=verifierHby)
+        forged = parsed(signed(other, sender=requester.pre)[1])
+        with pytest.raises(MissingAuthAttachmentError):
+            kramer.authenticateQuery(forged.serder, attachments(forged), hby=verifierHby)
+
+
+def test_timely_and_deadline_are_read_only_kram_windows():
+    """A sender can check the KRAM window and recorded deadline without writes."""
+    with (openHby(name="timely-sender", temp=True, version=V2) as senderHby,
+          openHby(name="timely-verifier", temp=True, version=V2) as verifierHby,
+          openCF(name="timely", temp=True) as cf):
+        sender = senderHby.makeHab(name="sender", version=V2, kind=Kinds.cesr)
+        cf.put(KRAM_INTEGRATION_CONFIG)  # d=1000 ms, short lag sl=5000 ms
+        kramer = Kramer(db=verifierHby.db, cf=cf)
+
+        def parsed(stamp):
+            qry = query(pre=sender.pre, route="tels", query=dict(i=sender.pre),
+                        stamp=stamp, version=V2, kind=Kinds.cesr)
+            raw = sender.endorse(qry, last=True, framed=False, gvrsn=V2)
+            dom = Parser(version=V2).parseOneBare(ims=bytearray(raw), processive=False)
+            return dom.serder, {key: list(getattr(dom, key))
+                                for key in ("sigers", "cigars", "lsgs", "tsgs", "sscs", "ssts")}
+
+        now = helping.nowUTC()
+        serder, kwa = parsed(helping.toIso8601(now))
+        with pytest.raises(MissingSenderKeyStateError):
+            kramer.timely(serder, kwa)
+        kvy = Kevery(db=verifierHby.db, lax=False, local=False)
+        Parser(version=V2).parse(ims=bytearray(
+            sender.msgOwnEvent(sn=0, framed=True, gvrsn=V2)), kvy=kvy)
+
+        before = verifierHby.db.env.info()['last_txnid']
+        snapshot = {key: list(value) for key, value in kwa.items()}
+        assert kramer.timely(serder, kwa) is True
+        assert kwa == snapshot
+        assert kramer.timely(*parsed(helping.toIso8601(now - timedelta(seconds=10)))) is False
+        assert kramer.timely(*parsed(helping.toIso8601(now + timedelta(seconds=10)))) is False
+        with pytest.raises(MissingAuthAttachmentError):
+            kramer.timely(serder, {})
+        assert kramer.deadline(serder) is None
+        assert verifierHby.db.env.info()['last_txnid'] == before
+
+        # Intake records the window; deadline reads it back: stamp + d + sl.
+        assert kramer.intake(serder, dict(kwa)) is not None
+        assert kramer.deadline(serder) == now + timedelta(milliseconds=6000)
+
+        # Transactioned exchanges belong to Exchanger.exchangeDeadline.
+        xip = exchept(sender=sender.pre, route="/ipex/apply", **EXN_KWA)
+        assert kramer.deadline(xip) is None

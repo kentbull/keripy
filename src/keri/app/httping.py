@@ -14,8 +14,9 @@ from hio.core import http
 from hio.help import Hict, ogler
 
 from ..kering import (ShortageError, ExtractionError,
-                      ColdStartError, sniff, Colds, Versionage, Vrsn_1_0, Vrsn_2_0)
-from ..core import Counter, SerderKERI
+                      ColdStartError, sniff, Colds, Versionage, Vrsn_1_0, Vrsn_2_0,
+                      Ilks)
+from ..core import Counter, Parser, SerderKERI
 from ..end import designature
 from ..help import nowUTC
 
@@ -130,6 +131,54 @@ def parseCesrHttpRequest(req):
         genus=version)
 
     return cr
+
+
+def parseSignedQuery(req):
+    """Parse exactly one complete signed V2 ``qry`` from a Falcon request.
+
+    The body is either a JSON query with its attachments in the
+    CESR-ATTACHMENT header, or a raw CESR stream (an attachment header is
+    appended when present). Parsing establishes shape only; authenticate the
+    result with ``Kramer.authenticateQuery``.
+
+    Parameters:
+        req (falcon.Request): request with content type application/cesr or none.
+
+    Returns:
+        parsed message (dom) whose ``serder`` is a V2 qry with an object ``q``.
+
+    Raises:
+        falcon.HTTPError: 406 for another content type, 400 for anything that
+            is not exactly one complete signed V2 query.
+    """
+    ctype = (req.content_type or "").split(";")[0].strip().lower()
+    if ctype and ctype != CESR_CONTENT_TYPE:
+        raise falcon.HTTPError(falcon.HTTP_NOT_ACCEPTABLE,
+                               title="Content type error",
+                               description="Unacceptable content type.")
+    try:
+        raw = req.bounded_stream.read()
+        if not raw:
+            raise ValueError("empty body")
+        atc = req.get_header(CESR_ATTACHMENT_HEADER, default=None)
+        atc = atc.encode("utf-8") if isinstance(atc, str) else atc
+        if atc and raw.lstrip()[:1] == b"{":
+            ims = bytearray(SerderKERI(sad=json.loads(raw)).raw)
+        else:
+            ims = bytearray(raw)
+        if atc:
+            ims.extend(atc)
+        dom = Parser(version=Vrsn_2_0).parseOneBare(ims=ims, framed=True,
+                                                    processive=False, local=False)
+        if ims or dom is None or dom.serder is None:
+            raise ValueError("expected exactly one complete signed query")
+        if dom.serder.ilk != Ilks.qry or dom.serder.pvrsn != Vrsn_2_0:
+            raise ValueError("external API accepts V2 qry messages only")
+        if not isinstance(dom.serder.sad.get("q"), dict):
+            raise ValueError("query must be an object")
+        return dom
+    except Exception as ex:
+        raise falcon.HTTPBadRequest(description=str(ex)) from ex
 
 
 def createCESRRequest(msg, client, dest, path=None):
