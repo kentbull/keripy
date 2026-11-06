@@ -430,3 +430,41 @@ def test_stale_event_receipts():
 if __name__ == "__main__":
     test_kevery()
     test_stale_event_receipts()
+
+
+def test_escrowed_reports_exact_kel_dependencies():
+    """Only the exact retained event or receipt is reported, and never once accepted."""
+    with (openHby(name="escrowed-sender", temp=True) as senderHby,
+          openHby(name="escrowed-receiver", temp=True) as receiverHby):
+        sender = senderHby.makeHab(name="sender")
+        receiptor = senderHby.makeHab(name="receiptor", transferable=False)
+        icp = sender.msgOwnEvent(sn=0)
+        sender.rotate()
+        rot = sender.msgOwnEvent(sn=1)
+        icpSerder, rotSerder = SerderKERI(raw=bytes(icp)), SerderKERI(raw=bytes(rot))
+        rct = receiptor.receipt(icpSerder)
+        rctSerder = SerderKERI(raw=bytes(rct))
+        assert rctSerder.said == icpSerder.said
+
+        kvy = Kevery(db=receiverHby.db, lax=False, local=False)
+        parser = Parser()
+        assert kvy.escrowed(rotSerder) is False
+
+        # A rotation and a receipt ahead of inception wait as dependencies.
+        parser.parse(ims=bytearray(rot), kvy=kvy)
+        parser.parse(ims=bytearray(rct), kvy=kvy)
+        assert kvy.escrowed(rotSerder) is True
+        assert kvy.escrowed(rctSerder) is True
+        assert kvy.escrowed(icpSerder) is False  # never seen as an event
+
+        # A later event this receiver never saw is not reported.
+        other = sender.interact()
+        assert kvy.escrowed(SerderKERI(raw=bytes(other))) is False
+
+        # Acceptance resolves both; accepted state is not escrow.
+        parser.parse(ims=bytearray(icp), kvy=kvy)
+        kvy.processEscrows()
+        assert receiverHby.db.kels.getLast(keys=sender.pre, on=1) == rotSerder.said
+        assert kvy.escrowed(rotSerder) is False
+        assert kvy.escrowed(rctSerder) is False
+        assert kvy.escrowed(icpSerder) is False
