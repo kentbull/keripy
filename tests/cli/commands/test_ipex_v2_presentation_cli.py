@@ -21,7 +21,7 @@ from keri.acdc.ipexing import admit as admitV2, loadHandlers
 from types import SimpleNamespace
 
 from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, issue, live_parties, witnessed
-from tests.cli.commands.test_acdc_v2_registry_root_cli import group_copy, last_result, retained
+from tests.cli.commands.test_registry_root_cli import group_copy, last_result, retained
 from tests.cli.commands.test_ipex_v2_negotiation_cli import enable_kram, exchange_deadline, kli
 
 import pytest

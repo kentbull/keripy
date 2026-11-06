@@ -103,14 +103,14 @@ deadlines never renew, including retries with a larger value. Ordinary configure
 KRAM original-timestamp windows still govern wrapper and Grant authentication
 and may expire earlier. The library's default ten-second fallback stays unchanged.
 `/multisig/qry` is this CLI's scoped coordination extension carrying the v2
-DH query, not a new auxiliary protocol. Root provisioning/receipt after issuance
-uses the existing separate commands; this flow ends at verified Admit.
+DH query, not a new auxiliary protocol. Root replication to other members after issuance
+uses `kli vc registry root`; this flow ends at verified Admit.
 
 Both parties may use these group profiles together. Each side independently
 selects its own accepted coordinator event and existing elected custodian; the
 issuer members approve the exact Grant/query and BUP anchor, while holder members
 approve the v2 DH reply and exact Admit. Only each party's elected custodian
-retains the established root until separate explicit member provisioning. Choose
+retains the established root until it replicates it with `kli vc registry root send`. Choose
 the original conversation policy before the first partial Grant; neither another
 member nor a longer command timeout renews it. The installed two-member-per-party
 case covers this issuance composition through witnessed BUP and group Admit;
