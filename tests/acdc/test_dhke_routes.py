@@ -394,3 +394,36 @@ def test_dh_requires_encrypted_keeper_before_approval():
         with pytest.raises(AuthError, match="encrypted, unlocked"):
             owner.approve(Diger(ser=b"unavailable Grant").qb64)
         assert owner._operations == {}
+
+
+def test_requery_renews_a_stale_individual_query_without_new_keys(fakeHelpingClock):
+    """A query queued past KRAM drift is refused; its renewal keeps keys and scope."""
+    with parties() as setup:
+        issuer, issuee, grantSaid = setup.issuer, setup.issuee, setup.grant.said
+        with pytest.raises(ValidationError, match="no started issuer query"):
+            issuer.dh.requery(setup.xid)
+        queued = issuer.dh.start(grantSaid)
+        stale = SerderKERI(raw=queued)
+        fakeHelpingClock.advance(seconds=90)  # Past the 1 s drift and 60 s multi-key lag.
+        receive(issuee, queued)
+        assert not issuee.dh.cues and not issuee.dh.complete(setup.xid)
+        fresh = issuer.dh.requery(setup.xid)
+        renewed = SerderKERI(raw=fresh)
+        assert renewed.said != stale.said and renewed.ked["q"] == stale.ked["q"]
+        assert issuer.dh.start(grantSaid) == fresh
+        with pytest.raises(ValidationError, match="no started issuer query"):
+            issuee.dh.requery(setup.xid)
+        receive(issuee, fresh)
+        receive(issuer, issuee.dh.cues.popleft()["msg"])
+        assert issuer.dh.complete(setup.xid) and issuee.dh.complete(setup.xid)
+        assert [root.qb64 for root in roots(issuer, setup)] == [root.qb64 for root in roots(issuee, setup)]
+        with pytest.raises(ValidationError, match="already completed"):
+            issuer.dh.requery(setup.xid)
+
+
+def test_requery_never_extends_the_grant_deadline(fakeHelpingClock):
+    with parties() as setup:
+        setup.issuer.dh.start(setup.grant.said)
+        fakeHelpingClock.advance(seconds=301)
+        with pytest.raises(ValidationError, match="unavailable, terminated or expired"):
+            setup.issuer.dh.requery(setup.xid)
