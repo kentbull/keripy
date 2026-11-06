@@ -446,7 +446,7 @@ def test_copy_with_bad_plaintext_key_or_root_is_never_retained(fault):
         assert held(w, bob) is None and notes(bob) == []
         assert bob.hby.db.exns.get(keys=(pending,)) is not None
         # Hard refusals leave escrow at once; a wrong root may still be an
-        # unknown commitment, so it waits for evidence until its timeout.
+        # unknown commitment, so it waits for evidence.
         assert stored(bob) == ([pending] if fault == 'wrong-root' else [])
         error = RootUnverified if fault == 'wrong-root' else RootRefused
         with pytest.raises(error):
@@ -465,6 +465,24 @@ def test_conflicting_retained_root_is_never_replaced():
         with pytest.raises(RootRefused):
             w.bob.root.receive(pending, opening=w.opening)
         assert held(w, w.bob).qb64 == other.qb64
+
+
+def test_copy_with_a_root_other_than_the_retained_one_is_refused_and_dropped():
+    with world() as w:
+        seed(w)
+        copy(w, w.alice, w.bob)
+        assert held(w, w.bob).qb64 == w.root.qb64 and len(notes(w.bob)) == 1
+        # The wrong root never reproduces the commitment; without this refusal
+        # it would wait in escrow forever behind the immutable retained root.
+        plain = dict(i=w.alice.hab.pre, ri=w.bob.hab.pre, gid=w.gid, rd=w.registry,
+                     s=Salter(raw=b'wrong-test-root!').qb64, e=w.event.said, td=w.acdc.said)
+        wire = forge(w.alice, w.bob.hab.pre, w.gid, w.registry, plain)
+        receive(w.bob, wire)
+        assert stored(w.bob) == [] and held(w, w.bob).qb64 == w.root.qb64
+        assert len(notes(w.bob)) == 1
+        with pytest.raises(RootRefused, match='different root'):
+            w.bob.root.receive(said(wire))
+        assert held(w, w.bob).qb64 == w.root.qb64
 
 
 def test_newcomer_catches_up_after_real_rotation_and_removed_member_is_never_recipient():
