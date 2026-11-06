@@ -1281,7 +1281,7 @@ class Kramer:
                         "sn": None,
                     })
                     logger.info(
-                        "Cueing keystate retrieval: missing KEL for sender=%s, current_sn=%s, error=%s",
+                        "Cueing keystate retrieval: missing KEL for sender=%s, current_sn=%s",
                         senderId,
                         None,
                     )
@@ -1391,7 +1391,7 @@ class Kramer:
                         "sn": None,
                     })
                     logger.info(
-                        "Cueing keystate retrieval: missing KEL for sender=%s, current_sn=%s, error=%s",
+                        "Cueing keystate retrieval: missing KEL for sender=%s, current_sn=%s",
                         senderId,
                         None,
                     )
@@ -1529,7 +1529,7 @@ class Kramer:
                         "sn": None,
                     })
                     logger.info(
-                        "Cueing keystate retrieval: missing KEL for sender=%s, current_sn=%s, error=%s",
+                        "Cueing keystate retrieval: missing KEL for sender=%s, current_sn=%s",
                         senderId,
                         None,
                     )
@@ -1641,7 +1641,7 @@ class Kramer:
                         "sn": None,
                     })
                     logger.info(
-                        "Cueing keystate retrieval: missing KEL for sender=%s, current_sn=%s, error=%s",
+                        "Cueing keystate retrieval: missing KEL for sender=%s, current_sn=%s",
                         senderId,
                         None,
                     )
