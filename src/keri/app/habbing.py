@@ -309,7 +309,9 @@ class Habery:
           identifier).
 
         After all habs are loaded, group habs have their ``.mhab`` (local
-        member hab) populated from ``.habs``.  ``reconfigure`` is called both
+        member hab) populated from ``.habs``, and each local ``GroupHab``
+        commits the members of its latest accepted establishment event when a
+        live commit was interrupted (``recoverAcceptedMembers``).  ``reconfigure`` is called both
         before and after loading.
 
         Raises:
@@ -357,6 +359,12 @@ class Habery:
         # Populate the participant hab after loading all habs
         for habord in groups:
             self.habs[habord.hid].mhab = self.habs[habord.mid]
+
+        # Restart recovery: commit members of an accepted establishment event
+        # whose live commit was interrupted.
+        for habord in groups:
+            if isinstance(hab := self.habs[habord.hid], GroupHab):
+                hab.recoverAcceptedMembers()
 
         self.reconfigure()  # post hab load reconfiguration
 
@@ -3994,6 +4002,75 @@ class GroupHab(BaseHab):
         habord.rmids = rmids
         self.db.habs.pin(keys=(self.pre,), val=habord)
         return True
+
+    def acceptedMembers(self):
+        """Derive the members of this group's latest accepted establishment event.
+
+        Each signing key is attributed to the AID whose latest contributing
+        establishment event supplied it, and each next-key digest to the AID
+        whose establishment event committed to it, both from local KELs. The
+        stored members are tried first; every AID with local key state is
+        scanned only when they do not account for every key.
+
+        Returns:
+            tuple | None: ``(event, smids, rmids)`` ordered by key index, or
+                ``None`` when the event is missing or any key cannot be
+                attributed to exactly one locally known AID.
+        """
+        kever = self.kevers.get(self.pre)
+        if kever is None or (event := self.db.evts.get(keys=(self.pre, kever.lastEst.d))) is None:
+            return None
+        keys = [verfer.qb64 for verfer in event.verfers]
+        digs = [diger.qb64 for diger in event.ndigers]
+
+        def attribute(candidates):
+            signing, rotating = {}, {}
+            for aid in candidates:
+                mkever = self.kevers.get(aid)
+                if aid == self.pre or mkever is None:
+                    continue
+                if (contrib := mkever.fetchLatestContribTo(verfers=event.verfers)) is not None:
+                    if signing.setdefault(contrib[1], aid) != aid:
+                        return None
+                for dig in self.db.kels.getBackIter(keys=aid, on=mkever.lastEst.s):
+                    mevent = self.db.evts.get(keys=(aid, dig))
+                    if mevent is None or not mevent.estive:
+                        continue
+                    for diger in mevent.ndigers:
+                        if diger.qb64 in digs and rotating.setdefault(digs.index(diger.qb64), aid) != aid:
+                            return None
+            if len(signing) != len(keys) or len(rotating) != len(digs):
+                return None
+            return (event, [signing[i] for i in range(len(keys))],
+                    [rotating[i] for i in range(len(digs))])
+
+        stored = dict.fromkeys(list(self.smids or []) + list(self.rmids or []))
+        return (attribute(stored)
+                or attribute(aid for (aid,), _ in self.db.states.getTopItemIter()))
+
+    def recoverAcceptedMembers(self):
+        """Commit members of the latest accepted establishment event if stale.
+
+        Restart recovery for ``commitAcceptedMembers``: a process that stopped
+        after a rotation was accepted but before its members were committed
+        leaves ``smids``/``rmids`` stale. Members are derived from local KELs
+        by ``acceptedMembers`` and committed only when they differ from the
+        stored record and the local member contributes to that event; a
+        record that does not yet include the local member is a pending join,
+        not a stale commit. Only the latest accepted event is ever committed,
+        so this never rolls members back, and repeating it changes nothing.
+
+        Returns:
+            bool: True when stale members were committed.
+        """
+        if self.mhab is None or (accepted := self.acceptedMembers()) is None:
+            return False
+        event, smids, rmids = accepted
+        if (smids, rmids) == (list(self.smids or []), list(self.rmids or [])):
+            return False
+        if self.mhab.pre not in smids and self.mhab.pre not in rmids:
+            return False
+        return self.commitAcceptedMembers(event, smids=smids, rmids=rmids)
 
     def sign(self, ser, verfers=None, indexed=True, rotated=False,
                         indices=None, ondices=None):

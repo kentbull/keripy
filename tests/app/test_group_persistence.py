@@ -110,3 +110,36 @@ def test_signify_group_join_record_survives_reopen(tmp_path):
         assert loaded.accepted and loaded.mhab is reopened.habs[member.hab.pre]
         assert loaded.smids == smids and loaded.rmids == rmids
         assert reopened.habByName("member-0") is loaded.mhab
+
+
+def test_accepted_rotation_members_are_committed_on_reopen(tmp_path):
+    """A rotation accepted before its live member commit is committed on restart."""
+    with openPersistentHabery(tmp_path) as hby:
+        member = hby.makeHab(name="member")
+        other = hby.makeHab(name="other")
+        newcomer = hby.makeHab(name="newcomer")
+        before = [member.pre, other.pre]
+        group = hby.makeGroupHab(group="group", mhab=member, smids=before,
+                                 isith="1", nsith="1")
+        pre = group.pre
+        member.rotate()
+        other.rotate()
+        mids = [member.pre, other.pre, newcomer.pre]
+        # Proposer path: the rotation is accepted, then the process stops
+        # before the live loop calls commitAcceptedMembers.
+        group.rotate(isith="1", nsith="1", toad=0, cuts=[], adds=[],
+                     verfers=[hab.kever.verfers[0] for hab in (member, other, newcomer)],
+                     digers=[hab.kever.ndigers[0] for hab in (member, other, newcomer)])
+        assert group.kever.sn == 1
+        assert hby.db.signingMembers(pre=pre) == before
+        assert group.acceptedMembers()[1:] == (mids, mids)
+
+    with openPersistentHabery(tmp_path) as reopened:
+        loaded = reopened.habs[pre]
+        assert loaded.smids == mids and loaded.rmids == mids
+        assert reopened.db.signingMembers(pre=pre) == mids
+        assert reopened.db.rotationMembers(pre=pre) == mids
+        assert loaded.recoverAcceptedMembers() is False  # idempotent
+
+    with openPersistentHabery(tmp_path) as again:
+        assert again.habs[pre].smids == mids and again.habs[pre].rmids == mids
