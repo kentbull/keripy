@@ -2201,6 +2201,40 @@ class BaseHab:
         return self.reply(route=route, data=data, stamp=stamp, **kwa)
 
 
+    def loadReply(self, said, framed=False, nested=False, gvrsn=None, genusify=False):
+        """Messagize one accepted stored reply with all its retained signatures.
+
+        Public export of the reply store (``rpys``) for a caller replaying an
+        accepted ``rpy`` exactly as received: every retained non-transferable
+        signature and every transferable signature group is attached. This is
+        stored evidence, not a fresh verdict, and selects no reply: callers
+        choose SAIDs from the accepted indexes (e.g. ``eans``, ``lans``),
+        including cut roles that ``loadEndRole`` omits. A reply superseded
+        under BADA is no longer stored and exports as empty. No stores change.
+
+        Parameters:
+            said (str | Diger): SAID of the stored reply.
+            framed, nested, genusify: as for ``loadEndRole``.
+            gvrsn (Versionage | None): attachment genus; None uses the
+                reply's own protocol version so it replays as received.
+
+        Returns:
+            bytearray: the messagized reply, or empty when none is stored.
+        """
+        said = said.qb64 if hasattr(said, "qb64") else said
+        serder = self.db.rpys.get(keys=(said,))
+        if serder is None:
+            return bytearray()
+        cigars = []
+        for verfer, cigar in self.db.scgs.get(keys=(said,)):
+            cigar.verfer = verfer
+            cigars.append(cigar)
+        tsgs = fetchTsgs(db=self.db.tsgs, diger=Diger(qb64=said))
+        return eventing.messagize(serder=serder, cigars=cigars, tsgs=tsgs,
+                                  framed=framed, nested=nested,
+                                  gvrsn=gvrsn if gvrsn is not None else serder.pvrsn,
+                                  genusify=genusify)
+
     def loadEndRole(self, cid, eid, role=Roles.controller, framed=False,
                         nested=False, gvrsn=None, genusify=False):
         """Load and return the messagized end role authorization record for

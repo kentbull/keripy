@@ -1534,3 +1534,39 @@ def test_router_remove_route_unregisters_one_resource():
     with pytest.raises(ValidationError):
         router.dispatch(owned, None, [], [])
     assert first.seen == [shared.said]
+
+
+def test_hab_load_reply_exports_stored_reply_with_signatures():
+    """loadReply replays any accepted reply exactly, including a cut end role."""
+    from datetime import timedelta
+    from keri.kering import Vrsn_2_0
+    from keri.core import Diger
+
+    with (openHby(name="load-reply-controller", temp=True, version=Vrsn_2_0) as hby,
+          openHby(name="load-reply-importer", temp=True, version=Vrsn_2_0) as importer):
+        hab = hby.makeHab(name="controller")
+        mailbox = hby.makeHab(name="mailbox", transferable=False)
+        reader = importer.makeHab(name="reader")
+        allowed = hab.makeEndRole(eid=mailbox.pre, role=Roles.mailbox)
+        hab.psr.parse(ims=bytearray(allowed))
+        said = hab.db.eans.get(keys=(hab.pre, Roles.mailbox, mailbox.pre))
+        assert hab.loadReply(said) == hab.loadEndRole(cid=hab.pre, eid=mailbox.pre,
+                                                     role=Roles.mailbox, gvrsn=Vrsn_2_0)
+        assert hab.loadReply(said.qb64) == hab.loadReply(said)
+        assert hab.loadReply(Diger(ser=b"unknown reply").qb64) == bytearray()
+
+        reader.psr.parse(ims=bytearray(hab.replay(gvrsn=Vrsn_2_0)))
+        reader.psr.parse(ims=bytearray(hab.loadReply(said)))
+        assert reader.db.ends.get(keys=(hab.pre, Roles.mailbox, mailbox.pre)).allowed
+
+        later = helping.toIso8601(helping.nowUTC() + timedelta(seconds=1))
+        hab.psr.parse(ims=bytearray(hab.makeEndRole(eid=mailbox.pre, role=Roles.mailbox,
+                                                    allow=False, stamp=later)))
+        cut = hab.db.eans.get(keys=(hab.pre, Roles.mailbox, mailbox.pre))
+        assert cut.qb64 != said.qb64
+        assert hab.loadEndRole(cid=hab.pre, eid=mailbox.pre, role=Roles.mailbox) == bytearray()
+        assert hab.loadReply(said) == bytearray()  # BADA removed the superseded reply
+
+        # The exported cut authenticates at another wallet and records the removal.
+        reader.psr.parse(ims=bytearray(hab.loadReply(cut)))
+        assert not reader.db.ends.get(keys=(hab.pre, Roles.mailbox, mailbox.pre)).allowed
