@@ -96,6 +96,10 @@ def test_installed_copy_reopens_and_rejects_false_receipt_with_existing_root(tmp
     before = retained(issuer, body)
     assert retained(receiver, body)[0] is None
     args = receive_args(receiver, body, event, public, held)
+    outside = tmp_path / 'outside-target.cesr'
+    refused = kli(tmp_path, 'vc', 'registry', 'provision', *issuer['args'], '--registry', body.regid,
+        '--recipient', receiver['pre'], '--target', issuer['pre'], '--output', str(outside), succeeds=False)
+    assert 'not a current group signing member' in refused and not outside.exists()
     for name in ('first', 'identical'):
         destination = tmp_path / (name + '.cesr')
         prepared = last_result(kli(tmp_path, 'vc', 'registry', 'provision', *issuer['args'],

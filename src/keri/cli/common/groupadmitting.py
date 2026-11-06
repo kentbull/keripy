@@ -125,6 +125,7 @@ class GroupAdmission:
                 raise ConfigurationError('group proof does not verify the current issued registry head')
         deadline = self.owner.exc.exchangeDeadline(self.grant)
         self.check()
+        # The accepted envelope already passed KRAM; this kramer-less pass only escrows its stored child.
         protected = Parser(version=Vrsn_2_0, kvy=self.owner.hby.kvy,
             exc=self.owner.exc, rvy=self.owner.hby.rvy, rgy=self.owner.rgy, local=True)
         protected.parse(ims=serializeParsedSubstream(child), local=True)

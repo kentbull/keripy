@@ -144,6 +144,7 @@ class GroupIssuance:
         self.owner.psr.parse(ims=bytearray(raw), local=local)
         if self.handled != packet.serder.said:
             raise ConfigurationError('proposal did not pass authentication and selected fresh issuance scope')
+        # KRAM already saw the child in the wrapper parse above; this kramer-less pass only escrows it.
         protected = Parser(version=Vrsn_2_0, kvy=self.owner.hby.kvy, exc=self.owner.exc,
                            rvy=self.owner.hby.rvy, rgy=self.owner.rgy, local=True)
         protected.parse(ims=serializeParsedSubstream(self.child), local=True)
