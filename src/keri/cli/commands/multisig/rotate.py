@@ -268,11 +268,16 @@ class GroupMultisigRotate(doing.DoDoer):
 
         self.counselor.start(ghab=ghab, prefixer=prefixer, number=number, diger=Diger(qb64=rserder.said))
 
+        committed = False
         while True:
             if self.rgy is not None:
                 self.mux.kvy.processEscrows()
+            # Commit the rotated membership as soon as the rotation is accepted.
+            committed = committed or ghab.commitAcceptedMembers(rserder, smids=smids, rmids=rmids)
             saider = self.hby.db.cgms.get(keys=(ghab.pre, number.qb64))
             if saider is not None:
+                if not committed:
+                    ghab.commitAcceptedMembers(rserder, smids=smids, rmids=rmids)
                 break
 
             yield self.tock
