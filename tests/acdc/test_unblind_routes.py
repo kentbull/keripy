@@ -203,7 +203,7 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         assert disclosed == held
         snapshots = [(holder, issued.said, held), (discloser, forwarded.said, disclosed)]
 
-        # Native RegistrySalt copies the root to the discloser's encrypted Keeper only.
+        # The v2 ACDC RegistrySalt copies the root to the discloser's encrypted Keeper only.
         sender = RegistrySalt(issuer.hab, issuer.rgy)
         recipient = RegistrySalt(discloser.hab, discloser.rgy)
         discloser.hby.rtr.addRoute(RegistrySalt.Route, recipient, attachments=True)
@@ -223,7 +223,7 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         transfer(issuer, (discloser, verifier), registry, event2)
         message, atc = grant(discloser.hab, verifier.hab.pre, 'present', origin=disclosed)
         original = parsed(message.raw + atc)
-        # Match native authoring: self-authored bytes use the protected Habery owner.
+        # Match v2 IPEX authoring: self-authored bytes use the protected Habery owner.
         # Remote delivery still uses each actor's separate KRAM-enabled Kevery.
         local = Parser(version=V2, kvy=discloser.hby.kvy, exc=discloser.exc,
                        rvy=discloser.hby.rvy, rgy=discloser.rgy, local=True)

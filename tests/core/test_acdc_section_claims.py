@@ -206,7 +206,7 @@ def test_aggregate_and_section_messages_normalize_known_claims(kind):
     assert SerderACDC(raw=original.raw).raw == original.raw
     for position in (0, 1):
         if kind == Kinds.cesr:
-            # The native serializer itself validates aggregates. Corrupt wire
+            # The CESR-native serializer itself validates aggregates. Corrupt wire
             # bytes directly, preserving length, to exercise receive refusal.
             old = original.sad["A"][0] if position == 0 else original.sad["A"][1]["d"]
             raw = original.raw.replace(old.encode(), Diger(ser=b"wrong").qb64b, 1)

@@ -1,17 +1,17 @@
-"""Witness-code option refusals must precede native registry and KEL mutation."""
+"""Witness-code option refusals must precede v2 ACDC registry and KEL mutation."""
 import pytest
 
 from keri import Vrsn_2_0
 from keri.acdc import Regery
 from keri.cli.common import setupHby
 
-from tests.cli.commands.vc.test_native_registry_cli import create_issuer, kli
+from tests.cli.commands.vc.test_acdc_v2_registry_cli import create_issuer, kli
 
 
 pytestmark = pytest.mark.real_store_roots
 
 
-def test_native_witness_options_refuse_bad_scope_before_authoring(tmp_path):
+def test_acdc_v2_witness_options_refuse_bad_scope_before_authoring(tmp_path):
     name, base, common = create_issuer(tmp_path)
     hby = setupHby(name=name, base=base, noPrompt=True, version=Vrsn_2_0)
     try:

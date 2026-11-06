@@ -1,6 +1,6 @@
-# Native admitted-view presentation
+# v2 IPEX admitted-view presentation
 
-`ipex present --version 2.0` selects one exact accepted native Grant and its
+`ipex present --version 2.0` selects one exact accepted v2 IPEX Grant and its
 accepted local Admit. Both signatures, reversed parties, prior link and
 transaction XID must verify. It reads only that Grant's retained nested
 disclosure, including its artifacts and proofs. A fuller same-SAID disclosure
@@ -15,8 +15,8 @@ kli ipex present --name holder --alias holder --version 2.0 \
 
 Omit `--disclose` to retain the exact selected body. Repeated `a/...` paths
 narrow the held origin with native Compactor; hidden branches cannot be
-expanded. Partial disclosure requires the relevant native section commitments.
-Artifacts remain as selected. Multiple nodes require explicit native
+expanded. Partial disclosure requires the relevant v2 ACDC section commitments.
+Artifacts remain as selected. Multiple nodes require explicit v2 IPEX
 `--plan JSON` or `--plan @file` with one DAG disclosure plan. The presentation
 starts a fresh transaction and never uses the old Grant as its IPEX prior.
 
@@ -30,8 +30,8 @@ kli ipex present --name holder --alias holder --version 2.0 \
 # Or authorize ordinary proof derivation with --refresh --derive.
 ```
 
-`--opening` may repeat; each file contains exactly one complete native CESR
-state opening. Native accepted TEL history and `vetBinds` verify these proofs.
+`--opening` may repeat; each file contains exactly one complete CESR
+state opening. Accepted v2 ACDC TEL history and `vetBinds` verify these proofs.
 `--derive` authorizes only this signer's existing encrypted Keeper registry
 root. Ordinary issued/revoked/vacuous proofs are supported. Exact bound proofs
 work when supplied; bound derivation requires a later explicit-coordinate
@@ -55,20 +55,20 @@ kli ipex present --name other-member --alias holder-group --version 2.0 \
 The contributor selects its exact accepted Grant/local Admit and the same
 recipient, message and disclosure plan. It signs the retained Grant bytes,
 timestamp and proofs. Without `--refresh`, proofs must match the admitted view;
-with it, native accepted history and `vetBinds` verify carried current proofs on
+with it, accepted v2 ACDC history and `vetBinds` verify carried current proofs on
 a copy. Contributor `--derive`/`--opening` are rejected because they would replace
 the packet. Fuller same-SAID holdings cannot widen the selected view.
 
 `group_proposed` reports the new Grant before threshold completion. Both finite
-processes exchange signatures through member mailboxes. Only native threshold
+processes exchange signatures through member mailboxes. Only v2 IPEX threshold
 and current-issued acceptance permit output and delivery; each member evaluates
-native `Exchanger.lead` independently of who proposed or derived the proof. JSON
+the v2 `Exchanger.lead` independently of who proposed or derived the proof. JSON
 reports local acceptance and actual transmission, without claiming a later
 Admit. Provision the auditor's public KEL/TEL/schema dependencies explicitly.
 Add `--respond-unblind` to both group presentation invocations to approve this
 exact outgoing Grant and remain live for query, threshold reply and final Admit.
 The original presentation proposer authors the reply; other members verify its
-minimal openings without needing a root. Native signature indices still elect
+minimal openings without needing a root. v2 signature indices still elect
 the transmitter independently of the proposer.
 
 A group recipient runs the following finite command in each member's own store:
@@ -85,14 +85,14 @@ Admit. Other members contribute to those exact bytes through real member
 mailboxes. `--unblind-proposer` grants no root custody, special signature weight
 or transmitter authority. Group observer queries remain outside this profile;
 each member must have the accepted public history selected by the query.
-`/multisig/qry` is a CLI coordination extension: a member-signed native EXN with
-`a={gid,qry}` and one committed native query child, including its exact public
+`/multisig/qry` is a CLI coordination extension: a member-signed v2 EXN with
+`a={gid,qry}` and one committed v2 query child, including its exact public
 event nests. `/multisig/rpy` and `/multisig/exn` carry reply and Admit contributions.
-All native query/reply verification uses the live conversation owners, never a
+All v2 query/reply verification uses the live conversation owners, never a
 private mux verifier. Partial signatures cannot authorize peer disclosure or
 Admit. All waits and deliveries remain bounded by the original Grant deadline.
 
-The native `Unblind` owner separately supports group responders. Each member
+The v2 IPEX `Unblind` owner separately supports group responders. Each member
 explicitly approves the same live Grant and receives the authenticated requester
 query. A provisioned member calls `respond(xid)` to prepare a frozen reply and a
 `sign` cue; another member calls `contribute(xid, proposal)` after independently
@@ -106,18 +106,18 @@ still applies.
 A responder explicitly calls `finish(xid)` on its completed own reply before
 peer delivery when its outgoing Grant still needs those current proofs. This
 requires the real authenticated request, the full reply signature threshold,
-and the exact minimal verified openings. Ordinary native verification accepts
+and the exact minimal verified openings. Ordinary v2 IPEX verification accepts
 only that same outgoing Grant; the source admitted proof and original deadline
 remain unchanged. A root or a partial group reply cannot authorize completion.
 Completion verifies evidence, not permission to use the credential: callers must
 still deliver authenticated revoked or vacuous replies without an issued-state
 gate. Final application admission remains a separate decision.
 
-A native group requester instead calls `start(grant)` to freeze a query proposal
+A v2 IPEX group requester instead calls `start(grant)` to freeze a query proposal
 and its exact accepted public events. Each other member explicitly approves the
 same Grant, then `contribute(xid, proposal)` checks that event selection before
 signing the unchanged query. Group query proposals use ordinary last-signature
-groups, matching native query dispatch; KRAM binds its partial aggregate to
+groups, matching v2 query dispatch; KRAM binds its partial aggregate to
 accepted establishment keys. The caller supplies contributions to the live
 KRAM/query owner (or a complete ordinary threshold when KRAM is disabled).
 Only the verified threshold
@@ -128,7 +128,7 @@ Requester `complete()` remains false until the responder's reply verifies, and
 transports these proposals without adding another acceptance or custody owner.
 
 `--respond-unblind` approves this exact outgoing Grant before delivery and
-keeps its process alive for native Unblind replies and the selected Admit.
+keeps its process alive for v2 IPEX Unblind replies and the selected Admit.
 The recipient explicitly selects presentation admission:
 
 ```sh
@@ -138,17 +138,17 @@ kli ipex admit --name auditor --alias auditor --version 2.0 \
 ```
 
 Unblind exchanges only event-specific proofs for the selected live Grant.
-Reply readiness is followed by native finish, exact Grant acceptance, and a
-current native recheck requiring issued state before constructing Admit.
+Reply readiness is followed by Unblind finish, exact Grant acceptance, and a
+current v2 IPEX recheck requiring issued state before constructing Admit.
 Revoked state cannot authorize Admit. Provide accepted schema and endpoint
 dependencies explicitly. Optional `admit --evidence-url HTTPS --evidence-ca PEM`
 acquires only the selected registries' authenticated public KEL/TEL evidence
 before starting Unblind. `--evidence-hostname` may override an IP URL's certificate
 identity. HTTP 404/503 and authentic older prefixes wait within the original
 Grant deadline; TLS/authentication errors and conflicting evidence fail.
-The native Unblind query therefore selects its head after acquisition. Once
+The v2 IPEX Unblind query therefore selects its head after acquisition. Once
 selected, a changed head aborts that operation instead of restarting it.
-Both operations preserve native deadlines and abandon live authority on
+Both operations preserve their exchange deadlines and abandon live authority on
 timeout/cancellation. A fresh process has no recovered Unblind approval.
 
 Inspection uses read-only public database handles and never opens Keeper,

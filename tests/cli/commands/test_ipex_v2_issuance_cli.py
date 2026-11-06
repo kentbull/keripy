@@ -24,7 +24,7 @@ from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubs
 from keri.kering import KeriError
 from keri.help import fromIso8601
 
-from tests.cli.commands.test_native_negotiation_cli import enable_kram, exchange_deadline, kli
+from tests.cli.commands.test_ipex_v2_negotiation_cli import enable_kram, exchange_deadline, kli
 
 
 pytestmark = pytest.mark.real_store_roots
@@ -199,7 +199,7 @@ def holder_group(tmp_path, live_parties):
         configured_issuer = setupHby(name=issuer['name'], base=issuer['base'], bran=PASSCODE,
                                      noPrompt=True, version=V2)
         stack.callback(configured_issuer.close)
-        # Use the native actors() conversation policy, not Exchanger's short no-KRAM fallback.
+        # Use the v2 IPEX actors() conversation policy, not Exchanger's short no-KRAM fallback.
         # Provenance: tests/acdc/test_unblind_routes.py; all actors are configured before the first Grant.
         for environment in (configured_issuer, left, right):
             config = environment.cf.get()
@@ -379,10 +379,10 @@ def test_installed_group_holder_contributes_to_live_dh_and_one_exact_admit(tmp_p
 
 
 def issuer_group(tmp_path, live_parties):
-    from tests.cli.commands.vc.test_native_registry_cli import group_registry
+    from tests.cli.commands.vc.test_acdc_v2_registry_cli import group_registry
     issuers, holder, coordinator = group_registry(tmp_path, live_parties)
     lead, _ = issuers
-    # Conversation policy is configured before the first native Grant, separately from PSE consent.
+    # Conversation policy is configured before the first v2 IPEX Grant, separately from PSE consent.
     for side in (*issuers, holder):
         hby = setupHby(name=side['name'], base=side['base'], bran=PASSCODE, noPrompt=True, version=V2)
         try:

@@ -1,4 +1,4 @@
-"""Installed native state updates retain root custody and admitted evidence."""
+"""Installed v2 ACDC state updates retain root custody and admitted evidence."""
 import json
 from uuid import uuid4
 
@@ -9,10 +9,10 @@ from keri.acdc import Regery, Registrar, acdcmap, grant, regeventing
 from keri.app import openHby
 from keri.cli.common import setupHby
 from keri.core import Blinder, Kevery, Parser, Salter, messagize
-from tests.cli.commands.test_native_issuance_cli import PASSCODE, issue
-from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
-from tests.cli.commands.test_native_negotiation_cli import enable_kram, kli
-from tests.cli.commands.test_native_registry_root_cli import last_result
+from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, issue
+from tests.cli.commands.test_ipex_v2_issuance_cli import live_parties as live_parties
+from tests.cli.commands.test_ipex_v2_negotiation_cli import enable_kram, kli
+from tests.cli.commands.test_acdc_v2_registry_root_cli import last_result
 
 
 pytestmark = pytest.mark.real_store_roots
@@ -45,7 +45,7 @@ def test_installed_witnessed_state_updates_preserve_admitted_proof(tmp_path, liv
     frames = Parser(version=V2).parse(ims=bytearray(public), framed=False, processive=False)
     assert all(not frame.bsqs and not frame.bsss for frame in frames)
     assert before[0][0].encode() not in public and body.raw not in public
-    with openHby(name='native-update-independent', version=V2) as observer:
+    with openHby(name='v2-update-independent', version=V2) as observer:
         rgy = Regery(observer, temp=True)
         try:
             kvy = Kevery(db=observer.db, rvy=observer.rvy, lax=True, local=False)
@@ -102,8 +102,8 @@ def test_installed_witnessed_state_updates_preserve_admitted_proof(tmp_path, liv
     assert before[0][0].encode() not in revoked.read_bytes()
 
 
-def test_native_update_refuses_rip_only_and_staged_successors(tmp_path):
-    name, base = f'update-refusal-{uuid4().hex}', 'native-update'
+def test_acdc_v2_update_refuses_rip_only_and_staged_successors(tmp_path):
+    name, base = f'update-refusal-{uuid4().hex}', 'v2-update'
     with openHby(name=name, base=base, bran=PASSCODE, temp=False, version=V2) as hby:
         hab = hby.makeHab(name='issuer')
         rgy = Regery(hby, name=name, base=base)
@@ -162,9 +162,9 @@ def test_group_issuer_provisions_nonlead_then_updates_and_holder_presents(tmp_pa
     from keri.acdc import RegBaser, RegistryStore
     from keri.core import BlindState
     from keri.peer.exchanging import loadParsedNestedSubstreams
-    from tests.cli.commands.test_native_issuance_cli import group_issuer_issue, witnessed
-    from tests.cli.commands.test_native_presentation_cli import intake, inspect, present
-    from tests.cli.commands.test_native_registry_root_cli import retained
+    from tests.cli.commands.test_ipex_v2_issuance_cli import group_issuer_issue, witnessed
+    from tests.cli.commands.test_ipex_v2_presentation_cli import intake, inspect, present
+    from tests.cli.commands.test_acdc_v2_registry_root_cli import retained
 
     issuers, holder, body, selected = group_issuer_issue(tmp_path, live_parties)
     lead, peer = issuers

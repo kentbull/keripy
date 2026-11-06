@@ -15,9 +15,9 @@ from keri.cli.common import setupHby
 from keri.core import BlindState, Blinder, Encrypter, Parser, Salter, SealSource, Siger, messagize, reply
 from keri.db import Baser
 from keri.peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstream
-from tests.cli.commands.test_native_issuance_cli import PASSCODE, group_issue
-from tests.cli.commands.test_native_issuance_cli import live_parties as live_parties
-from tests.cli.commands.test_native_negotiation_cli import kli
+from tests.cli.commands.test_ipex_v2_issuance_cli import PASSCODE, group_issue
+from tests.cli.commands.test_ipex_v2_issuance_cli import live_parties as live_parties
+from tests.cli.commands.test_ipex_v2_negotiation_cli import kli
 
 
 pytestmark = pytest.mark.real_store_roots
@@ -125,7 +125,7 @@ def test_installed_copy_reopens_and_rejects_false_receipt_with_existing_root(tmp
     assert 'before --timeout' in output and '"received": true' not in output
     assert retained(receiver, body) == saved
 
-    # BADA can retain this authenticated reply before native decryption/root checks fail.
+    # BADA can retain this authenticated reply before v2 ACDC decryption/root checks fail.
     hby = setupHby(name=issuer['name'], base=issuer['base'], bran=PASSCODE, noPrompt=True, version=V2)
     try:
         hab = hby.habByName('issuer')
@@ -282,5 +282,5 @@ def group_copy(tmp_path, live_parties, data='{"role":"group reader"}'):
     return issuer, holders, body, selected
 
 
-def test_group_copy_requires_exact_contribution_then_native_retention(tmp_path, live_parties):
+def test_group_copy_requires_exact_contribution_then_v2_retention(tmp_path, live_parties):
     group_copy(tmp_path, live_parties)

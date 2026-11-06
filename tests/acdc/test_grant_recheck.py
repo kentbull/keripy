@@ -161,7 +161,7 @@ def test_one_exchanger_selects_real_version_handlers_before_auth_and_escrow():
         exc.legacy = protocoling.IpexHandler('/ipex/apply', hby, notice)
         old, _ = protocoling.ipexApplyExn(sender, receiver.pre, 'legacy',
             Diger(ser=b'schema').qb64, {}, version=V1, gvrsn=V1)
-        new, _ = apply(hab=sender, recp=receiver.pre, message='native', modifiers=dict(dp=[[]]))
+        new, _ = apply(hab=sender, recp=receiver.pre, message='v2', modifiers=dict(dp=[[]]))
         for message in (old, new):
             signatures = sender.sign(message.raw)
             group = sender.kever.prefixer, Number(num=0), Diger(qb64=sender.pre)

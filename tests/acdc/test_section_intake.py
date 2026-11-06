@@ -14,7 +14,7 @@ from keri.vdr import openReger, Verifier
 
 @pytest.mark.parametrize("kind", [Kinds.json, Kinds.cbor, Kinds.mgpk, Kinds.cesr])
 @pytest.mark.parametrize("label", ["s", "a", "A", "e", "r"])
-def test_native_section_parser_retains_exact_evidence(kind, label, tmp_path):
+def test_v2_section_parser_retains_exact_evidence(kind, label, tmp_path):
     makers = {"s": (sectschema, {"$id": "", "version": "1.0.0", "type": "object"}),
               "a": (sectattr, dict(d="", name="Alice", secret=dict(d="", value="held"))),
               "A": (sectaggr, ["", dict(d="", name="Alice"), dict(d="", name="Bob")]),

@@ -1,4 +1,4 @@
-"""Installed selected Admit waits for authenticated native evidence over actual TLS."""
+"""Installed selected Admit waits for authenticated v2 ACDC evidence over actual TLS."""
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ssl
@@ -16,9 +16,9 @@ from keri.core import Blinder, Parser, SealSource, SerderACDC, SerderKERI, messa
 from keri.db import Baser
 from keri.peer.exchanging import serializeParsedSubstream, verifyQueryAttachments
 
-from tests.cli.commands.test_native_issuance_cli import issue, live_parties
-from tests.cli.commands.test_native_negotiation_cli import enable_kram, exchange_deadline
-from tests.cli.commands.test_native_presentation_cli import intake, present, state, update
+from tests.cli.commands.test_ipex_v2_issuance_cli import issue, live_parties
+from tests.cli.commands.test_ipex_v2_negotiation_cli import enable_kram, exchange_deadline
+from tests.cli.commands.test_ipex_v2_presentation_cli import intake, present, state, update
 
 pytestmark = pytest.mark.real_store_roots
 
@@ -167,9 +167,9 @@ def test_installed_admit_waits_through_http_failures_and_authentic_prefix(tmp_pa
     assert retained(live_parties[1], selected['grant'])['terminal']
 
 
-def test_native_expiry_stops_stale_source_despite_longer_cli_timeout(tmp_path, live_parties):
+def test_ipex_v2_expiry_stops_stale_source_despite_longer_cli_timeout(tmp_path, live_parties):
     started = time.monotonic()
-    # The holder's accepted KRAM exchange window (xl) is the native clock that must expire first.
+    # The holder's accepted KRAM exchange window (xl) is the v2 IPEX clock that must expire first.
     hby = state(live_parties[1])
     try:
         enable_kram(hby, caches={'~': [1000, 20000, 20000, 20000, 60000, 60000, 300000]})
