@@ -433,6 +433,11 @@ class RegistryRoot:
         except RootDeferred as ex:
             raise RootDeferred(f"registry root copy is not yet verifiable: {ex}; "
                                "it stays pending until that state is local") from None
+        # A retained root is immutable, so a copy carrying a different root can
+        # never be retained here: refuse it before awaiting verification evidence.
+        retained = self.hby.mgr.getRegistryRoot(gid, registry)
+        if retained is not None and retained.qb64 != root.qb64:
+            raise RootRefused("a different root is already retained for this holder and registry")
         bup = self._event(registry, event if event is not None else plain['e'])
         sn, blid = Number(numh=bup.sad['n']).num, bup.sad['b']
         uuid = Blinder.makeUUID(salt=root.qb64, sn=sn)
@@ -445,9 +450,6 @@ class RegistryRoot:
                 raise RootUnverified("root does not reproduce the held opening")
         elif not self._reproduces(blid, uuid, plain.get('td', ''), gid):
             raise RootUnverified("root does not yet reproduce the registry commitment")
-        retained = self.hby.mgr.getRegistryRoot(gid, registry)
-        if retained is not None and retained.qb64 != root.qb64:
-            raise RootRefused("a different root is already retained for this holder and registry")
         added = self.hby.mgr.putRegistryRoot(gid, registry, root)
         self.hby.db.rrpe.rem(keys=(said,))
         if added and self.notifier is not None:
