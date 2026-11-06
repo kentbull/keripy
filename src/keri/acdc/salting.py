@@ -357,6 +357,19 @@ class RegistryRoot:
                 found.append((added[1], aid))
         return [aid for _, aid in sorted(found)]
 
+    def members(self, gid):
+        """Return the current signing member AIDs of ``gid`` known to this Habery."""
+        found = []
+        for (aid,), _ in self.hby.db.states.getTopItemIter():
+            if aid != gid and self._current(aid, gid):
+                found.append((self.hby.db.kevers[aid].fetchLatestContribTo(
+                    verfers=self.hby.db.kevers[gid].verfers)[1], aid))
+        return [aid for _, aid in sorted(found)]
+
+    def held(self, gid):
+        """Return the registry SAIDs with a root retained locally for ``gid``."""
+        return sorted(regid for (aid, regid), _ in self.hby.ks.rroots.getTopItemIter() if aid == gid)
+
     def witnesser(self, ghab, rotation):
         """True when ``ghab``'s local member is the elected sender for ``rotation``."""
         from ..app.habbing import _groupWitnesserSelection
