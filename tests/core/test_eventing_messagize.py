@@ -550,6 +550,56 @@ def test_messagize_v1_seqner_ordinals():
         """ Done Test """
 
 
+def test_messagize_v2_number_ordinals():
+    """Regression: the v2 attachment path must serialize every ordinal as a
+    compact v2 Number whatever primitive the caller holds. Stored exchange
+    signatures and reply/registry seals are rehydrated as v1 Seqner, and a v2
+    peer may send a wide Number (``0A`` Huge), so passing the primitive through
+    unchanged gave the same v2 message different bytes on different paths.
+    test_messagize_v1_seqner_ordinals covers the v1 path.
+    """
+    salter = Salter(raw=b'0123456789abcdef')
+    with openDB(name="edy") as db, openKS(name="edy") as ks:
+        mgr = Manager(ks=ks, salt=salter.qb64)
+        verfers, digers = mgr.incept(icount=1, ncount=0, transferable=True, stem="C")
+
+        serder = incept(keys=[verfers[0].qb64], code=MtrDex.Blake3_256,
+                        kind=Kinds.json, pvrsn=Vrsn_1_0, version=Vrsn_1_0)
+        sigers = mgr.sign(ser=serder.raw, verfers=verfers)
+
+        prefixer = Prefixer(qb64='DAvCLRr5luWmp7keDvDuLP0kIqcyBYq79b3Dho1QvrjI')
+        diger = Diger(qb64='EMuNWHss_H_kH4cG7Li1jn2DXfrEaqN7zhqTEhkeDZ2z')
+        dater = Dater(dts='2026-07-12T16:48:52.431388+00:00')
+        seqner5 = Seqner(sn=5).qb64b                       # v1 fixed form
+        number5 = Number(sn=5).qb64b                       # v2 compact form
+        ordinals = (Number(num=5), Seqner(sn=5),
+                    Number(qb64b=seqner5))                 # Huge-coded Number
+
+        def wire(ordinal):
+            return messagize(serder,
+                             tsgs=[(prefixer, ordinal, diger, sigers)],
+                             bonds=[SealEvent(i=prefixer, s=ordinal, d=diger),
+                                    SealSource(s=ordinal, d=diger),
+                                    FirstSeen(f=ordinal, dt=dater)],
+                             gvrsn=Vrsn_2_0)[serder.size:]
+
+        v2 = [wire(ordinal) for ordinal in ordinals]
+        assert v2[0] == v2[1] == v2[2]
+        assert v2[0].count(number5) == 4
+        assert seqner5 not in v2[0]
+
+        # Serialized seal forms take the same v2 path as primitive forms.
+        crews = messagize(serder,
+                          tsgs=[(prefixer, Number(num=5), diger, sigers)],
+                          bonds=[SealEvent(i=prefixer.qb64, s='5', d=diger.qb64),
+                                 SealSource(s='5', d=diger.qb64),
+                                 FirstSeen(f='5', dt=dater.dts)],
+                          gvrsn=Vrsn_2_0)[serder.size:]
+        assert crews == v2[0]
+
+        """ Done Test """
+
+
 def test_messagize_v1_mix_v2():
     """Test messagize for v1 messages mixed with v2 attachments
     """

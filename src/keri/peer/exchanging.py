@@ -15,7 +15,7 @@ from ..kering import (Vrsn_1_0, Vrsn_2_0, Ilks, Colds, sniff,
                       MissingSignatureError, MissingSenderKeyStateError,
                       KramError)
 from ..core import (Counter, Pather, Dater, Diger, Number,
-                    Prefixer, Seqner, Saider,
+                    Prefixer, Saider,
                     Serder, SerderKERI, Texter,
                     Saids, Codens, BlindState, BoundState, FirstSeen,
                     SealSource, SealEvent, SealKind, TypeMedia, Parser,
@@ -748,7 +748,7 @@ class Exchanger:
 
             try:
                 tsgs = []
-                klases = (Prefixer, Seqner, Saider)
+                klases = (Prefixer, Number, Saider)
                 args = ("qb64", "snh", "qb64")
                 sigers = []
 
@@ -1590,7 +1590,7 @@ def verify(hby, serder):
         tuple: Transferable signature groups and non-transferable signatures.
     """
     tsgs = []
-    klases = (Prefixer, Seqner, Saider)
+    klases = (Prefixer, Number, Saider)
     args = ("qb64", "snh", "qb64")
     sigers = []
     old = None  # empty keys

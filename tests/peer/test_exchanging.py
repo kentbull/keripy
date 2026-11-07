@@ -12,7 +12,7 @@ import pytest
 from keri import Kinds, Vrsn_1_0, Vrsn_2_0
 from keri.kering import MissingSignatureError, MissingChainError, MissingSchemaError
 from keri.core import (Salter, Counter, Dater, Texter, Pather, Kevery, Kramer,
-                       Diger, Prefixer, Number, Verser, Noncer, Labeler,
+                       Diger, Prefixer, Number, Seqner, Verser, Noncer, Labeler,
                        SealEvent, SealSource, SealKind, TypeMedia, Mediar,
                        SerderKERI, Parser, messagize,
                        MtrDex, Codens, exchange, exchept)
@@ -733,6 +733,42 @@ def test_source_seal_couple_round_trips_as_resolved_triple(mockHelpingNowUTC):
                 for prefixer, number, diger in replay.ssts] == [
             (sender.pre, sourceSeal[1].sn, sourceSeal[2].qb64),
         ]
+
+
+def test_v2_exchange_ordinal_reserializes_identically(mockHelpingNowUTC):
+    """A v2 exn's TransIdxSigGroups ordinal is a compact Number on every path.
+
+    Stored signatures are rehydrated from database keys; before this was fixed
+    serializeMessage re-emitted that ordinal as a v1 Seqner (``0A`` fixed form)
+    while a freshly signed message carries the v2 Number, so the same exchange
+    had two byte forms.
+    """
+    kwa = dict(version=Vrsn_2_0, kind=Kinds.json)
+    with openHab(name="ordinal-sender", base="test",
+                 salt=b'0123456789abcdef', **kwa) as (_, sender), \
+            openHab(name="ordinal-receiver", base="test",
+                    salt=b'abcdef0123456789', **kwa) as (receiverHby, _):
+        Parser(version=Vrsn_2_0).parse(
+            ims=bytearray(sender.msgOwnEvent(sn=0, framed=True, gvrsn=Vrsn_2_0)),
+            kvy=receiverHby.kvy,
+            local=True,
+        )
+        exn = exchange(sender=sender.pre,
+                       route="/test/ordinal",
+                       attributes=dict(m="signed exchange"),
+                       **kwa)
+        fresh = sender.endorse(serder=exn, framed=True, gvrsn=Vrsn_2_0)
+        number = Number(num=sender.kever.lastEst.s).qb64b
+        seqner = Seqner(sn=sender.kever.lastEst.s).qb64b
+        assert number in fresh[exn.size:]
+        assert seqner not in fresh[exn.size:]
+
+        receiverHby.kvy.kramer = None
+        Parser(version=Vrsn_2_0).parse(ims=bytearray(fresh),
+                                       framed=True,
+                                       kvy=receiverHby.kvy,
+                                       exc=Exchanger(hby=receiverHby, handlers=[]))
+        assert serializeMessage(receiverHby, exn.said, framed=True) == fresh
 
 
 def test_non_ipex_rejects_non_sender_evidence(mockHelpingNowUTC):
