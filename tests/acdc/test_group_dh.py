@@ -9,6 +9,7 @@ import pytest
 from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, admit, chaining, grant, loadHandlers, regeventing
 from keri.acdc.dhking import Dhke
+from keri.acdc import salting
 from keri.acdc.salting import RegistryRoot
 from keri.acdc.unblinding import Unblind
 from keri.app import Notifier, grouping, openCF, openHby
@@ -212,8 +213,7 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(fakeHelpingClock)
             receive(side, wire)
             assert side.hby.db.exns.get((admission.said,)) is not None
         recipient = h.issuees[1]
-        receiver = RegistryRoot(recipient.hby, recipient.rgy)
-        recipient.exc.addHandler(receiver)
+        receiver = salting.loadHandlers(recipient.hby, recipient.exc, None, recipient.rgy)
         wire = RegistryRoot(issuee.hby, issuee.rgy).prepare(
             issuee.member, recipient.member.pre, issuee.hab.pre, h.registry.regk, event=event.said)
         receive(recipient, wire)

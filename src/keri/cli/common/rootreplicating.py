@@ -146,7 +146,7 @@ class RootReplication(doing.DoDoer):
         proof = opening(Path(args.opening).read_bytes()) if args.opening else None
         exc = Exchanger(hby=self.hby, handlers=[])
         # Other credential-topic traffic stays retained as ordinary IPEX notes.
-        ipexing.loadHandlers(self.hby, exc, self.notifier, rgy=self.rgy)
+        ipexing.loadHandlers(self.hby, exc, self.notifier, rgy=self.rgy, roots=False)
         exc.addHandler(self.root)
         kvy = Kevery(db=self.hby.db, rvy=self.hby.rvy, exc=exc, lax=True, local=False, direct=False,
                      kramer=Kramer(db=self.hby.db, cf=self.hby.cf))
