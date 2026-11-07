@@ -1561,6 +1561,46 @@ def _v1seqner(ordinal):
     return Seqner(snh=ordinal).qb64b
 
 
+def _v2number(ordinal):
+    """Return the version-2 Number (smallest ``NumDex`` code) for an ordinal.
+
+    The ``gvrsn.major >= 2`` attachment path in messagize must emit sequence
+    and first-seen ordinals as compact v2 Number primitives (``MAAB`` for 1),
+    whatever primitive the caller holds. Stored ordinals are often rehydrated
+    as v1 Seqner (``0A`` fixed form) or arrive as a wide Number, so without
+    this the same v2 message re-serializes to different bytes depending on
+    whether it was freshly signed or reloaded from the database.
+
+    Parameters:
+        ordinal (Number | Seqner | str): ordinal to serialize. A Number or
+            Seqner primitive, or a hex ordinal string (snh form).
+    """
+    if isinstance(ordinal, (Number, Seqner)):
+        return Number(num=ordinal.sn)
+    return Number(numh=ordinal)
+
+
+def _v2bond(bond):
+    """Return a data-form seal bond whose ordinal field is a v2 Number.
+
+    Mirrors the v1 path in messagize, which writes SealEvent.s and
+    SealSource.s through _v1seqner. Only these clans carry ordinals, matching
+    their Number casts in structing; other bonds pass through unchanged.
+    Serialized-form (crew) bonds need no help: Structor casts their ordinal
+    strings to Number through the clan's Castage.
+
+    Parameters:
+        bond (NamedTuple): seal bond whose field values are Matter primitives.
+    """
+    if isinstance(bond, (SealEvent, SealSource)):
+        return bond._replace(s=_v2number(bond.s))
+    if isinstance(bond, BoundState):
+        return bond._replace(bn=_v2number(bond.bn))
+    if isinstance(bond, FirstSeen):
+        return bond._replace(f=_v2number(bond.f))
+    return bond
+
+
 def messagize(serder, *, sigers=None, tsgs=None, lsgs=None, wigers=None,
                          cigars=None, bonds=None, nests=None,
                          framed=False, nested=False, gvrsn=Version, genusify=False):
@@ -1782,7 +1822,7 @@ def messagize(serder, *, sigers=None, tsgs=None, lsgs=None, wigers=None,
             for tsg in tsgs:
                 prefixer, number, diger, sigers = tsg  # unpack
                 cims.extend(prefixer.qb64b)
-                cims.extend(number.qb64b)
+                cims.extend(_v2number(number).qb64b)  # v2 Number not v1 Seqner
                 cims.extend(diger.qb64b)
 
                 sims = bytearray()
@@ -1845,7 +1885,7 @@ def messagize(serder, *, sigers=None, tsgs=None, lsgs=None, wigers=None,
             clans = {}  # dict of structor lists keyed by clan
             for bond in bonds:  # collate structors made from bonds by clan group
                 if isinstance(bond[0], Matter):  # bond is Structor data
-                    structor = Structor(data=bond)
+                    structor = Structor(data=_v2bond(bond))  # v2 Number not v1 Seqner
                 else: # bond is structor crew (serialized)
                     structor = Structor(crew=bond)
 
