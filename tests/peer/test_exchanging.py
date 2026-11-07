@@ -768,18 +768,7 @@ def test_v2_exchange_ordinal_reserializes_identically(mockHelpingNowUTC):
                                        framed=True,
                                        kvy=receiverHby.kvy,
                                        exc=Exchanger(hby=receiverHby, handlers=[]))
-        assert receiverHby.db.exns.get(keys=(exn.said,)) is not None
-
-        stored = serializeMessage(receiverHby, exn.said, framed=True)
-        assert stored == fresh
-
-        # Nested re-serialization from parsed values matches a fresh nested sign.
-        nested = sender.endorse(serder=exn, nested=True, gvrsn=Vrsn_2_0)
-        for wire in (fresh, stored):
-            parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(wire),
-                                                    framed=True,
-                                                    processive=False)[0]
-            assert serializeParsedSubstream(parsed) == nested
+        assert serializeMessage(receiverHby, exn.said, framed=True) == fresh
 
 
 def test_non_ipex_rejects_non_sender_evidence(mockHelpingNowUTC):

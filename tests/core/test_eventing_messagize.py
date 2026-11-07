@@ -556,7 +556,7 @@ def test_messagize_v2_number_ordinals():
     signatures and reply/registry seals are rehydrated as v1 Seqner, and a v2
     peer may send a wide Number (``0A`` Huge), so passing the primitive through
     unchanged gave the same v2 message different bytes on different paths.
-    The v1 path stays on Seqner for every input form.
+    test_messagize_v1_seqner_ordinals covers the v1 path.
     """
     salter = Salter(raw=b'0123456789abcdef')
     with openDB(name="edy") as db, openKS(name="edy") as ks:
@@ -575,15 +575,15 @@ def test_messagize_v2_number_ordinals():
         ordinals = (Number(num=5), Seqner(sn=5),
                     Number(qb64b=seqner5))                 # Huge-coded Number
 
-        def wire(ordinal, gvrsn):
+        def wire(ordinal):
             return messagize(serder,
                              tsgs=[(prefixer, ordinal, diger, sigers)],
                              bonds=[SealEvent(i=prefixer, s=ordinal, d=diger),
                                     SealSource(s=ordinal, d=diger),
                                     FirstSeen(f=ordinal, dt=dater)],
-                             gvrsn=gvrsn)[serder.size:]
+                             gvrsn=Vrsn_2_0)[serder.size:]
 
-        v2 = [wire(ordinal, Vrsn_2_0) for ordinal in ordinals]
+        v2 = [wire(ordinal) for ordinal in ordinals]
         assert v2[0] == v2[1] == v2[2]
         assert v2[0].count(number5) == 4
         assert seqner5 not in v2[0]
@@ -596,11 +596,6 @@ def test_messagize_v2_number_ordinals():
                                  FirstSeen(f='5', dt=dater.dts)],
                           gvrsn=Vrsn_2_0)[serder.size:]
         assert crews == v2[0]
-
-        v1 = [wire(ordinal, Vrsn_1_0) for ordinal in ordinals]
-        assert v1[0] == v1[1] == v1[2]
-        assert v1[0].count(seqner5) == 4
-        assert number5 not in v1[0]
 
         """ Done Test """
 
