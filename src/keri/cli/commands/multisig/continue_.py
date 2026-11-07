@@ -11,9 +11,11 @@ from hio.help import ogler
 
 from ...common import Parsery, setupHby, printIdentifier, parseVersion
 
-from ....app import (GroupHab, MailboxDirector,
+from ....acdc import Regery, ipexing
+from ....app import (GroupHab, MailboxDirector, Notifier,
                      Counselor, WitnessInquisitor)
 from ....kering import Kinds
+from ....peer import Exchanger
 
 
 logger = ogler.getLogger()
@@ -43,10 +45,15 @@ class ContinueDoer(doing.DoDoer):
         self.counselor = Counselor(hby=self.hby, version=version, kind=Kinds.json)
         self.witq = WitnessInquisitor(hby=self.hby)
         kwa = dict(version=version, gvrsn=version, kind=self.kind) if version is not None else {}
+        # Never poll /credential without an Exchanger: drained v2 IPEX and
+        # registry-root copies are handled, not dropped.
+        self.rgy = Regery(hby=self.hby, name=name, base=base)
+        exc = Exchanger(hby=self.hby, handlers=[])
+        ipexing.loadHandlers(self.hby, exc, Notifier(self.hby), rgy=self.rgy)
         self.mbx = MailboxDirector(hby=self.hby,
                                    topics=["/receipt", "/replay", "/multisig", "/credential", "/delegate",
                                            "/challenge", "/oobi"],
-                                   **kwa)
+                                   exc=exc, **kwa)
         doers = [self.mbx, self.counselor, self.witq, doing.doify(self.recover)]
         super(ContinueDoer, self).__init__(doers=doers)
 
@@ -80,4 +87,5 @@ class ContinueDoer(doing.DoDoer):
         printIdentifier(self.hby, hab.pre)
 
         self.remove([self.mbx, self.counselor, self.witq])
+        self.rgy.close()
         return True

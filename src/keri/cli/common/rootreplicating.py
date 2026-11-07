@@ -3,11 +3,14 @@
 ``send`` and ``newcomers`` prepare one signed ESSR ``exn`` per (recipient,
 registry) through ``salting.RegistryRoot`` and deliver each one to the
 recipient's mailbox (topic ``credential``) with the shared finite sender.
-``--out`` writes the same bytes to a file instead. ``receive`` ingests copies
-from the ``/credential`` mailbox (or ``--message`` files) through the ordinary
-Parser, Kevery/KRAM and Exchanger path; the handler retains each verifiable
-root automatically and escrows the rest for retry. ``receive`` then drains
-that escrow once and reports what is retained or still pending.
+``--out`` writes the same bytes to a file instead. ``receive`` is an
+optional convenience drain: any kli command or agent that polls the
+credential mailbox with the IPEX handlers already retains copies. It ingests
+copies from the ``/credential`` mailbox (or ``--message`` files) through the
+ordinary Parser, Kevery/KRAM and Exchanger path; the handler retains each
+verifiable root automatically and escrows the rest for retry. ``receive``
+then adopts stored copies no handler escrowed, drains that escrow once and
+reports what is retained or still pending.
 """
 import json
 import math
@@ -144,10 +147,10 @@ class RootReplication(doing.DoDoer):
         if (args.event or args.opening) and not args.said:
             raise ConfigurationError('--event and --opening retry one stored copy; add --said')
         proof = opening(Path(args.opening).read_bytes()) if args.opening else None
-        exc = Exchanger(hby=self.hby, handlers=[])
-        # Other credential-topic traffic stays retained as ordinary IPEX notes.
-        ipexing.loadHandlers(self.hby, exc, self.notifier, rgy=self.rgy, roots=False)
-        exc.addHandler(self.root)
+        # The IPEX loader reuses this handler for /registry/root; other
+        # credential-topic traffic stays retained as ordinary IPEX notes.
+        exc = Exchanger(hby=self.hby, handlers=[self.root])
+        ipexing.loadHandlers(self.hby, exc, self.notifier, rgy=self.rgy)
         kvy = Kevery(db=self.hby.db, rvy=self.hby.rvy, exc=exc, lax=True, local=False, direct=False,
                      kramer=Kramer(db=self.hby.db, cf=self.hby.cf))
         if args.message:
@@ -164,7 +167,9 @@ class RootReplication(doing.DoDoer):
             while not self.retained(args.registry):
                 self.check()
                 yield self.tock
-        # Drain: retry every stored copy whose local state may now be present.
+        # Drain: adopt stored copies no handler escrowed, then retry every
+        # escrowed copy whose local state may now be present.
+        self.root.reconcile()
         self.root.processEscrows()
         if args.said:
             try:

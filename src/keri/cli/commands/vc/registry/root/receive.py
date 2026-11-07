@@ -1,4 +1,8 @@
-"""Ingest registry root copies; verifiable roots are retained automatically."""
+"""Optionally drain registry root copies; verifiable roots are retained automatically.
+
+Any kli command or agent that polls the credential mailbox retains copies;
+use this for scripts and manual retries.
+"""
 import argparse
 
 from .....common import Parsery, parseVersion
@@ -15,6 +19,7 @@ parser.add_argument('--said', help='manually retry this stored exn SAID (with --
 parser.add_argument('--event', help='accepted BUP SAID overriding the sender hint for --said')
 parser.add_argument('--opening', help='held CESR state opening file for --said')
 source = parser.add_mutually_exclusive_group()
-source.add_argument('--listen', action='store_true', help='process the /credential mailbox until --registry is retained')
+source.add_argument('--listen', action='store_true', help='optional; process the /credential mailbox until --registry is retained '
+                    '(any command or agent that polls the credential mailbox retains copies)')
 source.add_argument('--message', action='append', help='fallback: signed exn file; repeatable')
 parser.add_argument('--timeout', type=float, default=60.0, help='finite whole-operation wait')
