@@ -210,3 +210,18 @@ def test_group_member_send_defaults_to_members_through_mailbox(tmp_path, live_pa
     refused = kli(tmp_path, 'vc', 'registry', 'root', 'newcomers', *lead['args'],
         '--rotation', body.said, succeeds=False)
     assert 'accepted group rotation' in refused
+
+
+def test_copy_drained_by_vc_list_is_retained_without_receive(tmp_path, live_parties):
+    lead, peer, body, expected = group_root(tmp_path, live_parties)
+    sent = results(kli(tmp_path, 'vc', 'registry', 'root', 'send', *lead['args'],
+        '--registry', body.regid, '--acdc', body.said, '--timeout', '25'))
+    assert [(item['recipient'], item['transmitted']) for item in sent] == [(peer['member'], True)]
+    # The recipient runs only an ordinary credential-mailbox command, never receive.
+    kli(tmp_path, 'vc', 'list', '--name', peer['name'], '--base', peer['base'],
+        '--alias', peer['alias'], '--passcode', PASSCODE, '--poll')
+    assert root(peer, peer['pre'], body.regid) == expected
+    # A later receive (no --listen) only reports the retained root.
+    received = results(kli(tmp_path, 'vc', 'registry', 'root', 'receive', *peer['args'],
+        '--registry', body.regid))
+    assert received == [dict(gid=peer['pre'], registry=body.regid, retained=True)]

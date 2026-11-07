@@ -14,6 +14,7 @@ from ....kering import Vrsn_1_0, Vrsn_2_0, ConfigurationError
 from ....app import (Notifier, StreamPoster, Organizer,
                      GroupHab, Multiplexor, MailboxDirector,
                      serialize, multisigExn)
+from ....acdc import Regery as RegeryV2, salting
 from ....app.grouping import loadHandlers as loadGroupingHandlers
 
 from ....core import coring, parsing, serdering
@@ -87,6 +88,9 @@ class GrantDoer(doing.DoDoer):
         self.exc = exchanging.Exchanger(hby=self.hby, handlers=[])
         loadGroupingHandlers(self.exc, mux)
         loadProtocolingHandlers(self.hby, exc=self.exc, notifier=notifier)
+        # The v1 IPEX routes are taken; registry-root copies still ride /credential.
+        self.rgyV2 = RegeryV2(hby=self.hby, name=name, base=base)
+        salting.loadHandlers(self.hby, self.exc, notifier, self.rgyV2)
 
         mbx = MailboxDirector(hby=self.hby,
                               topics=["/receipt", "/multisig", "/replay", "/credential"],
@@ -197,3 +201,4 @@ class GrantDoer(doing.DoDoer):
             self.remove([doer])
 
         self.remove(self.toRemove)
+        self.rgyV2.close()

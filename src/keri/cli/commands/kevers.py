@@ -13,9 +13,11 @@ from hio.help import ogler
 
 from ..common import Parsery, printExternal, setupHby
 
-from ...app import MailboxDirector
+from ...acdc import Regery, ipexing
+from ...app import MailboxDirector, Notifier
 from ...core import SerderKERI
 from ...help import helping
+from ...peer import Exchanger
 
 
 logger = ogler.getLogger()
@@ -43,9 +45,15 @@ class KeverDoer(doing.DoDoer):
         self.poll = poll
         self.verbose = verbose
         self.hby = setupHby(name=name, base=base, bran=bran)
+        # Never poll /credential without an Exchanger: drained v2 IPEX and
+        # registry-root copies are handled, not dropped.
+        self.rgy = Regery(hby=self.hby, name=name, base=base)
+        exc = Exchanger(hby=self.hby, handlers=[])
+        ipexing.loadHandlers(self.hby, exc, Notifier(self.hby), rgy=self.rgy)
         self.mbx = MailboxDirector(hby=self.hby,
                                    topics=["/receipt", "/replay", "/multisig", "/credential",
-                                           "/delegate", "/challenge", "/oobi"])
+                                           "/delegate", "/challenge", "/oobi"],
+                                   exc=exc)
         doers = [self.mbx, doing.doify(self.kevers)]
         super(KeverDoer, self).__init__(doers=doers)
 
@@ -86,5 +94,6 @@ class KeverDoer(doing.DoDoer):
                     print()
 
         self.remove([self.mbx])
+        self.rgy.close()
 
         return True

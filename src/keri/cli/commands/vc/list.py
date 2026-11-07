@@ -15,10 +15,12 @@ from hio.help import ogler
 from ...common import (Parsery, Colors, Symbols,
                        setupHby, aliasInput)
 
+from ....acdc import Regery as RegeryV2, ipexing
 from ....kering import ConfigurationError
-from ....app import MailboxDirector
+from ....app import MailboxDirector, Notifier
 from ....core import Schemer
 from ....help import helping
+from ....peer import Exchanger
 from ....vdr import Regery, Verifier
 
 
@@ -75,7 +77,12 @@ class ListDoer(doing.DoDoer):
         self.hab = self.hby.habByName(alias)
         self.rgy = Regery(hby=self.hby, name=name, base=base)
         self.vry = Verifier(hby=self.hby, reger=self.rgy.reger)
-        self.mbx = MailboxDirector(hby=self.hby, topics=['/credential'], verifier=self.vry)
+        # Never poll /credential without an Exchanger: v2 IPEX and registry-root
+        # copies drained here are handled, not dropped.
+        self.rgyV2 = RegeryV2(hby=self.hby, name=name, base=base)
+        exc = Exchanger(hby=self.hby, handlers=[])
+        ipexing.loadHandlers(self.hby, exc, Notifier(self.hby), rgy=self.rgyV2)
+        self.mbx = MailboxDirector(hby=self.hby, topics=['/credential'], verifier=self.vry, exc=exc)
 
         doers = [self.mbx, doing.doify(self.listDo)]
 
@@ -153,3 +160,4 @@ class ListDoer(doing.DoDoer):
                         print(f"\t{line}")
 
         self.remove([self.mbx])
+        self.rgyV2.close()
