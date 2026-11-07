@@ -1935,8 +1935,10 @@ class Baser(LMDBer):
         """
         Search through a KEL for the event that contains a specific anchored
         SealEvent type of provided seal but in dict form and is also fully
-        witnessed. Searches from sn forward (default = 0). Searches all events in
-        KEL of pre including disputed and/or superseded events.
+        witnessed. Searches from sn forward (default = 0). Candidate events include
+        disputed and/or superseded events, but fullyWitnessed requires the event
+        to be the accepted head of kels at its sn, so superseded events never
+        qualify.
         Returns the Serder of the first event with the anchored SealEvent seal,
 
             None if not found
@@ -1955,7 +1957,7 @@ class Baser(LMDBer):
 
         seal = SealEvent(**seal)  #convert to namedtuple
 
-        for srdr in self.getEvtPreIter(pre=pre, sn=sn):  # includes disputed & superseded
+        for srdr in self.getEvtPreIter(pre=pre, sn=sn):  # candidates only; fullyWitnessed excludes superseded
             for eseal in srdr.seals or []:  # or [] for seals 'a' field missing
                 if tuple(eseal) == SealEvent._fields:
                     eseal = SealEvent(**eseal)  # convert to namedtuple
@@ -2104,7 +2106,11 @@ class Baser(LMDBer):
             index = wiger.index
             if index in indices or not 0 <= index < len(wits):
                 continue
-            if Verfer(qb64=wits[index].qb64).verify(wiger.raw, serder.raw):
+            try:
+                verfer = Verfer(qb64=wits[index].qb64)
+            except Exception:  # malformed witness prefix never counts
+                continue
+            if not verfer.transferable and verfer.verify(wiger.raw, serder.raw):
                 indices.add(index)
 
         return len(indices) >= toad
