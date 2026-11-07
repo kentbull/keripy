@@ -194,3 +194,22 @@ def test_acdc_v2_foreign_sibling_arbitration_uses_existing_anchor_order():
         assert rgy.store.head(rip.said).qb64 == early.said
         with pytest.raises(ValidationError):
             rgy.processEvent(late)
+
+
+def test_acdc_v2_wrong_source_refused_without_witness_quorum():
+    from keri import kering
+    from keri.core import eventing, signing
+    with (openHby(name="verifier", temp=True, version=Vrsn_2_0) as receiver,
+          openLMDB(cls=RegBaser, name="acdc-v2", temp=True) as baser):
+        wit = signing.Signer(raw=b'\x01' * 32, transferable=False)
+        ctrl = signing.Signer(raw=b'c' * 32)
+        icp = eventing.incept(keys=[ctrl.verfer.qb64], wits=[wit.verfer.qb64], toad=1,
+                              version=Vrsn_2_0, kind=kering.Kinds.json)
+        receiver.db.prefixes.add(icp.pre)
+        Kevery(db=receiver.db).processEvent(
+            local=True, serder=icp, sigers=[ctrl.sign(ser=icp.raw, index=0)])
+        assert not receiver.db.fullyWitnessed(icp)  # accepted, no receipts
+        rgy = Regery(hby=receiver, baser=baser)
+        rip = regcept(israid=icp.pre)
+        with pytest.raises(ValidationError):  # icp does not seal rip
+            rgy.processEvent(rip, sscs=[(Number(num=0), Diger(qb64=icp.said))])
