@@ -80,15 +80,7 @@ def _nest(stream):
                                version=Vrsn_2_0)
 
     nested = bytearray(body)
-    if atc:
-        nested.extend(atc)
-    else:
-        empty = Counter.enclose(qb64=b'',
-                                code=Codens.ControllerIdxSigs,
-                                version=Vrsn_2_0)
-        nested.extend(Counter.enclose(qb64=empty,
-                                      code=Codens.AttachmentGroup,
-                                      version=Vrsn_2_0))
+    nested.extend(atc)  # the enclosing group bounds the node; no placeholder
     return Counter.enclose(qb64=nested,
                            code=Codens.BodyWithAttachmentGroup,
                            version=Vrsn_2_0)
@@ -10587,3 +10579,88 @@ def test_pending_discovery_preserves_optional_missing_registry(fresh_issuance, f
         assert hby.db.env.info()['last_txnid'] == before
     assert exc.pendingGrant(message.said, xid=message.said,
                             sender=issuer.pre, recipient=issuee.pre) is None
+
+
+def _bodyOnlyNode(acdc):
+    """Canonical nested node for an ACDC without attachments: -B(-H body)."""
+    body = (Counter.enclose(qb64=Texter(raw=acdc.raw).qb64b,
+                            code=Codens.NonNativeBodyGroup,
+                            version=Vrsn_2_0)
+            if acdc.kind != Kinds.cesr else bytearray(acdc.raw))
+    return bytes(Counter.enclose(qb64=body,
+                                 code=Codens.BodyWithAttachmentGroup,
+                                 version=Vrsn_2_0))
+
+
+def test_ipex_v2_bare_node_has_no_empty_signature_group():
+    """A proofless ACDC node is just its body inside -B, with no -K/-C group."""
+    from keri.acdc.ipexing import _normalizeNestedStream
+    from keri.peer.exchanging import serializeParsedSubstream
+
+    acdc = acdcmap(israid="EIaGMMWJFPmtXznY1IIiKDIrg-vIyge6mBl2QV8dDjI3",
+                   attribute=dict(d="", LEI="254900OPPU84GM83MG36"))
+    canonical = _bodyOnlyNode(acdc)
+
+    nested = bytes(_normalizeNestedStream(acdc))
+    assert nested == canonical  # body only: no ControllerIdxSigs, no AttachmentGroup
+
+    parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(nested), framed=True,
+                                            processive=False)
+    assert len(parsed) == 1
+    assert parsed[0].serder.said == acdc.said
+    assert not parsed[0].sigers
+    assert bytes(serializeParsedSubstream(parsed[0])) == canonical
+
+
+@pytest.mark.parametrize("legacy", ["-KAA", "-C(-KAA)", "-CAA"])
+def test_ipex_v2_legacy_empty_group_nodes_converge(legacy):
+    """Stored nodes carrying an empty placeholder hydrate and re-serialize canonically."""
+    from keri.peer.exchanging import serializeParsedSubstream
+
+    acdc = acdcmap(israid="EIaGMMWJFPmtXznY1IIiKDIrg-vIyge6mBl2QV8dDjI3",
+                   attribute=dict(d="", LEI="254900OPPU84GM83MG36"))
+    sigs = Counter.enclose(qb64=b"", code=Codens.ControllerIdxSigs, version=Vrsn_2_0)
+    tail = dict([("-KAA", sigs),
+                 ("-C(-KAA)", Counter.enclose(qb64=sigs, code=Codens.AttachmentGroup,
+                                              version=Vrsn_2_0)),
+                 ("-CAA", Counter.enclose(qb64=b"", code=Codens.AttachmentGroup,
+                                          version=Vrsn_2_0))])[legacy]
+    body = Counter.enclose(qb64=Texter(raw=acdc.raw).qb64b,
+                           code=Codens.NonNativeBodyGroup, version=Vrsn_2_0)
+    stored = Counter.enclose(qb64=body + tail, code=Codens.BodyWithAttachmentGroup,
+                             version=Vrsn_2_0)
+
+    parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(stored), framed=True,
+                                            processive=False)
+    assert len(parsed) == 1
+    canonical = Parser(version=Vrsn_2_0).parse(ims=bytearray(_bodyOnlyNode(acdc)),
+                                               framed=True, processive=False)[0]
+    # Same parsed values as the body-only node: the empty group leaves no trace.
+    assert parsed[0].serder.raw == canonical.serder.raw
+    assert ({k: v for k, v in vars(parsed[0]).items() if k != "serder"}
+            == {k: v for k, v in vars(canonical).items() if k != "serder"})
+    assert bytes(serializeParsedSubstream(parsed[0])) == _bodyOnlyNode(acdc)
+
+
+def test_ipex_v2_grant_bare_origin_node_round_trips():
+    """A Grant node for a bare origin round-trips byte-identically."""
+    from keri.peer.exchanging import serializeParsedSubstream
+
+    with openHby(name="ipex-v2-bare-node", base="test") as hby:
+        hab = hby.makeHab(name="test")
+        acdc = acdcmap(israid=hab.pre,
+                       attribute=dict(d="", LEI="254900OPPU84GM83MG36"),
+                       iseaid=hab.pre)
+        grantExn, grantAtc = ipexGrant(hab=hab, recp=hab.pre,
+                                       message="Here is the granted credential",
+                                       origin=acdc, ax=[False])
+
+        node = _bodyOnlyNode(acdc)
+        assert node in bytes(grantAtc)  # transmitted without a placeholder group
+
+        parsed = Parser(version=Vrsn_2_0).parse(ims=bytearray(grantExn.raw + grantAtc),
+                                                framed=True, processive=False)
+        assert len(parsed) == 1
+        assert len(parsed[0].nests) == 1
+        assert parsed[0].nests[0].serder.said == acdc.said
+        assert bytes(serializeParsedSubstream(parsed[0].nests[0])) == node
