@@ -141,3 +141,15 @@ def test_ksn_query_waits_for_authenticated_witness_quorum(version, witnesses):
         kvy.cues.clear()
         kvy.processQuery(query, source=source, sigers=[])
         assert kvy.cues.pop()["kin"] == "reply"
+
+
+def test_fully_witnessed_skips_transferable_witness_prefix(version, witnesses):
+    serder, signature = inception(version, witnesses, toad=1)
+    stranger = signing.Signer(raw=b's' * 32)  # transferable, never a witness
+    with basing.openDB(name="malformed-witness") as db:
+        db.prefixes.add(serder.pre)
+        eventing.Kevery(db=db).processEvent(local=True, serder=serder, sigers=[signature])
+        key = (serder.pre, serder.said)
+        db.wits.pin(keys=key, vals=[coring.Prefixer(qb64=stranger.verfer.qb64)])
+        db.wigs.pin(keys=key, vals=[stranger.sign(ser=serder.raw, index=0)])
+        assert db.fullyWitnessed(serder) is False

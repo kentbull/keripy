@@ -2355,7 +2355,9 @@ class IpexHandler:
                     # A verified source can precede retrieval of its sealed TEL
                     # body. Only an exact canonical full seal above the accepted
                     # (unfiltered) head establishes that missing dependency.
-                    if event.said == diger.qb64 and self.hby.db.fullyWitnessed(event):
+                    if event.said == diger.qb64 and not self.hby.db.fullyWitnessed(event):
+                        unresolved = True  # accepted but awaiting witness quorum
+                    elif event.said == diger.qb64:
                         for seal in event.sad.get("a", []):
                             if (not isinstance(seal, Mapping) or set(seal) != {"i", "s", "d"}
                                     or seal["i"] != regk or not isinstance(seal["s"], str)

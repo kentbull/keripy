@@ -332,22 +332,21 @@ def _verifyAnchorCouple(serder, *, db, issuer, number, diger):
     if aserder.said != diger.qb64 or not db.fullyWitnessed(aserder):
         return False
 
-    # Compare against the full TEL seal tuple used by the local issuer path,
-    # not just the TEL event digest.
+    return _sealsRegistryEvent(serder, aserder)
+
+
+def _sealsRegistryEvent(serder, anchor):
+    """True when accepted key event anchor carries the full TEL seal tuple of
+    registry event serder; independent of witness receipts."""
     event = _normalizeEventRecord(serder)
-
-    # Build the seal tuple from the TEL event for comparison
     seal = dict(i=event.regk, s=event.serder.sad['n'], d=event.said)
-
-    # Loop through the seals in serder and return True if any match the TEL event's seal
-    for candidate in aserder.ked.get("a", []):
+    for candidate in anchor.ked.get("a", []):
         if not isinstance(candidate, Mapping):
             continue
         if (candidate.get("i") == seal["i"] and
                 candidate.get("s") == seal["s"] and
                 candidate.get("d") == seal["d"]):
             return True
-
     return False
 
 
@@ -374,10 +373,9 @@ def _validateSourceLocators(serder, *, db, issuer, sscs=(), ssts=()):
         if accepted != diger.qb64:
             raise ValidationError("TEL source locator conflicts with accepted KEL digest")
         anchor = db.evts.get(keys=(controller, accepted))
-        if anchor is None or not db.fullyWitnessed(anchor):
+        if anchor is None:
             continue
-        if not _verifyAnchorCouple(serder, db=db, issuer=controller,
-                                   number=number, diger=diger):
+        if not _sealsRegistryEvent(serder, anchor):
             raise ValidationError("TEL source locator does not seal this registry event")
 
 
