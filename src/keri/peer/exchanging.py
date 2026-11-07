@@ -28,6 +28,22 @@ ExchangeMessageTimeWindow = timedelta(seconds=300)
 logger = ogler.getLogger()
 
 
+class RouteRefuser:
+    """Refuse every exchange on one route so the Exchanger persists nothing.
+
+    For roles that must never accept a route (for example verifiers and
+    infrastructure services refusing ``/registry/root`` copies). Registering
+    no handler instead stores the exchange as an unknown-route message.
+    """
+
+    def __init__(self, resource):
+        self.resource = resource
+
+    def verify(self, serder, **kwa):
+        logger.info("Refused %s exchange SAID=%s from %s", self.resource, serder.said, serder.pre)
+        return False
+
+
 class Exchanger:
     """
      Peer to Peer KERI message Exchanger."""
@@ -494,7 +510,10 @@ class Exchanger:
         try:
             behavior.handle(serder=serder, **kwa)
         except AttributeError:
-            logger.debug("Behavior for %s missing or does not have handle for SAID=%s", route, serder.said)
+            if behavior is None:
+                logger.info("No handler registered for %s; stored SAID=%s", route, serder.said)
+            else:
+                logger.debug("Behavior for %s does not have handle for SAID=%s", route, serder.said)
             logger.debug("Event=\n%s\n", serder.pretty())
 
         return True

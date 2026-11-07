@@ -27,7 +27,7 @@ from ..core import (Aggor, BlindState, Blinder, BoundState, Counter,
 from ..peer.exchanging import (cloneMessage, loadParsedNestedSubstreams,
                                verifyAttachments)
 from ..recording import ExchangeRegistryStateRecord
-from . import scheming
+from . import salting, scheming
 
 logger = ogler.getLogger()
 
@@ -3186,8 +3186,12 @@ def spurn(hab, message, spurned, recp=None, dt=None, kind=None, gvrsn=None):
     return serder, atc
 
 
-def loadHandlers(hby, exc, notifier, rgy=None):
+def loadHandlers(hby, exc, notifier, rgy=None, roots=True):
     """Register handlers for the six V2 IPEX verb routes.
+
+    With ``rgy`` and ``roots``, also register the ``/registry/root`` handler
+    (``salting.loadHandlers``), which rides the same ``credential`` topic, so
+    any process that drains v2 IPEX also retains registry-root copies.
 
     Parameters:
         hby (Habery): Habitat environment and backing database.
@@ -3195,6 +3199,8 @@ def loadHandlers(hby, exc, notifier, rgy=None):
         notifier: Notifier-like object passed through to each handler.
         rgy (Regery | None): Optional local registry manager reused by every
             IPEX handler for verifier-side registry proof checks.
+        roots (bool): register the registry-root handler when ``rgy`` is
+            given; verifiers pass False and refuse the route instead.
 
     Returns:
         None
@@ -3205,3 +3211,5 @@ def loadHandlers(hby, exc, notifier, rgy=None):
     exc.addHandler(IpexHandler(resource="/ipex/grant", hby=hby, notifier=notifier, rgy=rgy))
     exc.addHandler(IpexHandler(resource="/ipex/admit", hby=hby, notifier=notifier, rgy=rgy))
     exc.addHandler(IpexHandler(resource="/ipex/spurn", hby=hby, notifier=notifier, rgy=rgy))
+    if rgy is not None and roots:
+        salting.loadHandlers(hby, exc, notifier, rgy)

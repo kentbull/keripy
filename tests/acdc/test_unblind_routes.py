@@ -8,6 +8,7 @@ import pytest
 
 from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, admit, agree, blindate, chaining, grant, loadHandlers, offer
+from keri.acdc import salting
 from keri.acdc.salting import RegistryRoot
 from keri.acdc.unblinding import Unblind
 from keri.cli.common.sending import messageParts
@@ -204,8 +205,7 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         snapshots = [(holder, issued.said, held), (discloser, forwarded.said, disclosed)]
 
         # The issuer's /registry/root ESSR copy reaches the discloser's encrypted Keeper only.
-        recipient = RegistryRoot(discloser.hby, discloser.rgy)
-        discloser.exc.addHandler(recipient)
+        recipient = salting.loadHandlers(discloser.hby, discloser.exc, None, discloser.rgy)
         opening = Blinder(data=BlindState(*selected.bsqs[0]), verify=False)
         root_copy = RegistryRoot(issuer.hby, issuer.rgy).prepare(
             issuer.hab, discloser.hab.pre, discloser.hab.pre, registry.regk, event=event1.said)

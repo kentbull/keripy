@@ -103,7 +103,9 @@ class RegistryRoot:
     """Replicate held registry roots to individual members by ESSR ``exn``.
 
     Local profile route ``/registry/root``; see ``rootExn`` for the wire.
-    Register on the Habery's Exchanger with ``exc.addHandler``. Authorization
+    Register with ``loadHandlers`` (``ipexing.loadHandlers`` does so when
+    given a Regery) on every Exchanger that drains the ``credential`` topic;
+    construction adopts copies stored earlier without it (``reconcile``). Authorization
     uses the accepted KEL and TEL only:
 
     - recipient ``ri``: a local individual habitat that is a current signing
@@ -153,6 +155,7 @@ class RegistryRoot:
             raise ValueError("registry root replication requires the Habery's registry owner")
         self.hby, self.rgy, self.notifier = hby, rgy, notifier
         self.resource = self.Route
+        self.reconcile()
 
     # policy
 
@@ -471,6 +474,36 @@ class RegistryRoot:
             return False
         return True
 
+    def reconcile(self):
+        """Escrow stored copies that an Exchanger without this handler kept.
+
+        An Exchanger with no ``/registry/root`` handler still stores an
+        authenticated copy in ``exns`` with its ESSR payload in ``essrs`` but
+        never escrows it. This adopts each such copy addressed to a local
+        individual habitat that has no ``rrpe`` entry and whose holder retains
+        no root for its registry, then attempts retention exactly as arrival
+        does, so it is fully re-authorized against current local state. A
+        locked Keeper leaves adopted copies pending. Returns the adopted SAIDs.
+        """
+        db, adopted = self.hby.db, []
+        for said in dict.fromkeys(keys[0] for keys, _ in db.essrs.getTopItemIter()):
+            serder = db.exns.get(keys=(said,))
+            if serder is None or serder.ked.get('r') != self.Route:
+                continue
+            hab = self.hby.habs.get(serder.ked.get('ri'))
+            data = serder.ked.get('a')
+            if (isinstance(hab, GroupHab) or not isinstance(hab, Hab)
+                    or not isinstance(data, dict)
+                    or db.rrpe.get(keys=(said,)) is not None
+                    or self.hby.ks.rroots.get(keys=(data.get('gid', ''), data.get('rd', '')))
+                    is not None):
+                continue
+            logger.info("Registry root copy %s was stored without escrow; escrowing it", said)
+            db.rrpe.put(keys=(said,), val=Dater(dts=helping.nowIso8601()))
+            self._attempt(said)
+            adopted.append(said)
+        return adopted
+
     def processEscrows(self):
         """Retry every escrowed copy; drop refused ones.
 
@@ -531,3 +564,24 @@ class RegistryRoot:
                               gid=data.get('gid'), registry=data.get('rd'),
                               dt=serder.ked.get('dt'), escrowed=escrowed.dts))
         return items
+
+
+def loadHandlers(hby, exc, notifier, rgy):
+    """Register the ``/registry/root`` handler on ``exc`` once; return the registered one.
+
+    Idempotent by route: when a handler for the route is already registered,
+    that handler is returned unchanged, so callers that compose their own
+    ``RegistryRoot`` and a loader that also registers one do not collide.
+
+    Parameters:
+        hby (Habery): habitat environment that owns ``rgy``
+        exc (Exchanger): exchange router to register on
+        notifier: Notifier-like object for retention notes
+        rgy (Regery): the Habery's registry manager
+
+    Returns:
+        RegistryRoot: the handler registered for ``RegistryRoot.Route``
+    """
+    if RegistryRoot.Route not in exc.routes:
+        exc.addHandler(RegistryRoot(hby, rgy, notifier))
+    return exc.routes[RegistryRoot.Route]

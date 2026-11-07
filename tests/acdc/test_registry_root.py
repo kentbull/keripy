@@ -10,14 +10,14 @@ import pysodium
 import pytest
 
 from keri import Vrsn_2_0 as V2
-from keri.acdc import Regery, Registrar, acdcmap
+from keri.acdc import Regery, Registrar, acdcmap, ipexing, salting
 from keri.acdc.salting import RegistryRoot, RootDeferred, RootRefused, RootUnverified, rootExn
 from keri.app import Notifier, openCF, openHby
 from keri.core import (Codens, Counter, Dater, Diger, Kevery, Kramer, MtrDex, Parser, Salter,
                        SealSource, SerderKERI, Signer, Texter, exchange, messagize)
 from keri.help import helping
 from keri.kering import Ilks, Kinds, ValidationError
-from keri.peer import Exchanger
+from keri.peer import Exchanger, RouteRefuser
 
 Fixture = Path(__file__).parent / "fixtures" / "registry_root_essr.json"
 
@@ -562,8 +562,7 @@ def test_every_member_holds_every_root_after_group_dh():
 
     with groups(count=2) as h:
         for side in h.members:
-            side.root = RegistryRoot(side.hby, side.rgy)
-            side.exc.addHandler(side.root)
+            side.root = salting.loadHandlers(side.hby, side.exc, None, side.rgy)
         dh(h)
         regks = [reg.regk for reg in h.registries]
         hints = {}
@@ -596,3 +595,88 @@ def test_every_member_holds_every_root_after_group_dh():
                 roots = {side.hby.mgr.getRegistryRoot(side.hab.pre, registry.regk).qb64
                          for side in members}
                 assert len(roots) == 1
+
+
+def test_ipex_loader_registers_the_root_handler_once():
+    with world() as w:
+        hby, rgy = w.bob.hby, w.bob.rgy
+        exc = Exchanger(hby=hby, handlers=[])
+        ipexing.loadHandlers(hby, exc, w.bob.notifier, rgy=rgy)
+        root = exc.routes[RegistryRoot.Route]
+        assert isinstance(root, RegistryRoot)
+        assert salting.loadHandlers(hby, exc, w.bob.notifier, rgy) is root
+        # A caller's own instance is kept, not replaced or duplicated.
+        mine = Exchanger(hby=hby, handlers=[w.bob.root])
+        assert salting.loadHandlers(hby, mine, w.bob.notifier, rgy) is w.bob.root
+        ipexing.loadHandlers(hby, mine, w.bob.notifier, rgy=rgy)
+        assert mine.routes[RegistryRoot.Route] is w.bob.root
+        # Verifiers opt out; without a Regery there is nothing to register.
+        for kwa in (dict(rgy=rgy, roots=False), dict()):
+            other = Exchanger(hby=hby, handlers=[])
+            ipexing.loadHandlers(hby, other, w.bob.notifier, **kwa)
+            assert RegistryRoot.Route not in other.routes and '/ipex/grant' in other.routes
+
+
+def bare(side):
+    """Deliver through an Exchanger that has IPEX handlers but no registry-root handler."""
+    exc = Exchanger(hby=side.hby, handlers=[])
+    ipexing.loadHandlers(side.hby, exc, side.notifier)
+    return Parser(version=V2, kvy=side.kvy, rvy=side.hby.rvy, exc=exc, rgy=side.rgy)
+
+
+@pytest.mark.parametrize('deferred', [False, True])
+def test_copy_stored_without_the_handler_is_adopted_by_reconcile(deferred):
+    with world(late=('bob',) if deferred else ()) as w:
+        seed(w)
+        wire = w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry,
+                                    td=w.acdc.said)
+        pending = said(wire)
+        ims = bytearray(wire)
+        bare(w.bob).parse(ims=ims, framed=False)
+        db = w.bob.hby.db
+        assert db.exns.get(keys=(pending,)) is not None and db.essrs.get(keys=(pending,))
+        assert db.rrpe.get(keys=(pending,)) is None and held(w, w.bob) is None
+        # A handler constructed over the same store adopts the copy.
+        root = RegistryRoot(w.bob.hby, w.bob.rgy)
+        if not deferred:
+            assert held(w, w.bob).qb64 == w.root.qb64 and stored(w.bob) == []
+            assert root.reconcile() == []
+            return
+        assert stored(w.bob) == [pending] and held(w, w.bob) is None
+        assert root.reconcile() == []  # already escrowed: not adopted twice
+        late(w)
+        root.processEscrows()
+        assert held(w, w.bob).qb64 == w.root.qb64 and stored(w.bob) == []
+
+
+def test_reconcile_with_a_locked_keeper_leaves_the_copy_pending():
+    with world() as w:
+        seed(w)
+        wire = w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry,
+                                    td=w.acdc.said)
+        bare(w.bob).parse(ims=bytearray(wire), framed=False)
+        mgr = w.bob.hby.mgr
+        decrypter, mgr.decrypter = mgr.decrypter, None
+        try:
+            assert w.bob.root.reconcile() == [said(wire)]
+        finally:
+            mgr.decrypter = decrypter
+        assert stored(w.bob) == [said(wire)] and held(w, w.bob) is None
+        w.bob.exc.processEscrow()
+        assert held(w, w.bob).qb64 == w.root.qb64 and stored(w.bob) == []
+
+
+def test_route_refuser_persists_nothing():
+    with world() as w:
+        seed(w)
+        wire = w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry,
+                                    td=w.acdc.said)
+        pending = said(wire)
+        exc = Exchanger(hby=w.bob.hby, handlers=[RouteRefuser(RegistryRoot.Route)])
+        serder = Parser(version=V2).parseOne(ims=bytearray(wire), processive=False).serder
+        Parser(version=V2, kvy=w.bob.kvy, rvy=w.bob.hby.rvy, exc=exc).parse(
+            ims=bytearray(wire), framed=False)
+        db = w.bob.hby.db
+        assert serder.said == pending
+        assert db.exns.get(keys=(pending,)) is None and not db.essrs.get(keys=(pending,))
+        assert db.rrpe.get(keys=(pending,)) is None and held(w, w.bob) is None
