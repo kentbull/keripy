@@ -1688,14 +1688,11 @@ def serializeParsedSubstream(parsed, gvrsn=Vrsn_2_0):
                                    code=Codens.NonNativeBodyGroup,
                                    version=gvrsn)
 
-        attachments = b"".join(nests) + extra
-        if not attachments:
-            attachments = Counter.enclose(qb64=b'', code=Codens.ControllerIdxSigs,
-                                          version=gvrsn)
+        # Same layout as messagize(nested=True): groups follow the body
+        # directly, and a node without attachments is just its body.
         nested = bytearray(body)
-        nested.extend(Counter.enclose(qb64=attachments,
-                                      code=Codens.AttachmentGroup,
-                                      version=gvrsn))
+        nested.extend(b"".join(nests))
+        nested.extend(extra)
         return Counter.enclose(qb64=nested,
                                code=Codens.BodyWithAttachmentGroup,
                                version=gvrsn)

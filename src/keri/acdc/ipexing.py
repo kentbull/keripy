@@ -178,17 +178,10 @@ def _normalizeNestedStream(stream):
                                code=Codens.NonNativeBodyGroup,
                                version=Vrsn_2_0)
 
-    # Check if attachments are empty, if so create an empty AttachmentGroup counter
+    # The enclosing BodyWithAttachmentGroup bounds the node, so an artifact
+    # without attachments is just its body; never add a placeholder group.
     nested = bytearray(body)
-    if atc:
-        nested.extend(atc)
-    else:
-        empty = Counter.enclose(qb64=b'',
-                                code=Codens.ControllerIdxSigs,
-                                version=Vrsn_2_0)
-        nested.extend(Counter.enclose(qb64=empty,
-                                      code=Codens.AttachmentGroup,
-                                      version=Vrsn_2_0))
+    nested.extend(atc)
 
     # Return the body and attachments
     return Counter.enclose(qb64=nested,

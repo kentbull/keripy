@@ -1341,6 +1341,12 @@ class Parser:
             while not ims and not framed:  # framed has everything already
                 yield  # when not framed at least empty AttachmentGroup follows
 
+            if not ims:  # framed (or enclosed) with nothing after the body
+                # A framed message, such as a nested BodyWithAttachmentGroup,
+                # is already bounded by its frame, so an empty remainder means
+                # no attachments. Unframed streams never reach here empty.
+                return exts
+
             cold = sniff(ims)
             if cold != Colds.msg:  # counter so peek at what it is
                 ctr = yield from self._extractor(ims=ims,
@@ -1776,6 +1782,12 @@ class Parser:
                 raise ShortageError(f"Unexpected stream shortage on enclosed "
                                     f"group code={ctr.qb64}")
             yield  # wait until have full group size
+
+        if not gs:  # legacy placeholder: an empty group carries no signatures
+            # Accept rather than raise so previously stored nested nodes that
+            # carry -KAA still parse and re-serialize without the placeholder.
+            logger.debug("Parser: ignoring empty ControllerIdxSigs group %s",
+                         ctr.qb64)
 
         gims = ims[:gs]  # copy out group sized substream
         del ims[:gs]  # strip off from ims
