@@ -19,7 +19,7 @@ from keri.kering import (ValidationError, ExtractionError, ShortageError,
 from keri.core import (Counter, Diger, GenDex, Codens, Seqner, Dater, Texter, Pather,
                        Blinder, Mediar, TypeMedia, Sealer, SealKind, Verser,
                        Salter, Parser, Kever, Kevery, incept, rotate, interact,
-                       exchept, messagize, SerderKERI)
+                       exchept, exchange, messagize, SerderKERI)
 
 from keri.db import openDB
 
@@ -5482,3 +5482,44 @@ def test_parse_one_extraction_failure_returns_no_message(processive, fault):
         assert ims == good
         assert parser.parseOneBare(ims=ims, processive=False).serder.raw == body.raw
     assert not ims
+
+
+@pytest.mark.parametrize("framed", [False, True])
+def test_body_only_nested_node_parses(framed):
+    """A nested BodyWithAttachmentGroup holding only a body ends at its frame
+    instead of failing with a shortage and silently dropping the message."""
+    signers = Salter(raw=b"ABCDEFGH01234567").signers(count=2, path='psr', temp=True)
+    child = incept(keys=[signers[0].verfer.qb64],
+                   ndigs=[Diger(ser=signers[1].verfer.qb64b).qb64], **V2_KWA)
+    outer = exchange(sender=child.pre, route="/test", attributes=dict(m="hi"),
+                     **V2_KWA)
+    node = Counter.enclose(qb64=Counter.enclose(qb64=Texter(raw=child.raw).qb64b,
+                                                code=Codens.NonNativeBodyGroup,
+                                                version=Vrsn_2_0),
+                           code=Codens.BodyWithAttachmentGroup, version=Vrsn_2_0)
+    ims = bytearray(outer.raw + Counter.enclose(qb64=node, code=Codens.AttachmentGroup,
+                                                version=Vrsn_2_0))
+
+    parsed = Parser(version=Vrsn_2_0).parse(ims=ims, framed=framed, processive=False)
+    assert not ims
+    assert len(parsed) == 1
+    assert parsed[0].serder.said == outer.said
+    assert len(parsed[0].nests) == 1
+    assert parsed[0].nests[0].serder.said == child.said
+    assert not parsed[0].nests[0].sigers
+
+
+def test_unframed_body_without_attachments_waits():
+    """An unframed top-level body still waits for an attachment counter, so
+    a body with no attachments yet is never accepted as complete."""
+    signers = Salter(raw=b"ABCDEFGH01234567").signers(count=2, path='psr', temp=True)
+    body = incept(keys=[signers[0].verfer.qb64],
+                  ndigs=[Diger(ser=signers[1].verfer.qb64b).qb64], **V2_KWA)
+    ims = bytearray(body.raw)
+    parsator = Parser(version=Vrsn_2_0).msgParsator(ims=ims, framed=False)
+    assert next(parsator) is None  # waiting for more bytes, not finished
+
+    ims.extend(Counter(Codens.AttachmentGroup, count=0, version=Vrsn_2_0).qb64b)
+    with pytest.raises(StopIteration) as info:
+        next(parsator)
+    assert info.value.value.serder.said == body.said
