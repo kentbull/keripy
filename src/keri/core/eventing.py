@@ -1580,6 +1580,27 @@ def _v2number(ordinal):
     return Number(numh=ordinal)
 
 
+def _v2bond(bond):
+    """Return a data-form seal bond whose ordinal field is a v2 Number.
+
+    Mirrors the v1 path in messagize, which writes SealEvent.s and
+    SealSource.s through _v1seqner. Only these clans carry ordinals, matching
+    their Number casts in structing; other bonds pass through unchanged.
+    Serialized-form (crew) bonds need no help: Structor casts their ordinal
+    strings to Number through the clan's Castage.
+
+    Parameters:
+        bond (NamedTuple): seal bond whose field values are Matter primitives.
+    """
+    if isinstance(bond, (SealEvent, SealSource)):
+        return bond._replace(s=_v2number(bond.s))
+    if isinstance(bond, BoundState):
+        return bond._replace(bn=_v2number(bond.bn))
+    if isinstance(bond, FirstSeen):
+        return bond._replace(f=_v2number(bond.f))
+    return bond
+
+
 def messagize(serder, *, sigers=None, tsgs=None, lsgs=None, wigers=None,
                          cigars=None, bonds=None, nests=None,
                          framed=False, nested=False, gvrsn=Version, genusify=False):
@@ -1864,11 +1885,7 @@ def messagize(serder, *, sigers=None, tsgs=None, lsgs=None, wigers=None,
             clans = {}  # dict of structor lists keyed by clan
             for bond in bonds:  # collate structors made from bonds by clan group
                 if isinstance(bond[0], Matter):  # bond is Structor data
-                    if hasattr(bond, "_replace"):  # v2 Number not v1 Seqner
-                        bond = bond._replace(**{field: _v2number(value)
-                            for field, value in bond._asdict().items()
-                            if isinstance(value, (Number, Seqner))})
-                    structor = Structor(data=bond)
+                    structor = Structor(data=_v2bond(bond))  # v2 Number not v1 Seqner
                 else: # bond is structor crew (serialized)
                     structor = Structor(crew=bond)
 
