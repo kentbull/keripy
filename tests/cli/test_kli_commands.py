@@ -566,7 +566,25 @@ def test_multisig_continue_passes_explicit_version_to_counselor_mailbox_and_quer
             captured["mailbox_topics"] = topics
             captured["mailbox_kwargs"] = kwa
 
+    class FakeRegery:
+        def __init__(self, hby, name, base):
+            captured["regery"] = self
+
+        def close(self):
+            captured["regery_closed"] = True
+
+    class FakeExchanger:
+        def __init__(self, hby, handlers):
+            captured["exchanger"] = self
+
+    def fakeLoadHandlers(hby, exc, notifier, rgy=None):
+        captured["handlers"] = dict(exc=exc, rgy=rgy)
+
     monkeypatch.setattr(multisig_continue_command, "setupHby", lambda **kwa: FakeHabery())
+    monkeypatch.setattr(multisig_continue_command, "Regery", FakeRegery)
+    monkeypatch.setattr(multisig_continue_command, "Exchanger", FakeExchanger)
+    monkeypatch.setattr(multisig_continue_command, "Notifier", lambda hby: None)
+    monkeypatch.setattr(multisig_continue_command.ipexing, "loadHandlers", fakeLoadHandlers)
     monkeypatch.setattr(multisig_continue_command, "Counselor", FakeCounselor)
     monkeypatch.setattr(multisig_continue_command, "WitnessInquisitor", FakeWitnessInquisitor)
     monkeypatch.setattr(multisig_continue_command, "MailboxDirector", FakeMailboxDirector)
@@ -588,6 +606,11 @@ def test_multisig_continue_passes_explicit_version_to_counselor_mailbox_and_quer
 
     assert captured["counselor_version"] == Vrsn_1_0
     assert captured["counselor_kind"] == Kinds.json
+    # /credential is drained through an Exchanger carrying the IPEX and
+    # registry-root handlers, so mailbox copies are handled, not dropped.
+    assert captured["mailbox_kwargs"].pop("exc") is captured["exchanger"]
+    assert captured["handlers"] == dict(exc=captured["exchanger"], rgy=captured["regery"])
+    assert captured["regery_closed"]
     assert captured["mailbox_kwargs"] == dict(version=Vrsn_1_0, gvrsn=Vrsn_1_0, kind=Kinds.json)
     assert captured["query"] == dict(src="multisig-pre",
                                      pre="delegator-pre",
