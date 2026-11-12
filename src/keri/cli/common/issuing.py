@@ -1,6 +1,7 @@
 """Finite, explicitly selected individual v2 IPEX issuance over existing mailboxes."""
 import json
 import math
+import os
 import time
 from pathlib import Path
 
@@ -71,9 +72,22 @@ class IpexV2Issuance(doing.DoDoer):
             self.evidence(SerderACDC(raw=raw)) for raw in self.rgy.store.cloneTelIter(registry))
 
     def record(self, raw, *, initial=False):
-        if self.args.output:
-            with Path(self.args.output).open('xb' if initial else 'ab') as output:
+        """Append ``raw`` to ``--output``; the first record is published atomically.
+
+        A consumer may read the output as soon as it exists, so the initial
+        record is written to a sibling ``.part`` file and renamed into place.
+        """
+        if not self.args.output:
+            return
+        path = Path(self.args.output)
+        if not initial:
+            with path.open('ab') as output:
                 output.write(raw)
+            return
+        part = path.with_name(path.name + '.part')
+        with part.open('xb') as output:
+            output.write(raw)
+        os.replace(part, path)
 
     def send(self, raw, dest, *, topic='credential'):
         """Deliver selected public bytes within this command's finite lifecycle."""
