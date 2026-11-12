@@ -19,7 +19,8 @@ from . import chaining
 from .evaluating import (DefaultSuppressingEdgeOps, DelegativeEdgeOps,
                          EdgeEvaluator, EdgeGroupLabels, EdgeNodeLabels,
                          EdgeSectionLabels, IssuerIdentityEdgeOps, SchemaEvaluator,
-                         UnaryEdgeOps, verifyExpandedSection)
+                         UnaryEdgeOps, DefaultWalkPolicy, WalkPolicies,
+                         validateWalkPolicy, verifyExpandedSection)
 from ..kering import (Colds, DuplicitousRegistryError, Ilks, KeriError, MisanchorError, MisbindingError,
                       MissingAnchorError, MissingChainError, MissingSchemaError,
                       MissingSenderKeyStateError, MisdigestError, MisregistryError,
@@ -483,7 +484,8 @@ class IpexHandler:
     # handler.
     MAryReducers = chaining.MAryReducers
 
-    def __init__(self, resource, hby, notifier, rgy=None):
+    def __init__(self, resource, hby, notifier, rgy=None,
+                 walkPolicy=DefaultWalkPolicy):
         """Create a handler for one IPEX route.
 
         Parameters:
@@ -492,10 +494,19 @@ class IpexHandler:
             notifier: Notifier-like object with an ``add`` method.
             rgy (Regery | None): Optional local registry manager used when a
                 disclosed node's ``rd`` requires verifier-side issuer-auth checks.
+            walkPolicy (str): How the Grant walk and ``verifySelection`` treat a
+                far node an Edge names but the disclosure omits:
+                ``WalkPolicies.open`` (default) evaluates it as a non-retryable
+                unknown, ``WalkPolicies.closed`` refuses the graph. Neither
+                escrows. The Offer walk is always open.
 
         Returns:
             None
+
+        Raises:
+            ValueError: When ``walkPolicy`` is not a WalkPolicies member.
         """
+        self.walkPolicy = validateWalkPolicy(walkPolicy)
         self.resource = resource
         self.hby = hby
         self.notifier = notifier
@@ -926,7 +937,8 @@ class IpexHandler:
 
         # Stage 5: validate the ACDC subgraph carried by the Offer.
         if verb == Ipex.offer and nests:
-            walked = self._walkGraph(origin=attrs["o"][0], nests=nests, closed=False)
+            walked = self._walkGraph(origin=attrs["o"][0], nests=nests,
+                                     walkPolicy=WalkPolicies.open)
             if walked is None:
                 return False
 
@@ -982,7 +994,8 @@ class IpexHandler:
                 except Exception:
                     return False
 
-                walked = self._walkGraph(origin=origins[0], nests=nests, closed=True)
+                walked = self._walkGraph(origin=origins[0], nests=nests,
+                                         walkPolicy=self.walkPolicy)
                 if walked is None:
                     return False
                 grantNodes, grantOrder = walked
@@ -1413,7 +1426,8 @@ class IpexHandler:
                 f"missing metadata ACDC for accepted Offer {offer.said}")
 
         # Reuse normal graph validation before reading the offered root node.
-        walked = self._walkGraph(origin=offerOrigin, nests=offerNests, closed=False)
+        walked = self._walkGraph(origin=offerOrigin, nests=offerNests,
+                                 walkPolicy=WalkPolicies.open)
         if walked is None:
             return False
         offeredNodes, offeredOrder = walked
@@ -1463,16 +1477,17 @@ class IpexHandler:
 
         return True
 
-    def _walkGraph(self, origin, nests, *, closed):
+    def _walkGraph(self, origin, nests, *, walkPolicy):
         """Walk the disclosed origin DAG and return the visited node order.
 
         Parameters:
             origin (str): SAID of the origin node named by ``a.o[0]``.
             nests (list): Parsed nested ACDC node substreams carried by the
                 offer or grant message.
-            closed (bool): True requires every referenced edge target to be
-                carried in ``nests``. False allows undisclosed far nodes, but
-                every carried nest must still be reachable from ``origin``.
+            walkPolicy (str): ``WalkPolicies.closed`` requires every referenced
+                edge target to be carried in ``nests``. ``WalkPolicies.open``
+                allows undisclosed far nodes, but every carried nest must still
+                be reachable from ``origin``.
 
         Returns:
             tuple | None: ``(nodes, order)`` when the disclosed nests form one
@@ -1486,7 +1501,7 @@ class IpexHandler:
             return None
 
         # Shape, commitment, closure and reachability rules are the evaluator's.
-        order = self.edgeEvaluator.walk(origin, nodes=nodes, closed=closed)
+        order = self.edgeEvaluator.walk(origin, nodes=nodes, walkPolicy=walkPolicy)
         if order is None:
             return None
 
@@ -1523,12 +1538,12 @@ class IpexHandler:
         return evaluator.evaluateNode(said, nodes=nodes, memo=memo, records=records)
 
     def verifySelection(self, nests):
-        """Verify exact selected ACDC node bytes as one closed graph, without writes.
+        """Verify exact selected ACDC node bytes as one origin graph, without writes.
 
         Public read-only contract for a discloser choosing what to present
-        before any Grant exists. ``nests[0]`` is the origin; every edge target
-        must be carried (closed graph) and every carried nest must be reachable
-        from it. Each node must validate against its schema, then the ordinary
+        before any Grant exists. ``nests[0]`` is the origin and every carried
+        nest must be reachable from it. Undisclosed edge targets follow this
+        handler's ``walkPolicy``, exactly as a received Grant would. Each node must validate against its schema, then the ordinary
         IPEX m-ary reduction (``verifyIssuerAuthNode`` per node) runs exactly as
         it does for a received Grant. Registry states are recorded, not judged:
         issued/revoked policy belongs to the caller. This verifies no Grant
@@ -1548,9 +1563,10 @@ class IpexHandler:
         if not nests:
             return chaining.invalid("selection carries no ACDC node"), {}
         origin = (nests[0]["serder"] if isinstance(nests[0], dict) else nests[0].serder).said
-        walked = self._walkGraph(origin, nests, closed=True)
+        walked = self._walkGraph(origin, nests, walkPolicy=self.walkPolicy)
         if walked is None:
-            return chaining.invalid("selection is not one closed origin graph"), {}
+            return chaining.invalid(
+                f"selection is not one {self.walkPolicy} origin graph"), {}
         nodes, order = walked
         if not self._verifyNodeSchemas(nodes, order):
             return chaining.invalid("selected node fails its schema"), {}
@@ -2696,7 +2712,8 @@ def spurn(hab, message, spurned, recp=None, dt=None, kind=None, gvrsn=None):
     return serder, atc
 
 
-def loadHandlers(hby, exc, notifier, rgy=None, roots=True):
+def loadHandlers(hby, exc, notifier, rgy=None, roots=True,
+                 walkPolicy=DefaultWalkPolicy):
     """Register handlers for the six V2 IPEX verb routes.
 
     With ``rgy`` and ``roots``, also register the ``/registry/root`` handler
@@ -2711,15 +2728,23 @@ def loadHandlers(hby, exc, notifier, rgy=None, roots=True):
             IPEX handler for verifier-side registry proof checks.
         roots (bool): register the registry-root handler when ``rgy`` is
             given; verifiers pass False and refuse the route instead.
+        walkPolicy (str): ``WalkPolicies`` member each handler uses for the
+            Grant walk and ``verifySelection``; defaults to open.
 
     Returns:
         None
     """
-    exc.addHandler(IpexHandler(resource="/ipex/apply", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/offer", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/agree", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/grant", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/admit", hby=hby, notifier=notifier, rgy=rgy))
-    exc.addHandler(IpexHandler(resource="/ipex/spurn", hby=hby, notifier=notifier, rgy=rgy))
+    exc.addHandler(IpexHandler(resource="/ipex/apply", hby=hby, notifier=notifier, rgy=rgy,
+                               walkPolicy=walkPolicy))
+    exc.addHandler(IpexHandler(resource="/ipex/offer", hby=hby, notifier=notifier, rgy=rgy,
+                               walkPolicy=walkPolicy))
+    exc.addHandler(IpexHandler(resource="/ipex/agree", hby=hby, notifier=notifier, rgy=rgy,
+                               walkPolicy=walkPolicy))
+    exc.addHandler(IpexHandler(resource="/ipex/grant", hby=hby, notifier=notifier, rgy=rgy,
+                               walkPolicy=walkPolicy))
+    exc.addHandler(IpexHandler(resource="/ipex/admit", hby=hby, notifier=notifier, rgy=rgy,
+                               walkPolicy=walkPolicy))
+    exc.addHandler(IpexHandler(resource="/ipex/spurn", hby=hby, notifier=notifier, rgy=rgy,
+                               walkPolicy=walkPolicy))
     if rgy is not None and roots:
         salting.loadHandlers(hby, exc, notifier, rgy)

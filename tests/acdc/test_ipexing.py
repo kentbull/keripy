@@ -15,6 +15,7 @@ from keri.acdc import (IpexHandler, Regery, Registrar, acdcagg, acdcatt, acdcmap
                        agree as ipexAgree, grant as ipexGrant,
                        loadHandlers, offer as ipexOffer, regcept,
                        spurn as ipexSpurn)
+from keri.acdc.evaluating import WalkPolicies
 from keri.acdc.ipexing import validDisclosurePath
 from keri.app import openCF, openHby
 from keri.core import (Aggor, Blinder, Codens, Compactor, Counter, Diger, GenDex,
@@ -2815,6 +2816,9 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
         exc = Exchanger(hby=hby, handlers=[])
         loadHandlers(hby=hby, exc=exc, notifier=recorder)
         handler = exc.routes["/ipex/grant"]
+        closedExc = Exchanger(hby=hby, handlers=[])
+        loadHandlers(hby=hby, exc=closedExc, notifier=recorder,
+                     walkPolicy=WalkPolicies.closed)
 
         baseChild = acdcmap(israid=issuer.pre,
                             attribute=dict(d="", role="member"),
@@ -2825,7 +2829,7 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
         incompatSchemer = Schemer(sed=incompatSchema)
         hby.db.schema.pin(incompatSchemer.said, incompatSchemer)
 
-        def assert_rejected(message, origin, artifacts=None):
+        def assert_rejected(message, origin, artifacts=None, via=exc):
             before = len(recorder.items)
             plan = [[origin.sad["s"]["$id"], "/", []]]
             for idx, artifact in enumerate(artifacts or []):
@@ -2839,15 +2843,16 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                                  modifiers=dict(dp=[plan]))
             ims = bytearray(exn.raw)
             ims.extend(atc)
-            Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
+            Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=via)
             assert ims == bytearray()
             assert hby.db.exns.get(keys=(exn.said,)) is None
             assert hby.db.epse.get(keys=(exn.said,)) is None
             assert len(recorder.items) == before
 
-        # Missing referenced node: the Grant walk is closed, so an undisclosed far
-        # node is refused rather than escrowed -- the nests are fixed bytes and no
-        # later arrival can add one to this Grant.
+        # Missing referenced node: an undisclosed far node is refused rather than
+        # escrowed -- the nests are fixed bytes and no later arrival can add one
+        # to this Grant. The closed walk refuses the graph; the open walk refuses
+        # the sole Edge's non-retryable unknown.
         missingChild = acdcmap(israid=issuer.pre,
                                attribute=dict(d="", role="member"),
                                iseaid=issuer.pre)
@@ -2855,7 +2860,8 @@ def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
                                 attribute=dict(d="", LEI="254900OPPU84GM83MG36"),
                                 edge=_edge("holder", missingChild),
                                 iseaid=subject.pre)
-        assert_rejected("Here is the incomplete DAG", missingOrigin)
+        assert_rejected("Here is the incomplete DAG", missingOrigin, via=closedExc)
+        assert_rejected("Here is the incomplete open DAG", missingOrigin)
 
         # Duplicate disclosed node: one DAG node must not appear twice.
         duplicateChild = acdcmap(israid=issuer.pre,
@@ -3263,6 +3269,68 @@ def test_ipex_v2_rejects_false_aggregate_commitments():
             assert hby.db.epse.get(keys=(grantExn.said,)) is None
 
         assert recorder.items == []
+
+
+@pytest.mark.parametrize("walkPolicy", list(WalkPolicies))
+def test_ipex_v2_grant_refuses_plan_listed_node_it_does_not_nest(walkPolicy):
+    """A node the disclosure plan selects must be nested, under either walk policy.
+
+    The undisclosed branch sits under OR beside a valid sibling, so the open walk
+    and the OR reduction alone would accept it; the plan check is what refuses.
+    """
+    with openHby(name=f"ipex-v2-plan-listed-not-nested-{walkPolicy}",
+                 base="test",
+                 version=Vrsn_2_0) as hby:
+        issuer = hby.makeHab(name="issuer")
+        subject = hby.makeHab(name="subject")
+
+        recorder = Recorder()
+        exc = Exchanger(hby=hby, handlers=[])
+        loadHandlers(hby=hby, exc=exc, notifier=recorder, walkPolicy=walkPolicy)
+
+        present = acdcmap(israid=issuer.pre,
+                          attribute=dict(d="", role="present"),
+                          iseaid=issuer.pre)
+        withheld = acdcmap(israid=issuer.pre,
+                           attribute=dict(d="", role="withheld"),
+                           iseaid=issuer.pre)
+        origin = acdcmap(israid=issuer.pre,
+                         attribute=dict(d="", LEI="254900OPPU84GM83MG36"),
+                         edge=dict(d="",
+                                   either=dict(d="",
+                                               o="OR",
+                                               present=dict(d="", n=present.said,
+                                                            o="I2I"),
+                                               withheld=dict(d="", n=withheld.said,
+                                                             o="I2I"))),
+                         iseaid=subject.pre)
+
+        def send(message, plan):
+            exn, atc = ipexGrant(hab=issuer,
+                                 recp=subject.pre,
+                                 message=message,
+                                 origin=_signed(origin, issuer),
+                                 artifacts=[_signed(present, issuer)],
+                                 modifiers=dict(dp=[plan]))
+            ims = bytearray(exn.raw)
+            ims.extend(atc)
+            Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
+            assert ims == bytearray()
+            assert hby.db.epse.get(keys=(exn.said,)) is None
+            return exn
+
+        rootPlan = [origin.sad["s"]["$id"], "/", []]
+        presentPlan = [present.sad["s"]["$id"], "/e/either/present/_/", []]
+        withheldPlan = [withheld.sad["s"]["$id"], "/e/either/withheld/_/", []]
+
+        listed = send("Plan lists the withheld node",
+                      [rootPlan, presentPlan, withheldPlan])
+        assert hby.db.exns.get(keys=(listed.said,)) is None
+
+        # Control: without the plan entry, only the walk policy decides.
+        unlisted = send("Plan omits the withheld node", [rootPlan, presentPlan])
+        accepted = hby.db.exns.get(keys=(unlisted.said,)) is not None
+        assert accepted == (walkPolicy == WalkPolicies.open)
 
 
 @pytest.mark.parametrize("carryMetadata", [False, True])
@@ -10116,7 +10184,8 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
                                              f"{path}{label}/_/", []])
                 return plan
 
-            def run(originStream, artifacts, message, originSerder=None):
+            def run(originStream, artifacts, message, originSerder=None,
+                    walkPolicy=WalkPolicies.open):
                 """Parse one grant and return its exn.
 
                 A multi-node grant carries an explicit disclosure plan, derived from
@@ -10125,7 +10194,7 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
                 recorder = Recorder()
                 exc = Exchanger(hby=recipientHby, handlers=[])
                 loadHandlers(hby=recipientHby, exc=exc, notifier=recorder,
-                             rgy=recipientRgy)
+                             rgy=recipientRgy, walkPolicy=walkPolicy)
                 modifiers = (dict(dp=[planFor(originSerder, artifacts)])
                              if artifacts else None)
                 exn, atc = ipexGrant(hab=issuerHab,
@@ -10140,10 +10209,11 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
                 assert ims == bytearray()
                 return exn
 
-            def accepted(edge, artifacts, message, schema=None):
+            def accepted(edge, artifacts, message, schema=None,
+                         walkPolicy=WalkPolicies.open):
                 originSerder = origin(edge, schema=schema)
                 exn = run(_signed(originSerder, issuerHab), artifacts, message,
-                          originSerder=originSerder)
+                          originSerder=originSerder, walkPolicy=walkPolicy)
                 assert recipientHby.db.exns.get(keys=(exn.said,)) is not None
                 assert recipientHby.db.epse.get(keys=(exn.said,)) is None
                 return exn
@@ -10155,10 +10225,11 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
                 assert recipientHby.db.exns.get(keys=(exn.said,)) is None
                 assert recipientHby.db.epse.get(keys=(exn.said,)) is not None
 
-            def refused(edge, artifacts, message, schema=None):
+            def refused(edge, artifacts, message, schema=None,
+                        walkPolicy=WalkPolicies.open):
                 originSerder = origin(edge, schema=schema)
                 exn = run(_signed(originSerder, issuerHab), artifacts, message,
-                          originSerder=originSerder)
+                          originSerder=originSerder, walkPolicy=walkPolicy)
                 assert recipientHby.db.exns.get(keys=(exn.said,)) is None
                 assert recipientHby.db.epse.get(keys=(exn.said,)) is None
                 return exn
@@ -10212,17 +10283,25 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
             })
             simpleSchema = edgeSchema({"compact": {"type": "string"}})
 
-            # The Grant walk is closed: its nests are fixed bytes, so an
-            # undisclosed far node can never arrive for this Grant. It is refused
-            # outright, under OR as under AND, rather than escrowed.
+            # A Grant's nests are fixed bytes, so an undisclosed far node can
+            # never arrive for this Grant and nothing escrows under either walk
+            # policy. Open (the default) makes it a non-retryable unknown member:
+            # a valid OR sibling accepts, AND refuses. Closed refuses the graph.
+            accepted(dict(d="", either=group("OR", a=leaf(good),
+                                             b=leaf(undisclosed))),
+                     [goodNest],
+                     "OR beside an undisclosed far node, open walk")
             refused(dict(d="", either=group("OR", a=leaf(good),
                                             b=leaf(undisclosed))),
                     [goodNest],
-                    "OR beside an undisclosed far node")
-            refused(dict(d="", both=group("AND", a=leaf(good),
-                                          b=leaf(undisclosed))),
-                    [goodNest],
-                    "AND over an undisclosed far node")
+                    "OR beside an undisclosed far node, closed walk",
+                    walkPolicy=WalkPolicies.closed)
+            for walkPolicy in WalkPolicies:
+                refused(dict(d="", both=group("AND", a=leaf(good),
+                                              b=leaf(undisclosed))),
+                        [goodNest],
+                        f"AND over an undisclosed far node, {walkPolicy} walk",
+                        walkPolicy=walkPolicy)
 
             # The schema declares this string to be an opaque compact Edge-block.
             # A satisfied sibling may carry the OR group without guessing that the
@@ -10240,11 +10319,12 @@ def test_ipex_v2_reduces_far_node_status_inside_the_edge_operator():
                      "simple Edge to a disclosed far node",
                      schema=simpleSchema)
 
-            # ...and the closed walk refuses one whose far node is undisclosed.
-            refused(dict(d="", compact=undisclosed.said),
-                    [goodNest],
-                    "simple Edge to an undisclosed far node",
-                    schema=simpleSchema)
+            # ...and either walk refuses a sole Edge whose far node is undisclosed.
+            for walkPolicy in WalkPolicies:
+                refused(dict(d="", compact=undisclosed.said),
+                        [goodNest],
+                        f"simple Edge to an undisclosed far node, {walkPolicy} walk",
+                        schema=simpleSchema, walkPolicy=walkPolicy)
 
             refused(dict(d="", w=1, holder=leaf(good)),
                     [goodNest],
@@ -10713,10 +10793,22 @@ def test_pending_grant_refuses_missing_authority(fresh_issuance, fault):
     assert hby.db.exrs.get((message.said, acdc.said)) is None
 
 
-@pytest.mark.parametrize("fault", [None, "dangling", "invalid-proof"])
-def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault):
-    """OR cannot accept a fresh registry, and a pending node cannot hide bad edges."""
+@pytest.mark.parametrize(("fault", "walkPolicy"), [
+    (None, WalkPolicies.open),
+    ("dangling", WalkPolicies.open),
+    ("dangling", WalkPolicies.closed),
+    ("invalid-proof", WalkPolicies.open),
+])
+def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault, walkPolicy):
+    """OR cannot accept a fresh registry, and a pending node cannot hide bad edges.
+
+    A dangling Edge on the fresh node is an undisclosed far node: the closed walk
+    refuses the Grant, while the open walk lets the satisfied OR sibling carry it.
+    """
     hby, issuer, issuee, rgy, registrar, registry, acdc, exc, kvy = fresh_issuance
+    exc.routes["/ipex/grant"].walkPolicy = walkPolicy
+    refused = fault == "invalid-proof" or (
+        fault == "dangling" and walkPolicy == WalkPolicies.closed)
     if fault == "dangling":
         acdc = acdcmap(israid=issuer.pre, iseaid=issuee.pre, regid=registry.regk,
                        attribute=dict(d="", role="member"),
@@ -10746,8 +10838,8 @@ def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault):
     _receive_ipex(exc, message, atc, kvy)
     context = exc.pendingGrant(message.said, xid=message.said,
                                sender=issuer.pre, recipient=issuee.pre)
-    assert (context is None) == (fault is not None)
-    if fault is None:
+    assert (context is None) == refused
+    if not refused:
         assert context[1] == (registry.regk,)
     assert hby.db.exns.get((message.said,)) is None
     assert list(hby.db.exrs.getTopItemIter(keys=(message.said,))) == []
@@ -10767,7 +10859,7 @@ def test_pending_candidate_evaluates_edges_even_under_or(fresh_issuance, fault):
         assert hby.db.epse.get((message.said,)) is None
 
 
-def test_verify_selection_checks_exact_closed_graph_without_writes(fresh_issuance):
+def test_verify_selection_checks_exact_graph_without_writes(fresh_issuance):
     """Selected node bytes get the ordinary graph verdict before any Grant exists."""
     hby, issuer, issuee, rgy, registrar, registry, acdc, exc, _ = fresh_issuance
     opening, update = registrar.issue(registry, acdc=acdc, state="issued")
@@ -10795,10 +10887,22 @@ def test_verify_selection_checks_exact_closed_graph_without_writes(fresh_issuanc
     assert records[acdc.said].regid == registry.regk
     assert records[acdc.said].state == "issued"
 
-    # The graph must be closed, rooted at the first node and fully reachable.
+    # The graph must be rooted at the first node and fully reachable.
     assert handler.verifySelection([])[0].verdict == Verdicts.invalid
-    assert handler.verifySelection(selected[:2])[0].verdict == Verdicts.invalid
     assert handler.verifySelection(selected[::-1])[0].verdict == Verdicts.invalid
+    # An omitted far node follows the handler's walk policy, as a Grant would:
+    # open (default) leaves the required Edge a non-retryable unknown, closed
+    # refuses the selection. Neither is ever retryable.
+    assert handler.walkPolicy == WalkPolicies.open
+    omitted = handler.verifySelection(selected[:2])[0]
+    assert omitted.verdict == Verdicts.unknown
+    assert omitted.retryable is False
+    handler.walkPolicy = WalkPolicies.closed
+    assert handler.verifySelection(selected[:2])[0].verdict == Verdicts.invalid
+    handler.walkPolicy = WalkPolicies.open
+    with pytest.raises(ValueError, match="walk policy"):
+        IpexHandler(resource="/ipex/grant", hby=hby, notifier=Recorder(),
+                    walkPolicy="ajar")
     # A wrong signer fails the same issuer-auth check used for a received Grant.
     forged = [selected[0], parsed(_signed(ready, issuee)), selected[2]]
     assert handler.verifySelection(forged)[0].verdict == Verdicts.invalid
@@ -10840,7 +10944,7 @@ def test_pending_discovery_preserves_optional_missing_registry(fresh_issuance, f
     parsed = Parser(version=Vrsn_2_0).parse(
         ims=bytearray(message.raw + atc), framed=False, processive=False)[0]
     handler = exc.routes["/ipex/grant"]
-    nodes, _ = handler._walkGraph(origin.said, parsed.nests, closed=True)
+    nodes, _ = handler._walkGraph(origin.said, parsed.nests, walkPolicy=WalkPolicies.closed)
     assert handler._evaluateNode(origin.said, nodes=nodes, memo={}).verdict == Verdicts.valid
     _receive_ipex(exc, message, atc)
     assert (hby.db.exns.get((message.said,)) is not None) == (not fresh)

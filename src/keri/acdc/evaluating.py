@@ -21,7 +21,7 @@ so it returns None rather than entering the Kleene lattice where a satisfied OR
 sibling could outvote it.
 """
 
-from collections import deque
+from collections import deque, namedtuple
 from collections.abc import Mapping
 from copy import deepcopy
 
@@ -53,6 +53,31 @@ IssuerIdentityEdgeOps = ("I1I", "DI1I")
 # node, NI2I otherwise). An explicit I1I or DI1I suppresses it too, so neither
 # requires either ACDC to have an issuee.
 DefaultSuppressingEdgeOps = DelegativeEdgeOps + ("E1E",) + IssuerIdentityEdgeOps
+
+# How a walk treats a far node that an Edge names but the disclosure does not carry.
+# A disclosure's nests are fixed bytes, so nothing can deliver that node later and
+# its absence is never retryable (no MissingChainError, no escrow).
+#   open:   the walk accepts the graph and the missing far node evaluates to a
+#           non-retryable unknown, so an OR group with a valid sibling accepts while
+#           an AND group or a sole Edge refuses.
+#   closed: the walk refuses the graph outright.
+# Either way a node a disclosure plan selects must be carried; that is the plan
+# check's rule, not the walk's.
+WalkPolicyDex = namedtuple("WalkPolicyDex", "open closed")
+WalkPolicies = WalkPolicyDex(open="open", closed="closed")
+DefaultWalkPolicy = WalkPolicies.open
+
+
+def validateWalkPolicy(walkPolicy):
+    """Return ``walkPolicy`` when it names a WalkPolicies member.
+
+    Raises:
+        ValueError: When ``walkPolicy`` is not ``"open"`` or ``"closed"``.
+    """
+    if walkPolicy not in WalkPolicies:
+        raise ValueError(f"walk policy must be one of {list(WalkPolicies)}, "
+                         f"not {walkPolicy!r}")
+    return walkPolicy
 
 
 def verifyExpandedSection(section, *, kind, label="e"):
@@ -219,7 +244,7 @@ class EdgeEvaluator:
         self.isDelegated = isDelegated
         self.reducers = chaining.MAryReducers if reducers is None else reducers
 
-    def walk(self, origin, *, nodes, closed):
+    def walk(self, origin, *, nodes, walkPolicy=DefaultWalkPolicy):
         """Validate and walk a disclosed ACDC graph in breadth-first order.
 
         The walk verifies Edge Section commitments and shapes and follows expanded
@@ -234,17 +259,20 @@ class EdgeEvaluator:
         Parameters:
             origin (str): SAID of the disclosed graph's root ACDC.
             nodes (Mapping): ACDC SAID to parsed nest or nest-like object mapping.
-            closed (bool): True requires every far node an Edge references to be
-                disclosed; False permits undisclosed far nodes.
+            walkPolicy (str): ``WalkPolicies.closed`` requires every far node an
+                Edge references to be disclosed; ``WalkPolicies.open`` permits
+                undisclosed far nodes.
 
         Returns:
             list[str] | None: Breadth-first node SAIDs, or None when the graph,
                 an Edge Section, or a reference is malformed or violates closure.
 
         Raises:
+            ValueError: When ``walkPolicy`` is not a WalkPolicies member.
             MissingSchemaError: When classifying a string Edge member needs a
                 near-node schema that is not cached.
         """
+        closed = validateWalkPolicy(walkPolicy) == WalkPolicies.closed
         if not isinstance(nodes, Mapping) or not _validSaid(origin):
             return None
         if origin not in nodes:
@@ -330,7 +358,7 @@ class EdgeEvaluator:
             return None
         return order
 
-    def evaluate(self, origin, *, nodes, records=None, closed=False):
+    def evaluate(self, origin, *, nodes, records=None, walkPolicy=DefaultWalkPolicy):
         """Walk and evaluate a disclosed graph rooted at ``origin`` to one verdict.
 
         Parameters:
@@ -338,14 +366,15 @@ class EdgeEvaluator:
             nodes (Mapping): ACDC SAID to parsed nest or nest-like object mapping.
             records (dict | None): Optional caller-owned collection populated by
                 the node-authentication adapter.
-            closed (bool): Passed to ``walk``. False lets an undisclosed far node
-                enter its Edge-group as a retryable unknown member.
+            walkPolicy (str): Passed to ``walk``. ``WalkPolicies.open`` lets an
+                undisclosed far node enter its Edge-group as a non-retryable
+                unknown member; ``WalkPolicies.closed`` refuses the graph.
 
         Returns:
             EdgeVerdict | None: Root verdict, or None when the disclosed graph or
                 any Edge shape is malformed.
         """
-        if self.walk(origin, nodes=nodes, closed=closed) is None:
+        if self.walk(origin, nodes=nodes, walkPolicy=walkPolicy) is None:
             return None
 
         return self.evaluateNode(origin, nodes=nodes, memo={}, records=records)
@@ -524,10 +553,11 @@ class EdgeEvaluator:
                 f"unimplemented unary Operator NOT on edge to node {edgeSaid}",
                 retryable=False))
 
+        # The disclosure's bytes are fixed, so nothing outside it can supply this
+        # far node later: undecided, and not retryable.
         if edgeSaid not in nodes:
-            reason = f"edge is missing far node {edgeSaid}"
             relations.append(chaining.unknown(
-                reason, retryable=True, cause=MissingChainError(reason)))
+                f"edge is missing undisclosed far node {edgeSaid}", retryable=False))
             return chaining.reduceAnd(relations)
 
         fserder = _nestSerder(nodes[edgeSaid])
