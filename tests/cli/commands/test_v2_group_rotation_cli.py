@@ -1,5 +1,6 @@
 """Independent accepted group rotations precede a later installed issuance."""
 import hashlib
+import json
 import shutil
 import subprocess
 import time
@@ -102,6 +103,16 @@ def rotate_party(tmp_path, party, actors, label):
                 time.sleep(.03)
             assert all(p.returncode == 0 for p in processes), '\n'.join(p.read_text() for p in logs)
             assert 'Group Multisig Rotation proposed' in logs[1].read_text()
+            # Both signers held a prior key and the root, so each re-seals it to the other's rotated key.
+            # The issuer peer holds only a received copy, with no Grant or opening to derive a
+            # verification hint from, so it reports its copy unsent instead of sending one that
+            # cannot verify; the proposer's copy still reaches it.
+            for log, recipient, sent in zip(logs, (party[1], party[0]), (True, label != 'issuer')):
+                copies = [json.loads(line) for line in log.read_text().splitlines()
+                          if line.startswith('{') and '"root_copy"' in line]
+                assert [(item['gid'], item['recipient'], item['transmitted']) for item in copies] == [
+                    (party[0]['pre'], recipient['member'], sent)], log.read_text()
+                assert sent or 'no held opening or stored Grant' in copies[0]['error']
         finally:
             for process in processes:
                 if process.poll() is None:

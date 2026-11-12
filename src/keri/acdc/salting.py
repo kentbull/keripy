@@ -244,11 +244,13 @@ class RegistryRoot:
             raise ValidationError("sender is not a historical holder member or registry issuer")
         return rip
 
-    def newcomers(self, ghab, rotation):
+    def newcomers(self, ghab, rotation, *, rekeyed=False):
         """Return current signing member AIDs added by one accepted group rotation.
 
         Members, not keys, are compared: a continuing member usually rotates
-        its own key, so it contributes to both establishments. Candidates are
+        its own key, so it contributes to both establishments. ``rekeyed``
+        also returns continuing members whose contributing key changed, the
+        recipients a re-seal must reach under their new key. Candidates are
         the AIDs with accepted key state in this Habery.
         """
         if not isinstance(ghab, GroupHab) or ghab.db is not self.hby.db:
@@ -267,10 +269,33 @@ class RegistryRoot:
             if aid == pre or kever is None:
                 continue
             added = kever.fetchLatestContribTo(verfers=event.verfers)
-            if (added is not None and kever.fetchLatestContribTo(verfers=prior.verfers) is None
-                    and self._current(aid, pre)):
+            before = kever.fetchLatestContribTo(verfers=prior.verfers)
+            if (added is not None and self._current(aid, pre)
+                    and (before is None or rekeyed and before[2].qb64 != added[2].qb64)):
                 found.append((added[1], aid))
         return [aid for _, aid in sorted(found)]
+
+    def resealed(self, ghab, rotation):
+        """Return the members ``ghab``'s local member re-seals held roots to after ``rotation``.
+
+        Only a signer of the accepted rotation that held a key in the prior
+        establishment sends, and it sends to each current signing member that
+        is new in the rotation or whose contributing key changed (``newcomers``
+        with ``rekeyed``). Every such signer sends: copies are idempotent, so
+        no single sender is elected. An empty list means nothing is owed.
+        """
+        from ..core.eventing import verifySigs
+        recipients = self.newcomers(ghab, rotation, rekeyed=True)
+        db, mkever = self.hby.db, ghab.mhab.kever
+        event = db.evts.get(keys=(ghab.pre, rotation))
+        prior = ghab.kvy.fetchEstEvent(ghab.pre, event.sn - 1)
+        own = mkever.fetchLatestContribTo(verfers=event.verfers)
+        if own is None or mkever.fetchLatestContribTo(verfers=prior.verfers) is None:
+            return []
+        _, indices = verifySigs(event.raw, db.sigs.get(keys=(ghab.pre, rotation)), event.verfers)
+        if own[1] not in indices:
+            return []
+        return [aid for aid in recipients if aid != ghab.mhab.pre]
 
     def members(self, gid):
         """Return the current signing member AIDs of ``gid`` known to this Habery."""
