@@ -13,7 +13,7 @@ from copy import deepcopy
 from hio.help import ogler
 
 from .. import Kinds, Protocols
-from . import chaining, relating
+from . import chaining
 from ..kering import (Colds, DuplicitousRegistryError, FailedSchemaValidationError,
                       Ilks, KeriError, MisanchorError, MisbindingError,
                       MissingAnchorError, MissingChainError, MissingSchemaError,
@@ -24,6 +24,7 @@ from ..core import (Aggor, BlindState, Blinder, BoundState, Counter,
                     Codens, Diger, GenDex, Number, Pather, Prefixer, Parser,
                     Saider, Schemer, SealEvent, SealSource, SerderACDC, Serdery,
                     Texter, exchange, exchept, messagize)
+from ..core.eventing import delegationRefusal
 from ..peer.exchanging import (cloneMessage, loadParsedNestedSubstreams,
                                verifyAttachments)
 from ..recording import ExchangeRegistryStateRecord
@@ -1822,7 +1823,7 @@ class IpexHandler:
 
         # DI2I widens I2I: the near issuer may be the far Issuee or "a delegated AID"
         # of it, at any depth (ACDC spec, Edge Section > Edge > Operator, `o` field).
-        # The climb is shared with the v1 Verifier through acdc.relating, so the two
+        # The climb is shared with the v1 Verifier through core.eventing, so the two
         # paths cannot answer it differently. A decided refusal -- a chain that ends
         # without meeting the far Issuee, or a delegator carrying DND -- knocks the
         # edge down. A KEL or anchoring seal the climb needs and does not yet have is
@@ -1834,8 +1835,8 @@ class IpexHandler:
                 reason = (f"{dop} edge to node {edgeSaid} requires a targeted far "
                           f"node, which has no issuee")
             elif nserder.israid != fserder.iseaid:
-                refusal = relating.delegationRefusal(self.hby.kevers, self.hby.db,
-                                                     nserder.israid, fserder.iseaid)
+                refusal = delegationRefusal(self.hby.kevers, self.hby.db,
+                                            nserder.israid, fserder.iseaid)
                 if refusal is None:
                     delegationPending = chaining.unknown(
                         f"DI2I edge to node {edgeSaid} waits on KEL evidence that "
