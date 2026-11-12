@@ -1727,6 +1727,78 @@ def test_verifier_di2i_delegated_issuer_edge(seeder):
     """End Test"""
 
 
+def test_verifier_issuer_identity_operators(seeder):
+    """I1I and DI1I on the v1 Verifier match acdc.evaluating on identical relations.
+
+    I1I requires the near issuer to equal the far node's issuer; DI1I widens that to
+    an anchored delegated descendant of the far issuer. Both suppress the default
+    rule, so neither needs an issuee. Refusals raise EdgeRefusalError; missing KEL or
+    anchor evidence is pending (None), and a pending DI1I never hides a refusal from
+    another relation on the same edge.
+    """
+    with openHby(name="i1i", salt=DI2I_SALT, temp=True, version=Vrsn_1_0) as hby, \
+            openHby(name="i1i-stranger", salt=DI2I_SALT, temp=True,
+                    version=Vrsn_1_0) as strangerHby:
+        seeder.seedSchema(db=hby.db)
+
+        gar = hby.makeHab(name="gar", version=Vrsn_1_0, kind=Kinds.json)
+        qvi = hby.makeHab(name="qvi", version=Vrsn_1_0, kind=Kinds.json)
+        sub = hby.makeHab(name="sub", delpre=gar.pre, version=Vrsn_1_0, kind=Kinds.json)
+        anchorApproval(gar, sub)
+        unapproved = hby.makeHab(name="unapproved", delpre=gar.pre,
+                                 version=Vrsn_1_0, kind=Kinds.json)
+        bounded = hby.makeHab(name="bounded", delpre=gar.pre, DnD=True,
+                              version=Vrsn_1_0, kind=Kinds.json)
+        anchorApproval(gar, bounded)
+        beyond = hby.makeHab(name="beyond", delpre=bounded.pre, version=Vrsn_1_0,
+                             kind=Kinds.json)
+        anchorApproval(bounded, beyond)
+        rogue = hby.makeHab(name="rogue", delpre=qvi.pre, version=Vrsn_1_0,
+                            kind=Kinds.json)
+        anchorApproval(qvi, rogue)
+        stranger = strangerHby.makeHab(name="stranger", version=Vrsn_1_0,
+                                       kind=Kinds.json)
+
+        regery = Regery(hby=hby, name="i1i", temp=True)
+        garreg = setupRegistry(gar, regery, "gar")
+        verfer = Verifier(hby=hby, reger=regery.reger)
+        garIssue = makeIssueAndSave(verfer, regery, gar, garreg)
+
+        far = makeCred(gar, garreg, issuee=qvi.pre, claim="far")
+        garIssue(far)
+        untargeted = makeCred(gar, garreg, claim="untargeted far")
+        garIssue(untargeted)
+        assert untargeted.iseaid is None
+
+        # I1I: equal issuers, with no issuee needed on either side.
+        assert verfer.verifyChain(far.said, "I1I", issuer=gar.pre) is not None
+        assert verfer.verifyChain(untargeted.said, "I1I", issuer=gar.pre) is not None
+        with pytest.raises(EdgeRefusalError, match="requires equal issuers"):
+            verfer.verifyChain(far.said, "I1I", issuer=sub.pre)
+
+        # DI1I: equal, or an anchored delegated descendant of the far issuer.
+        assert verfer.verifyChain(far.said, "DI1I", issuer=gar.pre) is not None
+        assert verfer.verifyChain(far.said, "DI1I", issuer=sub.pre) is not None
+        with pytest.raises(EdgeRefusalError, match="is not delegated"):
+            verfer.verifyChain(far.said, "DI1I", issuer=rogue.pre)
+        with pytest.raises(EdgeRefusalError, match="carries DND"):
+            verfer.verifyChain(far.said, "DI1I", issuer=beyond.pre)
+        assert verfer.verifyChain(far.said, "DI1I", issuer=unapproved.pre) is None
+        assert verfer.verifyChain(far.said, "DI1I", issuer=stranger.pre) is None
+
+        # Latest wins inside the issuer-identity group only.
+        assert verfer.verifyChain(far.said, ["I1I", "DI1I"], issuer=sub.pre) is not None
+        with pytest.raises(EdgeRefusalError, match="requires equal issuers"):
+            verfer.verifyChain(far.said, ["DI1I", "I1I"], issuer=sub.pre)
+
+        # It composes with the delegative group: a pending DI1I does not escrow an
+        # edge whose I2I is already refused.
+        with pytest.raises(EdgeRefusalError, match="I2I edge"):
+            verfer.verifyChain(far.said, ["DI1I", "I2I"], issuer=unapproved.pre)
+
+    """End Test"""
+
+
 def test_verifier_di2i_aggregate_far_node(seeder):
     """DI2I resolves an aggregate ('acg') far node's issuee via .iseaid.
 
@@ -2965,14 +3037,15 @@ def test_verifier_unknown_edge_operator_fails_closed():
         verfer = Verifier(hby=ianHby)
 
         # A token outside the recognized set, alone and alongside a recognized one.
-        # The list case matters most: dropping one member of ['NI2I', 'I1I'] leaves a
-        # list that looks fully understood.
+        # The list case matters most: dropping one member of ['NI2I', 'X1X'] leaves a
+        # list that looks fully understood. (I1I, once the example here, is now
+        # recognized and evaluated -- see test_verifier_issuer_identity_operators.)
         with pytest.raises(UnsupportedOperatorError):
-            verfer.verifyChain(unsavedSaid, 'I1I', ian.pre)
+            verfer.verifyChain(unsavedSaid, 'X1X', ian.pre)
         with pytest.raises(UnsupportedOperatorError):
-            verfer.verifyChain(unsavedSaid, ['NI2I', 'I1I'], ian.pre)
+            verfer.verifyChain(unsavedSaid, ['NI2I', 'X1X'], ian.pre)
         with pytest.raises(UnsupportedOperatorError):
-            verfer.verifyChain(unsavedSaid, ['I1I'], ian.pre)
+            verfer.verifyChain(unsavedSaid, ['X1X'], ian.pre)
 
         # Absent and empty are not unknown: the spec applies the default rule to both
         # (ACDC spec, Edge Section > Edge > Operator, `o` field). Each therefore
