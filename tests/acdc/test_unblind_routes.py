@@ -208,7 +208,8 @@ def test_separate_discloser_root_copy_repairs_exact_grant_without_changing_admit
         recipient = salting.loadHandlers(discloser.hby, discloser.exc, None, discloser.rgy)
         opening = Blinder(data=BlindState(*selected.bsqs[0]), verify=False)
         root_copy = RegistryRoot(issuer.hby, issuer.rgy).prepare(
-            issuer.hab, discloser.hab.pre, discloser.hab.pre, registry.regk, event=event1.said)
+            issuer.hab, discloser.hab.pre, discloser.hab.pre, registry.regk, event=event1.said,
+            td='')
         assert root.qb64b not in root_copy
         receive(discloser, root_copy)
         (pending,) = recipient.pending()

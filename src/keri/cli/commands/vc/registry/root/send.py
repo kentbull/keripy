@@ -15,6 +15,6 @@ parser.add_argument('--recipient', action='append',
                     help='individual member AID or alias; repeatable. A group alias defaults to its other current members')
 parser.add_argument('--holder', help='AID the root is held for (defaults to the group alias, else the recipient)')
 parser.add_argument('--event', help='accepted BUP SAID hint (defaults to the registry head)')
-parser.add_argument('--acdc', help='ACDC SAID hint for commitment reproduction by a recipient without an opening')
+parser.add_argument('--acdc', help='ACDC SAID hint overriding the one derived per registry from a held opening or stored Grant')
 parser.add_argument('--out', help='exclusive-create file for the signed exn instead of mailbox delivery')
 parser.add_argument('--timeout', type=float, default=60.0, help='finite whole-operation wait')
