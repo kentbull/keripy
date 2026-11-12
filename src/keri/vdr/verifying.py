@@ -64,7 +64,9 @@ class Verifier:
     # E1E is normative on the spec's v1.1 branch (kswg-acdc-specification#197). It is
     # absent from the 1.0 text currently under ToIP ratification, so a validator built
     # against 1.0 alone will not recognize it.
-    UnaryOps = ('I2I', 'NI2I', 'DI2I', 'E1E', 'NOT')
+    # I1I and DI1I are the SEDI issuer-identity operators (discussion #1515), kept in
+    # parity with acdc.evaluating so the two stacks answer identical bytes alike.
+    UnaryOps = ('I2I', 'NI2I', 'DI2I', 'E1E', 'I1I', 'DI1I', 'NOT')
 
     # The delegative subset of .UnaryOps: each constrains the near ACDC's issuer
     # relative to the far node's issuee, so they are mutually exclusive and a list
@@ -72,11 +74,16 @@ class Verifier:
     # subset constrain something else and compose with the winner instead.
     DelegativeOps = ('I2I', 'NI2I', 'DI2I')
 
+    # The issuer-identity subset of .UnaryOps: each constrains the near ACDC's issuer
+    # relative to the far node's *issuer*, so they conflict with one another (latest
+    # wins) and compose with the delegative winner and with E1E.
+    IssuerIdentityOps = ('I1I', 'DI1I')
+
     # Unary operators whose presence suppresses the default rule, per the spec's
     # three-part condition -- see .verifyChain. E1E is in the set because it
     # constrains the near issuee, which is a relation the default would otherwise
     # add a second, conflicting one alongside.
-    DefaultSuppressingOps = ('I2I', 'NI2I', 'DI2I', 'E1E')
+    DefaultSuppressingOps = ('I2I', 'NI2I', 'DI2I', 'E1E', 'I1I', 'DI1I')
 
     # M-ary (aggregating) Operators from the ACDC spec's normative Edge-group table
     # (spec-body.md, "##### Operator, `o` field" under "#### Edge-group"). These
@@ -275,8 +282,8 @@ class Verifier:
         # Schema pins in force at each walked path. An Edge-group MAY carry `s`, a
         # schema every edge below it must satisfy -- a keripy extension, since ACDC
         # reserves [d, u, o, w] on a group and defines no `s` there, that the v2 IPEX
-        # path also honours and inherits (see acdc/ipexing.py, EdgeGroupLabels and
-        # ._evaluateGroupEdge). Read at every depth on both paths, the Edge Section
+        # path also honours and inherits (see acdc/evaluating.py, EdgeGroupLabels and
+        # EdgeEvaluator._evaluateGroupEdge). Read at every depth on both paths, the Edge Section
         # included, because the Section is itself an Edge-group.
         pins = {}
         members = {}  # path of an Edge-group -> its members' verdicts, in order
@@ -799,7 +806,8 @@ class Verifier:
                 I2I for a targeted far node, NI2I for an untargeted one.
             issuer (str) qb64 AID of the issuer of the near (edge-bearing) ACDC. The
                 delegative operators (I2I, DI2I) constrain this against the far node's
-                issuee.
+                issuee, and the issuer-identity operators (I1I, DI1I) against its
+                issuer.
             issuee (str|None): qb64 AID of the issuee of the near (edge-bearing) ACDC,
                 required by the identity operators (E1E). None when the near ACDC is
                 untargeted.
@@ -809,8 +817,8 @@ class Verifier:
                 edge cannot be decided yet because evidence is missing -- the far
                 node is not saved, its issuee indexes no saved credential, its
                 registry is not in .tevers, its TEL carries no state for the far
-                SAID, or (DI2I) a key state or delegation anchor the climb needs has
-                not arrived. None is the caller's signal to escrow and retry.
+                SAID, or (DI2I, DI1I) a key state or delegation anchor the climb
+                needs has not arrived. None is the caller's signal to escrow and retry.
 
         Raises:
             EdgeRefusalError: the operator's constraint is decided against evidence
@@ -858,7 +866,7 @@ class Verifier:
         # "When the Operator, `o`, field is missing or empty or is present but does
         # not include any of the I2I, NI2I, DI2I or E1E Operators" the default is
         # appended (spec-body.md). Keyed on that set rather than on the list being
-        # empty, matching acdc.ipexing.DefaultSuppressingEdgeOps, so an `o` carrying
+        # empty, matching acdc.evaluating.DefaultSuppressingEdgeOps, so an `o` carrying
         # only a non-delegative Operator still takes the default the spec appends.
         # No behaviour differs today -- the only recognized non-suppressing token is
         # NOT, which is refused above -- but the two paths encoded the rule
@@ -893,6 +901,34 @@ class Verifier:
                 raise EdgeRefusalError(f"E1E edge to node {nodeSaid} requires equal "
                                        f"issuees; near issuee {issuee} != far issuee "
                                        f"{farIssuee}")
+
+        # Issuer-identity relation (discussion #1515). I1I requires the near issuer
+        # to equal the far node's issuer; DI1I widens that to an anchored delegated
+        # descendant of the far issuer at any depth. Both are read from SADs and
+        # inception events, so a mismatch is refused. A missing key state or anchor
+        # is pending, deferred until every other relation has had the chance to
+        # refuse, so a decided refusal is never escrowed behind it.
+        identityPending = False
+        iop = next((cand for cand in reversed(ops) if cand in self.IssuerIdentityOps),
+                   None)
+        if iop is not None:
+            farIssuer = creder.israid
+            if not issuer or not farIssuer:
+                raise EdgeRefusalError(f"{iop} edge to node {nodeSaid} requires both "
+                                       f"nodes to have issuers")
+            if issuer != farIssuer:
+                if iop == 'I1I':
+                    raise EdgeRefusalError(f"I1I edge to node {nodeSaid} requires "
+                                           f"equal issuers; near issuer {issuer} != "
+                                           f"far issuer {farIssuer}")
+                refusal = delegationRefusal(self.hby.kevers, self.hby.db, issuer,
+                                            farIssuer)
+                if refusal:
+                    raise EdgeRefusalError(f"DI1I edge to node {nodeSaid} requires the "
+                                           f"near issuer {issuer} to be the far issuer "
+                                           f"{farIssuer} or a delegated AID of it; "
+                                           f"{refusal}")
+                identityPending = refusal is None
 
         if op == 'DI2I':
             # Delegated-issuer relation (ACDC spec, Edge Section > Edge > Operator, `o`
@@ -959,6 +995,9 @@ class Verifier:
                 raise EdgeRefusalError(f"I2I edge to node {nodeSaid} requires the near "
                                        f"issuer to be the far issuee; issuer {issuer} "
                                        f"!= far issuee {farIssuee}")
+
+        if identityPending:  # DI1I: evidence the climb needs is missing
+            return None
 
         if creder.regid not in self.tevers:
             return None
