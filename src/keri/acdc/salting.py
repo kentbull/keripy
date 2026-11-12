@@ -20,6 +20,7 @@ retries.
 """
 
 
+from types import SimpleNamespace
 from ..app.habbing import GroupHab, Hab
 from ..core import Blinder, Dater, MtrDex, Number, Prefixer, Salter
 from ..help import helping
@@ -370,18 +371,30 @@ class RegistryRoot:
         return None
 
     def _acdcs(self, registry):
-        """Yield SAIDs of ACDCs in ``registry`` disclosed by locally stored IPEX Grants."""
+        """Yield SAIDs of ACDCs in ``registry`` nested in any locally stored exchange.
+
+        A custodian finds them in its own ``/ipex/grant``; a member holding only
+        a received copy finds them nested in the ``/multisig/exn`` proposal it
+        signed. Nests are walked recursively, so the wrapper depth does not matter.
+        """
         from ..peer.exchanging import loadParsedNestedSubstreams
-        for (said,), serder in self.hby.db.exns.getTopItemIter():
-            if serder.ked.get('r') != '/ipex/grant':
+        for (said,), _ in self.hby.db.exns.getTopItemIter():
+            if not self.hby.db.enst.get(keys=(said,)):
                 continue
             try:
                 nests = loadParsedNestedSubstreams(self.hby, said)
             except (KeriError, ValueError, KeyError):
                 continue
-            for nest in nests:
-                if nest.serder.sad.get('rd') == registry:
-                    yield nest.serder.said
+            yield from self._nested(nests, registry)
+
+    @staticmethod
+    def _nested(nests, registry):
+        for nest in nests:
+            node = SimpleNamespace(**nest) if isinstance(nest, dict) else nest
+            sad = getattr(getattr(node, 'serder', None), 'sad', None) or {}
+            if sad.get('rd') == registry:
+                yield node.serder.said
+            yield from RegistryRoot._nested(getattr(node, 'nests', None) or [], registry)
 
     # receiving
 

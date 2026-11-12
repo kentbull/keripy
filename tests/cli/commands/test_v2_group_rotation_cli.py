@@ -104,10 +104,9 @@ def rotate_party(tmp_path, party, actors, label):
             assert all(p.returncode == 0 for p in processes), '\n'.join(p.read_text() for p in logs)
             assert 'Group Multisig Rotation proposed' in logs[1].read_text()
             # Both signers held a prior key and the root, so each re-seals it to the other's rotated key.
-            # The issuer peer holds only a received copy, with no Grant or opening to derive a
-            # verification hint from, so it reports its copy unsent instead of sending one that
-            # cannot verify; the proposer's copy still reaches it.
-            for log, recipient, sent in zip(logs, (party[1], party[0]), (True, label != 'issuer')):
+            # A member holding only a received copy derives its hint from the Grant nested in the
+            # /multisig/exn proposal it signed, so it re-seals too.
+            for log, recipient, sent in zip(logs, (party[1], party[0]), (True, True)):
                 copies = [json.loads(line) for line in log.read_text().splitlines()
                           if line.startswith('{') and '"root_copy"' in line]
                 assert [(item['gid'], item['recipient'], item['transmitted']) for item in copies] == [
