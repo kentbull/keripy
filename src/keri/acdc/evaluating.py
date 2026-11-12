@@ -38,15 +38,21 @@ from . import chaining, scheming
 EdgeSectionLabels = ("d", "u", "s", "o", "w")
 EdgeGroupLabels = ("d", "u", "s", "o", "w")
 EdgeNodeLabels = ("d", "u", "n", "s", "o", "w")
-UnaryEdgeOps = ("I2I", "NI2I", "DI2I", "E1E", "NOT")
+UnaryEdgeOps = ("I2I", "NI2I", "DI2I", "E1E", "I1I", "DI1I", "NOT")
 
 # The delegative operators constrain the near issuer against the far issuee; they
 # conflict with one another, so the latest of them in `o` wins.
 DelegativeEdgeOps = ("I2I", "NI2I", "DI2I")
 
+# The SEDI issuer-identity operators (WebOfTrust/keripy discussion #1515) constrain
+# the near issuer against the far *issuer*. They form their own latest-wins
+# conflict group, independent of the delegative one and of E1E.
+IssuerIdentityEdgeOps = ("I1I", "DI1I")
+
 # Unary operators whose presence suppresses the default rule (I2I for a targeted far
-# node, NI2I otherwise).
-DefaultSuppressingEdgeOps = DelegativeEdgeOps + ("E1E",)
+# node, NI2I otherwise). An explicit I1I or DI1I suppresses it too, so neither
+# requires either ACDC to have an issuee.
+DefaultSuppressingEdgeOps = DelegativeEdgeOps + ("E1E",) + IssuerIdentityEdgeOps
 
 
 def verifyExpandedSection(section, *, kind, label="e"):
@@ -409,11 +415,11 @@ class EdgeEvaluator:
         """Map one delegation query to a relation verdict.
 
         Parameters:
-            operator (str): Delegated Operator token, for the verdict reason.
+            operator (str): DI2I or DI1I, for the verdict reason.
             edgeSaid (str): Far-node SAID, for the verdict reason.
             nearIssuer (str): Near ACDC issuer AID.
             ancestor (str): Far AID the near issuer must descend from.
-            role (str): Far AID's role (``issuee`` for DI2I), for the reason.
+            role (str): ``issuee`` or ``issuer``, naming the far AID's role.
 
         Returns:
             EdgeVerdict: valid when delegation is proven, invalid when it is
@@ -542,9 +548,12 @@ class EdgeEvaluator:
         # Latest-wins applies only among conflicting Operators, so each conflict
         # group keeps its own last member and the groups compose by AND.
         delegativeOperator = None
+        issuerIdentityOperator = None
         for item in operators:
             if item in DelegativeEdgeOps:
                 delegativeOperator = item
+            if item in IssuerIdentityEdgeOps:
+                issuerIdentityOperator = item
 
         if "E1E" in operators:
             if (nserder.iseaid and fserder.iseaid
@@ -585,6 +594,26 @@ class EdgeEvaluator:
             else:
                 relations.append(self._delegation(
                     "DI2I", edgeSaid, nearIssuer, farIssuee, "issuee"))
+
+        # I1I: equal issuers. DI1I widens it to an anchored delegated descendant
+        # of the far issuer, at any depth.
+        if issuerIdentityOperator is not None:
+            nearIssuer, farIssuer = nserder.israid, fserder.israid
+            if not nearIssuer or not farIssuer:
+                relations.append(chaining.invalid(
+                    f"{issuerIdentityOperator} edge to node {edgeSaid} requires "
+                    f"both nodes to have issuers"))
+            elif nearIssuer == farIssuer:
+                relations.append(chaining.valid(
+                    f"{issuerIdentityOperator} edge to node {edgeSaid} has equal "
+                    f"issuers"))
+            elif issuerIdentityOperator == "I1I":
+                relations.append(chaining.invalid(
+                    f"I1I edge to node {edgeSaid} requires equal issuers; near "
+                    f"issuer {nearIssuer} != far issuer {farIssuer}"))
+            else:
+                relations.append(self._delegation(
+                    "DI1I", edgeSaid, nearIssuer, farIssuer, "issuer"))
 
         relation = (chaining.reduceAnd(relations) if relations else
                     chaining.valid(f"edge to node {edgeSaid} satisfies its Operator"))

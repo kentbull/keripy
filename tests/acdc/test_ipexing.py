@@ -2692,6 +2692,117 @@ def test_ipex_v2_accepts_grant_graph_shape_and_semantics():
         assert unevaluable.retryable is False
 
 
+def test_ipex_v2_issuer_identity_operator_dispositions():
+    """IPEX accepts, refuses, or escrows issuer-identity edge results."""
+    with openHby(name="ipex-v2-issuer-identity-operators",
+                 base="test", version=Vrsn_2_0) as hby:
+        root = hby.makeHab(name="root")
+        delegate = hby.makeHab(name="delegate", delpre=root.pre)
+        unrelated = hby.makeHab(name="unrelated")
+        bounded = hby.makeHab(name="bounded", DnD=True)
+        blocked = hby.makeHab(name="blocked", delpre=bounded.pre)
+        recipient = hby.makeHab(name="recipient")
+
+        recorder = Recorder()
+        exc = Exchanger(hby=hby, handlers=[])
+        loadHandlers(hby=hby, exc=exc, notifier=recorder)
+
+        def send(message, issuer, farIssuer, operator):
+            far = acdcmap(israid=farIssuer.pre,
+                          attribute=dict(d="", role="far"))
+            origin = acdcmap(israid=issuer.pre,
+                             attribute=dict(d="", role="near"),
+                             edge=_edge("source", far, op=operator),
+                             iseaid=recipient.pre)
+            exn, atc = ipexGrant(
+                hab=issuer,
+                recp=recipient.pre,
+                message=message,
+                origin=_signed(origin, issuer),
+                artifacts=[_signed(far, farIssuer)],
+                modifiers=dict(dp=[[
+                    [origin.sad["s"]["$id"], "/", []],
+                    [far.sad["s"]["$id"], "/e/source/_/", []],
+                ]]),
+            )
+            ims = bytearray(exn.raw + atc)
+            Parser(version=Vrsn_2_0).parse(ims=ims, framed=False, exc=exc)
+            assert ims == bytearray()
+            return exn
+
+        equal = send("I1I equality", root, root, "I1I")
+        assert hby.db.exns.get(keys=(equal.said,)) is not None
+        assert hby.db.epse.get(keys=(equal.said,)) is None
+
+        refused = send("DI1I unrelated roots", unrelated, root, "DI1I")
+        assert hby.db.exns.get(keys=(refused.said,)) is None
+        assert hby.db.epse.get(keys=(refused.said,)) is None
+
+        bounded.interact(data=[SealEvent(i=blocked.pre,
+                                         s=blocked.kever.serder.snh,
+                                         d=blocked.kever.serder.said)._asdict()])
+        refused = send("DI1I honors DND", blocked, bounded, "DI1I")
+        assert hby.db.exns.get(keys=(refused.said,)) is None
+        assert hby.db.epse.get(keys=(refused.said,)) is None
+
+        pending = send("DI1I awaits an anchor", delegate, root, "DI1I")
+        assert hby.db.exns.get(keys=(pending.said,)) is None
+        assert hby.db.epse.get(keys=(pending.said,)) is not None
+
+        root.interact(data=[SealEvent(i=delegate.pre,
+                                      s=delegate.kever.serder.snh,
+                                      d=delegate.kever.serder.said)._asdict()])
+        exc.processEscrow()
+        assert hby.db.exns.get(keys=(pending.said,)) is not None
+        assert hby.db.epse.get(keys=(pending.said,)) is None
+
+
+def test_ipex_v2_edge_evaluator_adapters_bind_late():
+    """IPEX builds its Edge evaluator at use time, over current evidence."""
+    from keri.acdc import ipexing
+
+    # Labels stay importable from ipexing for dependents.
+    assert ipexing.EdgeGroupLabels == ("d", "u", "s", "o", "w")
+    assert ipexing.EdgeSectionLabels == ("d", "u", "s", "o", "w")
+    assert {"I1I", "DI1I"} <= set(ipexing.UnaryEdgeOps)
+
+    with openHby(name="ipex-v2-late-bound-evaluator", base="test",
+                 version=Vrsn_2_0) as hby:
+        near = hby.makeHab(name="near")
+        farIssuer = hby.makeHab(name="far")
+        handler = IpexHandler(resource="/ipex/grant", hby=hby, notifier=Recorder())
+
+        far = acdcmap(israid=farIssuer.pre, attribute=dict(d="", role="far"))
+        origin = acdcmap(israid=near.pre, attribute=dict(d="", role="near"),
+                         edge=_edge("source", far, op="DI1I"))
+        nodes = {origin.said: {"serder": origin}, far.said: {"serder": far}}
+
+        # A replaced Kevery is the one asked, without rebuilding the handler.
+        answers = []
+
+        class Kvy:
+            def isDelegated(self, pre, delpre):
+                answers.append((pre, delpre))
+                return True
+
+        real = hby.kvy
+        hby.kvy = Kvy()
+        try:
+            verdict = handler._evaluateNode(origin.said, nodes=nodes, memo={},
+                                            pending={origin.said, far.said},
+                                            pendingValid=True)
+        finally:
+            hby.kvy = real
+        assert answers == [(near.pre, farIssuer.pre)]
+        assert verdict.verdict == Verdicts.valid
+
+        # Pending nodes contribute a retryable node-own verdict unless authorized,
+        # while their Edges are still evaluated -- here, an unrelated DI1I refuses.
+        verdict = handler._evaluateNode(origin.said, nodes=nodes, memo={},
+                                        pending={origin.said, far.said})
+        assert verdict.verdict == Verdicts.invalid
+
+
 def test_ipex_v2_rejects_invalid_grant_graph_shape_and_semantics():
     """Grant rejects malformed graph closure, shapes and false leaf edge semantics."""
     with openHby(name="ipex-v2-bad-grant-graph-semantics",
