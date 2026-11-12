@@ -87,6 +87,28 @@ def replicate(doer, ghab, root, registries, recipients=None, *, timeout):
             print(json.dumps(dict(result, transmitted=True)), flush=True)
 
 
+# Seconds a command without its own --timeout gives its follow-up root copies.
+Budget = 30.0
+
+
+def reseal(doer, ghab, root, rotation, *, timeout=Budget):
+    """After an accepted group rotation, send held roots to new or rekeyed members.
+
+    Fire and forget like ``replicate``: only a signer that held a prior key
+    sends (``RegistryRoot.resealed``), a member holding no root for the group
+    sends nothing, and no failure ever fails the rotation.
+    """
+    try:
+        recipients = root.resealed(ghab, rotation)
+    except (KeriError, ValueError) as error:
+        print(json.dumps(dict(phase='root_copy', gid=ghab.pre, rotation=rotation,
+                              transmitted=False, error=str(error))), flush=True)
+        return
+    registries = root.held(ghab.pre)
+    if recipients and registries:
+        yield from replicate(doer, ghab, root, registries, recipients, timeout=timeout)
+
+
 class RootReplication(doing.DoDoer):
     """Own one finite send, newcomers or receive invocation; retain no new ledger."""
 

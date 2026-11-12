@@ -27,8 +27,8 @@ once. A copy that cannot verify yet because local state is missing (the
 registry TEL, a KEL, the local group habitat, the group rotation that adds the
 recipient, or opening evidence) is stored and escrowed, then retried by the
 ordinary escrow loop (`Exchanger.processEscrow` drives
-`RegistryRoot.processEscrows`) for up to an hour, so an offline newcomer never
-needs a resend. A copy refused on any attempt is dropped from the escrow; the
+`RegistryRoot.processEscrows`). The escrow has no timeout: a copy stays pending
+until it is retained or refused, so an offline newcomer never needs a resend. A copy refused on any attempt is dropped from the escrow; the
 signed exchange itself stays in the exchange store. A newly retained root adds
 one informational notification (`/exn/registry/root`).
 
@@ -44,8 +44,43 @@ This is the first application-route ESSR payload, and the first ESSR carried
 through a witness mailbox, in KERIpy; upstream ESSR is the `/essr/req` direct
 transport envelope.
 
-After group DH the custodian sends the root to its other current members; a
-group alias defaults to them:
+## Automatic copies
+
+Group commands send copies without being asked, on a fire-and-forget happy
+path:
+
+- **Group issuance.** Once the issuance completes, so the root is retained and
+  an accepted, issuer-anchored BUP exists, the DH custodian sends a copy to
+  every other current signing member: the issuer custodian in
+  `kli ipex grant` after the verified Admit, the holder custodian in
+  `kli ipex admit` after its Admit completes.
+- **Accepted group rotation.** After `kli multisig rotate` or
+  `kli multisig join` sees a v2 group rotation accepted, every signer of it
+  that held a key in the prior establishment and holds roots for the group
+  sends each root to every current signing member that is new in that rotation
+  or whose contributing key changed. Receivers decrypt only with their current
+  key, so a rotated member needs a copy sealed to its new key.
+
+Each copy carries a verification hint derived for its own registry: the ACDC
+of the head BUP's locally held opening, else an ACDC of that registry disclosed
+by a locally stored IPEX Grant. `--acdc` overrides it on the manual commands.
+Before sealing, the sender checks that its own root reproduces the BUP with the
+hint and refuses otherwise. Each outcome is printed as a `root_copy` JSON line.
+
+Limits: there is no acknowledgement, sent-copies record or retry. A copy that
+cannot be sent, because the mailbox is unreachable, the command's remaining
+time runs out or no local opening or Grant yields a hint (for example a member
+that holds only a received copy), is reported with
+`kli vc registry root send` as the recovery and never fails the issuance or
+rotation. Several signers may send the same root; receiving is idempotent, so
+duplicates are harmless. A crash between retention and sending leaves the root
+unreplicated until someone sends it by hand. The Dhke `replicate` cue is
+unchanged for runtimes that persist owed copies.
+
+## Manual copies
+
+After group DH the custodian can send the root to its other current members
+by hand; a group alias defaults to them:
 
 ```sh
 kli vc registry root send --name lead --alias holder-group --version 2.0 \

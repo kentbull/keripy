@@ -683,6 +683,12 @@ class JoinDoer(doing.DoDoer):
 
             print()
             printIdentifier(self.hby, ghab.pre)
+            if v2:
+                # Re-seal held registry roots to members this rotation added or rekeyed.
+                from ....acdc import salting
+                from ...common import rootreplicating
+                yield from rootreplicating.reseal(self, ghab,
+                    salting.loadHandlers(self.hby, self.exc, self.notifier, self.rgyV2), serder.said)
 
             return True
 

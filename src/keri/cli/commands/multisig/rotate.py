@@ -22,7 +22,8 @@ from ....app.grouping import loadHandlers
 from ....core import Prefixer, Number, Diger, SerderKERI, Parser, Kevery, Kramer
 from ....db import dgKey
 from ....peer import Exchanger
-from ....acdc import Regery, ipexing
+from ....acdc import Regery, ipexing, salting
+from ...common import rootreplicating
 
 
 logger = ogler.getLogger()
@@ -287,4 +288,8 @@ class GroupMultisigRotate(doing.DoDoer):
 
         print()
         printIdentifier(self.hby, ghab.pre)
+        if self.rgy is not None:
+            # Re-seal held registry roots to members this rotation added or rekeyed.
+            yield from rootreplicating.reseal(self, ghab,
+                salting.loadHandlers(self.hby, self.psr.exc, None, self.rgy), rserder.said)
         self.remove(self.toRemove)

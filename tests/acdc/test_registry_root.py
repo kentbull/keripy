@@ -518,6 +518,58 @@ def test_full_roster_replacement_catch_up_from_removed_historical_member():
         assert held(w, w.outsider).qb64 == w.root.qb64
 
 
+def resent(monkeypatch, capsys, side, rotation):
+    """Run the accepted-rotation re-seal from ``side``; return its (wire, recipient) sends."""
+    from keri.cli.common import rootreplicating
+
+    sent = []
+
+    def send(owner, raw, dest, *, topic):
+        sent.append((raw, dest))
+        yield owner.tock
+
+    monkeypatch.setattr(rootreplicating.sending, 'send', send)
+    doer = SimpleNamespace(hby=side.hby, tyme=0.0, tock=0.0, extend=None, remove=None)
+    list(rootreplicating.reseal(doer, side.group, side.root, rotation))
+    capsys.readouterr()
+    return sent
+
+
+def test_rotation_reseals_to_newcomers_and_rekeyed_members(monkeypatch, capsys):
+    with world(newcomer=True) as w:
+        seed(w)
+        # A held opening is Alice's per-registry hint evidence.
+        assert w.alice.rgy.store.putOpening(w.event.said, w.opening)
+        current = [w.alice, w.bob, w.outsider]
+        rotation = rotate(w, current, current, sith='2')
+        # The plain newcomers query is unchanged; the re-seal adds Bob's changed key.
+        assert w.alice.root.newcomers(w.alice.group, rotation) == [w.outsider.hab.pre]
+        assert w.alice.root.resealed(w.alice.group, rotation) == [w.bob.hab.pre, w.outsider.hab.pre]
+        # The newcomer held no prior key, so it owes nothing; Bob holds no root to send.
+        assert w.outsider.root.resealed(w.outsider.group, rotation) == []
+        assert resent(monkeypatch, capsys, w.outsider, rotation) == []
+        assert resent(monkeypatch, capsys, w.bob, rotation) == []
+        sent = resent(monkeypatch, capsys, w.alice, rotation)
+        assert [dest for _, dest in sent] == [w.bob.hab.pre, w.outsider.hab.pre]
+        for wire, dest in sent:
+            receive(next(side for side in current if side.hab.pre == dest), wire)
+        assert {held(w, side).qb64 for side in current} == {w.root.qb64}
+        assert stored(w.bob) == [] and stored(w.outsider) == []
+
+
+def test_rotation_reseals_a_root_to_a_rotated_member_key(monkeypatch, capsys):
+    with world() as w:
+        seed(w)
+        assert w.alice.rgy.store.putOpening(w.event.said, w.opening)
+        rotation = rotate(w, [w.alice, w.bob], [w.alice, w.bob], sith='2')
+        assert w.alice.root.newcomers(w.alice.group, rotation) == []
+        (wire, dest), = resent(monkeypatch, capsys, w.alice, rotation)
+        assert dest == w.bob.hab.pre
+        # Sealed to Bob's rotated key, the copy decrypts and is retained on arrival.
+        receive(w.bob, wire)
+        assert held(w, w.bob).qb64 == w.root.qb64 and stored(w.bob) == []
+
+
 def test_essr_round_trip_fixture_decrypts_and_binds():
     vector = json.loads(Fixture.read_text())
     wire = vector['wire'].encode()
