@@ -350,7 +350,7 @@ class IpexV2Inspection(doing.Doer):
                 baser = RegBaser(name=args.name, base=args.base, reopen=True, readonly=True)
                 rgy = SimpleNamespace(store=RegistryStore(baser))
                 exc = Exchanger(hby=hby, handlers=[])
-                ipexing.loadHandlers(hby, exc, None, rgy=rgy)
+                ipexing.loadHandlers(hby, exc, None, rgy=rgy, roots=False)
                 try:
                     _, _, verdict, records = exc.reverifyGrant(message.said)
                     result['current'] = dict(verdict=verdict._asdict(),
