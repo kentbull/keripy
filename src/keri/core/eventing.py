@@ -4092,6 +4092,145 @@ class Kever:
         return None
 
 
+def delegationRefusal(kevers, db, pre, delpre):
+    """Returns why pre is not a delegated AID of delpre at any depth, if decided.
+
+    Climbs pre's delegation chain toward delpre and requires of every hop that the
+    delegator was itself permitted to delegate and anchored the delegate's `dip`.
+    Both are per-hop questions, so neither can be asked once at the top. This is
+    the delegation question the DI2I and DI1I edge Operators ask, on both the v1
+    Verifier and the v2 IPEX path; see Kevery.isDelegated for the boolean form.
+
+    Deliberately NOT implemented as ``kevers[pre].delpre == delpre``.
+    ``Kever.validateDelegation`` returns early -- with no seal lookup whatsoever --
+    when the delegated event is locally owned, locally membered, or locally
+    witnessed, and the comment above that return is explicit that a witness "accepts
+    without waiting for delegation seal to be anchored in delegator's KEL". Since
+    setupWitness co-locates a credential Verifier in the same Habery, a delpre-based
+    check would accept a delegated edge for any AID this Habery happens to witness
+    whose claimed delegator never anchored anything: issuance under authority never
+    granted. ``delpre`` records what the delegate asserted in its own `di` field;
+    only the delegator's anchored approval seal records what the delegator agreed
+    to.
+
+    So each hop is confirmed the way the KEL layer confirms it, first by
+    Kever.fetchDelegatingEvent: consult the approval source-seal couple in .db.aess
+    -- which logEvent writes only when validateDelegation actually found and
+    verified the seal, since the exemption returns (None, None) and that write is
+    gated on those being present -- and failing that, walk the delegator's KEL for
+    the anchoring seal directly. That KEL walk is what keeps a Habery with no .aess
+    entry (a witness, or the delegate's own controller) from being permanently
+    unable to validate an edge that is in fact approved.
+
+    The KEL walk in fetchDelegatingEvent looks only at the last event at each sn,
+    so it cannot find an anchor that was first seen and later superseded once the
+    .aess couple is gone. The fallback below therefore scans every event in the
+    delegator's KEL, superseded ones included, for the exact `dip` seal, and accepts
+    a candidate only when .fons records it as first seen. Any anchor found by either
+    route must itself be first seen; an event merely stored in .evts/.kels (a
+    disputed or unprocessed candidate) is not approval, and the answer stays pending.
+    That keeps the verdict independent of whether this validator happened to look
+    before or after the anchor was superseded, which the .aess-only lookup did not.
+
+    DND is checked before the anchor and re-checked here for the same reason delpre
+    is not trusted: the exemption above returns before validateDelegation reaches
+    its doNotDelegate refusal, so an exempted Habery holds dips a disinterested
+    validator would never have accepted. Without this, a witness-hosted Verifier
+    would honor a chain that a watcher-fed one refuses -- identical bytes, opposite
+    verdicts. The trait is read from the delegator's inception event and
+    Kever.config runs once, so a delegator's answer here never moves.
+
+    The climb needs no depth bound and gets none: a delegated AID's prefix is a
+    digest of the `dip` that carries its `di`, so a cycle in the chain would require
+    a hash cycle. A bound would also be a conformance seam, letting two conforming
+    validators disagree on identical bytes with no wire-visible cause. Depth is the
+    delegator's to choose, via DND. The visited set below is a termination guarantee
+    over a possibly corrupt local database, not a policy, and a cycle is refused
+    rather than left pending since retrying against the same database cannot break
+    it.
+
+    Called with original=False so that a missing seal returns None rather than
+    raising, and so an inconsistent .aess entry is left alone: a verifier reads key
+    state, it does not repair the delegate's escrow. The one write this can cause is
+    fetchDelegatingEvent pinning the couple it has just verified against the
+    delegator's trunk -- the same cache repair keripy performs during escrow
+    processing, gated on the delegated event already having been accepted. A
+    ValidationError from a genuinely inconsistent database is left to propagate
+    rather than being flattened into a silent refusal.
+
+    Retirement of a delegate is deliberately not modelled. It is key-state based: a
+    retired delegate rotates to keys it cannot sign with, so it issues nothing
+    further while everything it issued while authorized stays valid, and the
+    approval seals are byte-identical before and after.
+
+    Parameters:
+        kevers (dict): key state by prefix, as .kevers of the validating Habery
+        db (Baser): the validating Habery's database, read for the `dip` and anchors
+        pre (str): qb64 AID whose delegation is in question, i.e. the near ACDC's
+            issuer
+        delpre (str): qb64 AID that must be somewhere above it in the delegation
+            chain, i.e. the far node's issuee (DI2I) or issuer (DI1I)
+
+    Returns:
+        str|None: "" when every hop from pre up to delpre is a delegation its
+            delegator anchored and that DND permitted. A non-empty reason when the
+            answer is decided against: the chain tops out without meeting delpre
+            (including pre == delpre at a root), a delegator on it carries DND, or
+            the local chain cycles. None when it is not yet decidable, because a
+            key state, a `dip` or a first-seen anchoring seal the climb needs is not
+            in hand.
+    """
+    seen = set()
+    while pre not in seen:
+        seen.add(pre)
+        if pre not in kevers:  # no key state yet, nothing to evaluate
+            return None
+
+        kever = kevers[pre]
+        parent = kever.delpre
+        if parent is None:  # top of the chain reached without meeting delpre
+            return f"{pre} is not delegated, and the chain ends there"
+        if parent not in kevers:  # delegator's KEL not yet in hand
+            return None
+        if kevers[parent].doNotDelegate:
+            return f"delegator {parent} of {pre} carries DND"
+
+        # The delegation is settled at inception and does not move afterwards: `di`
+        # appears only in a `dip`, so the delegator anchoring the `dip` is the whole
+        # of what makes this hop a delegation. A delegated AID's prefix is a digest
+        # of its own `dip`, so the `dip` is retrievable at (pre, pre).
+        inception = db.evts.get(keys=(pre, pre))
+        if inception is None:  # delegated inception event not retrievable
+            return None
+
+        anchor = kever.fetchDelegatingEvent(delpre=parent, serder=inception,
+                                            original=False, eager=True)
+        if anchor is None:  # recover a first-seen anchor that was superseded
+            expected = SealEvent(i=inception.pre, s=inception.snh,
+                                 d=inception.said)
+            for candidate in db.getEvtPreIter(pre=parent):
+                if db.fons.get(keys=(parent, candidate.said)) is None:
+                    continue
+                for seal in candidate.seals or []:
+                    if (isinstance(seal, dict) and tuple(seal) == SealEvent._fields
+                            and SealEvent(**seal) == expected):
+                        anchor = candidate
+                        break
+                if anchor is not None:
+                    break
+        if anchor is None:  # anchor not seen: the delegator may yet publish it
+            return None
+        if db.fons.get(keys=(anchor.pre, anchor.said)) is None:
+            return None  # never trust an anchor that was not first seen
+
+        if parent == delpre:
+            return ""
+
+        pre = parent
+
+    return f"delegation chain from {pre} cycles"
+
+
 class Kevery:
     """
     Kevery (Key Event Message Processing Facility) processes an incoming
@@ -4205,6 +4344,29 @@ class Kevery:
         """
         Returns .db.prefixes"""
         return self.db.prefixes
+
+    def isDelegated(self, pre, delpre) -> bool | None:
+        """Return whether ``pre`` is an anchored delegated descendant of ``delpre``.
+
+        Public read-only delegation query for the DI2I and DI1I edge Operators.
+        See delegationRefusal for why every hop requires a first-seen anchoring
+        seal and a delegator without DND, rather than trusting ``di``.
+
+        Parameters:
+            pre (str): qb64 AID whose delegation is in question.
+            delpre (str): qb64 AID that must be an ancestor of ``pre``.
+
+        Returns:
+            bool | None: True when every hop up to ``delpre`` is anchored and
+                permitted. False when the complete ancestry reaches another root
+                (including ``pre == delpre`` at a root), crosses a delegator with
+                the Do Not Delegate trait, or cycles. None when a required KEL,
+                ``dip`` or first-seen delegation anchor has not arrived.
+        """
+        refusal = delegationRefusal(self.kevers, self.db, pre, delpre)
+        if refusal is None:
+            return None
+        return not refusal
 
     def fetchWitnessState(self, pre, sn):
         """ Returns the list of witness for the identifier prefix at the sequence number
