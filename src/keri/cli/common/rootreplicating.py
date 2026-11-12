@@ -30,6 +30,63 @@ from ...kering import ConfigurationError, KeriError, ValidationError
 from ...peer import Exchanger
 
 
+class _Courier:
+    """Give ``sending.send`` a finite owner: a running DoDoer, a group sender and one budget.
+
+    The budget replaces the hosting command's own ``check`` so that a Grant
+    exchange deadline that bounded the completed issuance never cancels the
+    follow-up copies, and a slow mailbox cannot fail that issuance.
+    """
+
+    def __init__(self, doer, hab, timeout):
+        self.doer, self.hab, self.hby = doer, hab, doer.hby
+        self.tock = getattr(doer, 'tock', 0.03125)
+        self.deadline = doer.tyme + max(timeout, 0.0)
+
+    def check(self):
+        if self.doer.tyme >= self.deadline:
+            raise TimeoutError('registry root copies did not complete within their budget')
+
+    def extend(self, doers):
+        self.doer.extend(doers)
+
+    def remove(self, doers):
+        self.doer.remove(doers)
+
+
+def replicate(doer, ghab, root, registries, recipients=None, *, timeout):
+    """Fire and forget one copy of each held root of ``ghab`` to each recipient.
+
+    ``doer`` is the running command DoDoer that hosts delivery; ``ghab`` the
+    local group habitat whose individual member signs; ``root`` its
+    ``salting.RegistryRoot``. ``recipients`` defaults to every other current
+    signing member. Each copy is prepared with a per-registry hint and sent
+    to the recipient's credential mailbox through ``sending.send``, as
+    ``kli vc registry root send`` does. Receiving is idempotent, so duplicate
+    copies are harmless. Nothing is retried or recorded: each outcome is
+    printed, a failure never raises, and ``kli vc registry root send`` is
+    the recovery path.
+    """
+    sender = ghab.mhab
+    if recipients is None:
+        recipients = [aid for aid in root.members(ghab.pre) if aid != sender.pre]
+    courier = _Courier(doer, ghab, timeout)
+    for registry in registries:
+        for member in recipients:
+            result = dict(phase='root_copy', gid=ghab.pre, registry=registry,
+                          sender=sender.pre, recipient=member)
+            try:
+                wire = root.prepare(sender, member, ghab.pre, registry, hinted=True)
+                result['exchange'] = Parser(version=Vrsn_2_0).parseOneBare(
+                    ims=bytearray(wire), processive=False).serder.said
+                yield from sending.send(courier, wire, member, topic='credential')
+            except (KeriError, ValueError, OSError, TimeoutError) as error:
+                print(json.dumps(dict(result, transmitted=False, error=str(error),
+                                      recovery='kli vc registry root send')), flush=True)
+                continue
+            print(json.dumps(dict(result, transmitted=True)), flush=True)
+
+
 class RootReplication(doing.DoDoer):
     """Own one finite send, newcomers or receive invocation; retain no new ledger."""
 

@@ -140,8 +140,14 @@ def issue_groups(tmp_path, issuers, holders, holder_public, icoordinator, hcoord
                     process.terminate()
                     process.wait(timeout=5)
 
-    results = [next(json.loads(line) for line in reversed(log.read_text().splitlines()) if line.startswith('{'))
-               for log in (logs[0], logs[2], logs[3])]
+    lines = [[json.loads(line) for line in log.read_text().splitlines() if line.startswith('{')] for log in logs]
+    results = [next(item for item in reversed(lines[n]) if 'admitted' in item) for n in (0, 2, 3)]
+    # Each DH custodian sends its retained root to the other current member once issuance completes.
+    for n, members in ((0, issuers), (2, holders)):
+        copies = [item for item in lines[n] if item.get('phase') == 'root_copy']
+        assert [(item['gid'], item['registry'], item['recipient'], item['transmitted']) for item in copies] == [
+            (members[0]['pre'], body.regid, members[1]['member'], True)], logs[n].read_text()
+    assert not any(item.get('phase') == 'root_copy' for n in (1, 3) for item in lines[n])
     assert all(r['admitted'] and r['registry_issued'] and r['grant'] == selected['grant'] for r in results)
     assert len({r['admit'] for r in results}) == 1
     assert results[1]['transmitted'] and not results[2]['transmitted']
@@ -184,6 +190,11 @@ def issue_groups(tmp_path, issuers, holders, holder_public, icoordinator, hcoord
             rgy.close()
             hby.close()
     assert retained[0] == retained[2] and retained[0] is not None and retained[1] is retained[3] is None
+    # The rootless members retain the mailbox copies with no explicit send.
+    for side in (issuers[1], holders[1]):
+        received = [json.loads(line) for line in kli(tmp_path, 'vc', 'registry', 'root', 'receive', *side['args'],
+            '--registry', body.regid, '--listen', '--timeout', '20').splitlines() if line.startswith('{')]
+        assert received[-1] == dict(gid=side['pre'], registry=body.regid, retained=True)
     for contributions in (queries, replies):
         assert len(contributions) == 2 and len({raw for raw, _ in contributions}) == 1
         assert set.union(*(indices for _, indices in contributions)) == {0, 1}

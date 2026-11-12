@@ -517,8 +517,12 @@ def group_issuer_issue(tmp_path, live_parties):
                 if process.poll() is None:
                     process.terminate()
                     process.wait(timeout=5)
-    result = next(json.loads(line) for line in reversed(logs[0].read_text().splitlines()) if line.startswith('{'))
+    lines = [json.loads(line) for line in logs[0].read_text().splitlines() if line.startswith('{')]
+    result = next(item for item in reversed(lines) if 'admitted' in item)
     assert result['admitted'] and result['registry_issued']
+    # After issuance completes the custodian sends its root to the other issuer member.
+    assert [(item['recipient'], item['transmitted']) for item in lines if item.get('phase') == 'root_copy'] == [
+        (peer['member'], True)]
     assert result == next(json.loads(line) for line in reversed(logs[2].read_text().splitlines()) if line.startswith('{'))
     roots, queries = [], []
     for side in (*issuers, holder):
