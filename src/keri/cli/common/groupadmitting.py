@@ -4,12 +4,13 @@ import json
 from types import SimpleNamespace
 
 from ... import Kinds, Vrsn_2_0
-from ...acdc import chaining, ipexing, regeventing
+from ...acdc import chaining, ipexing, regeventing, salting
 from ...app import Multiplexor, multisigExn, multisigIpexProofExn, multisigRpyExn
 from ...core import BlindState, Blinder, Parser, Prefixer, SealEvent, SerderACDC, messagize
 from ...kering import ConfigurationError, ValidationError
 from ...peer.exchanging import (loadParsedNestedSubstreams, serializeMessage,
                                serializeParsedSubstream, verify)
+from . import rootreplicating
 
 
 # Core local coordination profile route, not a standardized auxiliary route.
@@ -224,7 +225,9 @@ class GroupAdmission:
             while self.dh.cues:
                 cue = self.dh.cues.popleft()
                 if cue['kin'] == 'replicate':
-                    continue  # Root replication is a separate explicit command.
+                    # Kept for runtimes such as Locksmith; no BUP exists yet, so
+                    # the lead sends root copies directly once the Admit completes.
+                    continue
                 if cue['kin'] == 'sign':
                     owner.psr.parse(ims=bytearray(cue['msg']), local=True)
                     yield from self.broadcast(cue['msg'], reply=True)
@@ -267,4 +270,9 @@ class GroupAdmission:
         self.transmitted = owner.exc.lead(self.hab, self.response.said)
         if self.transmitted:
             yield from owner.send(raw, self.grant.pre)
+        if self.lead:
+            # The DH custodian holds the root; copies never fail the completed Admit.
+            yield from rootreplicating.replicate(owner, self.hab,
+                salting.loadHandlers(owner.hby, owner.exc, None, owner.rgy),
+                [self.original[0].serder.regid], timeout=owner.deadline - owner.tyme)
         return self.response

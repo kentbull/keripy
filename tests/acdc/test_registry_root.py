@@ -664,6 +664,64 @@ def test_automatic_copy_without_local_hint_evidence_is_not_sent():
                                  td=w.registry)
 
 
+def replicated(monkeypatch, capsys, custodian, *, fail=None, **kwa):
+    """Run the issuance-completion send; return its (wire, recipient) sends and printed results."""
+    from keri.cli.common import rootreplicating
+
+    sent = []
+
+    def send(owner, raw, dest, *, topic):
+        assert topic == 'credential' and owner.hab is custodian.hab
+        if fail:
+            raise fail
+        sent.append((raw, dest))
+        yield owner.tock
+
+    monkeypatch.setattr(rootreplicating.sending, 'send', send)
+    doer = SimpleNamespace(hby=custodian.hby, tyme=0.0, tock=0.0, extend=None, remove=None)
+    list(rootreplicating.replicate(doer, custodian.hab, custodian.root,
+                                   kwa.pop('registries'), timeout=10.0, **kwa))
+    printed = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    return sent, printed
+
+
+def test_issuance_completion_sends_every_root_to_every_other_member(monkeypatch, capsys):
+    from tests.acdc.test_group_dh import receive as deliver
+
+    with issued(count=2) as h:
+        regks = sorted(h.acdcs)
+        for members in (h.issuers, h.issuees):
+            custodian, other = members[h.lead], members[h.lead + 1]
+            sent, printed = replicated(monkeypatch, capsys, custodian, registries=regks)
+            assert [dest for _, dest in sent] == [other.member.pre] * 2
+            assert [(item['registry'], item['recipient'], item['transmitted']) for item in printed] == [
+                (regk, other.member.pre, True) for regk in regks]
+            # Duplicate copies, as several senders may produce, are harmless.
+            for wire, _ in sent + sent:
+                deliver(other, wire)
+            assert other.root.pending() == [] and other.root.held(other.hab.pre) == regks
+
+
+def test_failed_issuance_copy_is_reported_and_never_raises(monkeypatch, capsys):
+    from keri.kering import ConfigurationError
+
+    with issued(count=1) as h:
+        custodian = h.issuers[h.lead]
+        other = h.issuers[h.lead + 1]
+        sent, printed = replicated(monkeypatch, capsys, custodian, registries=sorted(h.acdcs),
+                                   fail=ConfigurationError('no finite recipient transport was available'))
+        assert sent == []
+        assert [(item['recipient'], item['transmitted'], item['recovery']) for item in printed] == [
+            (other.member.pre, False, 'kli vc registry root send')]
+        assert 'transport' in printed[0]['error']
+        # A registry with no accepted BUP is reported, not sent, and does not stop the others.
+        sent, printed = replicated(monkeypatch, capsys, custodian,
+                                   registries=[h.registries[0].regk, h.grant.said])
+        assert [(item['registry'], item['transmitted']) for item in printed] == [
+            (h.registries[0].regk, True), (h.grant.said, False)]
+        assert len(sent) == 1
+
+
 def test_ipex_loader_registers_the_root_handler_once():
     with world() as w:
         hby, rgy = w.bob.hby, w.bob.rgy

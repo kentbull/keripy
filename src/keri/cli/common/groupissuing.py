@@ -5,7 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ... import Kinds, Vrsn_2_0
-from ...acdc import Registrar, ipexing, regeventing
+from ...acdc import Registrar, ipexing, regeventing, salting
 from ...app import Multiplexor, multisigExn, multisigQueryExn
 from ...app.grouping import MultisigNotificationHandler
 from ...core import Parser, SerderACDC, messagize
@@ -14,7 +14,7 @@ from ...peer.exchanging import loadParsedNestedSubstreams, serializeParsedSubstr
 from .credentialing import recipient
 from .negotiating import IpexV2Negotiation
 from .witnessing import witnessAuths
-from . import registryanchoring, sending
+from . import registryanchoring, rootreplicating, sending
 
 
 class _QueryProposal:
@@ -245,7 +245,9 @@ class GroupIssuance:
             while owner.dh.cues:
                 cue = owner.dh.cues.popleft()
                 if cue['kin'] == 'replicate':
-                    continue  # Root replication is a separate explicit command.
+                    # Kept for runtimes such as Locksmith; no BUP exists yet, so
+                    # this command sends root copies directly once issuance completes.
+                    continue
                 if cue['kin'] == 'query':
                     # Only own full-threshold intake emits this cue. A proposal
                     # or member contribution must never become a peer retry.
@@ -276,3 +278,7 @@ class GroupIssuance:
             raise ConfigurationError('selected group Grant terminated without a verified Admit')
         print(json.dumps(dict(grant=self.grant.said, xid=self.xid, admit=response.said,
                               registry_issued=True, admitted=True, transmitted=True)), flush=True)
+        # The issuance succeeded; root copies to the other members cannot change that.
+        yield from rootreplicating.replicate(owner, owner.hab,
+            salting.loadHandlers(owner.hby, owner.exc, None, owner.rgy), [self.registry.regk],
+            timeout=owner.deadline - owner.tyme)
