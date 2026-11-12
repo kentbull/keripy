@@ -18,7 +18,7 @@ from . import chaining
 # are re-exported here for callers that read them from this module.
 from .evaluating import (DefaultSuppressingEdgeOps, DelegativeEdgeOps,
                          EdgeEvaluator, EdgeGroupLabels, EdgeNodeLabels,
-                         EdgeSectionLabels, SchemaEvaluator,
+                         EdgeSectionLabels, IssuerIdentityEdgeOps, SchemaEvaluator,
                          UnaryEdgeOps, verifyExpandedSection)
 from ..kering import (Colds, DuplicitousRegistryError, Ilks, KeriError, MisanchorError, MisbindingError,
                       MissingAnchorError, MissingChainError, MissingSchemaError,

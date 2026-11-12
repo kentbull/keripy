@@ -62,6 +62,530 @@ def test_leaf_edge_accepts_inline_schema_pin():
         assert verdict.verdict == Verdicts.valid
 
 
+def test_issuer_identity_operators():
+    """I1I and DI1I compose, suppress defaults, and preserve retryability."""
+    with openHby(name="issuer-identity-edges", base="test",
+                 version=Vrsn_2_0) as hby:
+        root = hby.makeHab(name="root", kind=Kinds.cesr)
+        unrelated = hby.makeHab(name="unrelated", kind=Kinds.cesr)
+        issuee = hby.makeHab(name="issuee", kind=Kinds.cesr)
+        otherIssuee = hby.makeHab(name="other-issuee", kind=Kinds.cesr)
+
+        delegate = hby.makeHab(name="delegate", delpre=root.pre,
+                               kind=Kinds.cesr)
+
+        # Keep node authentication outside these Edge tests
+        def verifyNode(serder, nest, *, records=None):
+            return valid(f"node {serder.said} authenticated for edge test")
+
+        schemaEvaluator = SchemaEvaluator(hby.db)
+        evaluator = EdgeEvaluator(schemaEvaluator=schemaEvaluator,
+                                  verifyNode=verifyNode,
+                                  isDelegated=hby.kvy.isDelegated)
+
+        # Build one labeled leaf Edge.
+        def makeEdge(label, far, operator, schema=None):
+            node = dict(d="", n=far.said, o=operator)
+            if schema is not None:
+                node["s"] = schema
+            return dict(d="", **{label: node})
+
+        # Build and evaluate a two-node graph.
+        def evaluate(nearIssuer, far, operator, *, nearIssuee=None,
+                     schema=None):
+            near = acdcmap(
+                israid=nearIssuer,
+                attribute=dict(d="", role="near"),
+                edge=makeEdge("source", far, operator, schema=schema),
+                iseaid=nearIssuee,
+            )
+            nodes = {
+                near.said: {"serder": near},
+                far.said: {"serder": far},
+            }
+            return evaluator.evaluate(near.said, nodes=nodes)
+
+        # Build a schema for a chosen Edge Section shape.
+        def edgeSchema(properties, required):
+            return Schemer(sed={
+                "$id": "",
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "version": "1.0.0",
+                "type": "object",
+                "required": ["v", "t", "d", "i", "s", "a", "e"],
+                "properties": {
+                    "v": {"type": "string"},
+                    "t": {"type": "string"},
+                    "d": {"type": "string"},
+                    "i": {"type": "string"},
+                    "s": {},
+                    "a": {"type": "object"},
+                    "e": {
+                        "type": "object",
+                        "required": ["d", *required],
+                        "properties": {
+                            "d": {"type": "string"},
+                            **properties,
+                        },
+                        "additionalProperties": False,
+                    },
+                },
+                "additionalProperties": False,
+            })
+
+        compactBlock = {
+            "oneOf": [
+                {"type": "string"},
+                {
+                    "type": "object",
+                    "required": ["d", "n"],
+                    "properties": {
+                        "d": {"type": "string"},
+                        "n": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+            ],
+        }
+
+        rootFar = acdcmap(israid=root.pre,
+                          attribute=dict(d="", role="far"))
+        unrelatedFar = acdcmap(israid=unrelated.pre,
+                               attribute=dict(d="", role="far"))
+
+        # An empty Edge Section carries no requirements
+        emptySection = acdcmap(
+            israid=root.pre,
+            attribute=dict(d="", role="empty-edge-section"),
+            edge={},
+        )
+        verdict = evaluator.evaluate(
+            emptySection.said,
+            nodes={emptySection.said: {"serder": emptySection}},
+        )
+        assert verdict.verdict == Verdicts.valid
+
+        # A compact section is valid but its hidden logic cannot be evaluated
+        hiddenSection = Compactor(
+            mad=dict(d="", source=dict(d="", n=rootFar.said, o="I1I")),
+            makify=True,
+        )
+        hiddenSection.compact()
+
+        compactSection = acdcmap(
+            israid=root.pre,
+            attribute=dict(d="", role="compact-edge-section"),
+            edge=hiddenSection.said,
+        )
+        compactSectionNodes = {
+            compactSection.said: {"serder": compactSection},
+        }
+
+        assert evaluator.walk(
+            compactSection.said, nodes=compactSectionNodes, closed=True,
+        ) == [compactSection.said]
+
+        verdict = evaluator.evaluate(
+            compactSection.said, nodes=compactSectionNodes,
+        )
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is False
+
+        # Reject malformed top-level Edge Section representations.
+        for malformedEdgeSection in ("", "garbage", []):
+            malformed = acdcmap(
+                israid=root.pre,
+                attribute=dict(d="", role="malformed-edge-section"),
+                edge=malformedEdgeSection,
+            )
+            assert evaluator.evaluate(
+                malformed.said,
+                nodes={malformed.said: {"serder": malformed}},
+            ) is None
+
+        # A schema cannot redefine the Edge Section as an array.
+        arraySchema = deepcopy(edgeSchema({}, []).sed)
+        arraySchema["$id"] = ""
+        arraySchema["properties"]["e"] = {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "object"},
+        }
+        arraySchema = Schemer(sed=arraySchema)
+        arrayEdgeSection = acdcmap(
+            israid=root.pre,
+            schema=arraySchema.sed,
+            attribute=dict(d="", role="array-edge-section"),
+            edge=[makeEdge("source", rootFar, "I1I")],
+        )
+        assert schemaEvaluator.evaluate(arrayEdgeSection).verdict == Verdicts.valid
+        assert evaluator.evaluate(
+            arrayEdgeSection.said,
+            nodes={
+                arrayEdgeSection.said: {"serder": arrayEdgeSection},
+                rootFar.said: {"serder": rootFar},
+            },
+        ) is None
+
+        # The top-level Edge Section must be a group, not a leaf Edge.
+        topLevelEdge = acdcmap(
+            israid=root.pre,
+            attribute=dict(d="", role="top-level-edge"),
+            edge=dict(d="", n=rootFar.said, o="I1I"),
+        )
+        assert evaluator.evaluate(
+            topLevelEdge.said,
+            nodes={
+                topLevelEdge.said: {"serder": topLevelEdge},
+                rootFar.said: {"serder": rootFar},
+            },
+        ) is None
+
+        # Reject false SAIDs on either the section or a nested Edge.
+        falseCommitments = (
+            dict(d=unrelatedFar.said,
+                 source=dict(d="", n=rootFar.said, o="I1I")),
+            dict(d="",
+                 source=dict(d=unrelatedFar.said, n=rootFar.said, o="I1I")),
+        )
+        for edge in falseCommitments:
+            # v2-spec authoring recomputes every section SAID, so a false one can
+            # only arrive as received bytes. Stand in for such a node directly.
+            honest = acdcmap(
+                israid=root.pre,
+                attribute=dict(d="", role="false-edge-commitment"),
+                edge=deepcopy(edge),
+            )
+            falseCommitment = _Forged(honest, e=edge)
+            assert evaluator.evaluate(
+                falseCommitment.said,
+                nodes={
+                    falseCommitment.said: {"serder": falseCommitment},
+                    rootFar.said: {"serder": rootFar},
+                },
+            ) is None
+
+        # A top-level group cannot carry a weight because it has no parent.
+        weightedSection = acdcmap(
+            israid=root.pre,
+            attribute=dict(d="", role="weighted-edge-section"),
+            edge=dict(
+                d="",
+                w=1,
+                source=dict(d="", n=rootFar.said, o="I1I"),
+            ),
+        )
+        assert evaluator.evaluate(
+            weightedSection.said,
+            nodes={
+                weightedSection.said: {"serder": weightedSection},
+                rootFar.said: {"serder": rootFar},
+            },
+        ) is None
+
+        # A schema-declared simple Edge points directly to a far node.
+        simpleCompactEdge = acdcmap(
+            israid=root.pre,
+            schema=edgeSchema({"source": {"type": "string"}},
+                              ["source"]).sed,
+            attribute=dict(d="", role="simple-compact-edge"),
+            edge=dict(d="", source=rootFar.said),
+        )
+        simpleCompactNodes = {
+            simpleCompactEdge.said: {"serder": simpleCompactEdge},
+            rootFar.said: {"serder": rootFar},
+        }
+        assert evaluator.walk(
+            simpleCompactEdge.said, nodes=simpleCompactNodes, closed=True,
+        ) == [simpleCompactEdge.said, rootFar.said]
+        assert schemaEvaluator.edgeKind(
+            simpleCompactEdge, ("source",)) == "simple"
+        verdict = evaluator.evaluate(
+            simpleCompactEdge.said, nodes=simpleCompactNodes,
+        )
+        assert verdict.verdict == Verdicts.valid
+        assert evaluator.walk(
+            simpleCompactEdge.said,
+            nodes={simpleCompactEdge.said: {"serder": simpleCompactEdge}},
+            closed=True,
+        ) is None
+        verdict = evaluator.evaluate(
+            simpleCompactEdge.said,
+            nodes={simpleCompactEdge.said: {"serder": simpleCompactEdge}},
+        )
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is True
+
+        # Refuse a string Edge when its schema does not define its meaning.
+        ambiguousSchema = deepcopy(
+            edgeSchema({"source": {"type": "string"}}, ["source"]).sed)
+        ambiguousSchema["$id"] = ""
+        edgeDefinition = ambiguousSchema["properties"]["e"]
+        edgeDefinition["properties"].pop("source")
+        edgeDefinition["additionalProperties"] = True
+        edgeDefinition["anyOf"] = [
+            {"properties": {"source": {"type": "string"}}},
+            {"type": "object"},
+        ]
+        ambiguousSchema = Schemer(sed=ambiguousSchema).sed
+        ambiguousCompactEdge = acdcmap(
+            israid=root.pre,
+            schema=ambiguousSchema,
+            attribute=dict(d="", role="ambiguous-compact-edge"),
+            edge=dict(d="", source=rootFar.said),
+        )
+        assert schemaEvaluator.edgeKind(
+            ambiguousCompactEdge, ("source",)) is None
+        verdict = evaluator.evaluate(
+            ambiguousCompactEdge.said,
+            nodes={ambiguousCompactEdge.said: {"serder": ambiguousCompactEdge}},
+        )
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is False
+
+        # A compact Edge remains unknown when AND requires it.
+        opaqueCompactEdge = acdcmap(
+            israid=root.pre,
+            schema=edgeSchema({
+                "source": {
+                    "type": "object",
+                    "required": ["d", "n", "o"],
+                    "properties": {
+                        "d": {"type": "string"},
+                        "n": {"type": "string"},
+                        "o": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+                "compact": compactBlock,
+            }, ["source", "compact"]).sed,
+            attribute=dict(d="", role="opaque-compact-edge"),
+            edge=dict(
+                d="",
+                source=dict(d="", n=rootFar.said, o="I1I"),
+                compact=rootFar.said,
+            ),
+        )
+        assert schemaEvaluator.edgeKind(
+            opaqueCompactEdge, ("compact",)) == "compact"
+        verdict = evaluator.evaluate(
+            opaqueCompactEdge.said,
+            nodes={
+                opaqueCompactEdge.said: {"serder": opaqueCompactEdge},
+                rootFar.said: {"serder": rootFar},
+            },
+        )
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is False
+
+        # OR succeeds when one disclosed Edge is valid.
+        validCompactEdge = acdcmap(
+            israid=root.pre,
+            schema=edgeSchema({
+                "o": {"type": "string"},
+                "source": {
+                    "type": "object",
+                    "required": ["d", "n", "o"],
+                    "properties": {
+                        "d": {"type": "string"},
+                        "n": {"type": "string"},
+                        "o": {"type": "string"},
+                    },
+                    "additionalProperties": False,
+                },
+                "compact": compactBlock,
+            }, ["o", "source", "compact"]).sed,
+            attribute=dict(d="", role="valid-compact-edge"),
+            edge=dict(
+                d="",
+                o="OR",
+                source=dict(d="", n=rootFar.said, o="I1I"),
+                compact=rootFar.said,
+            ),
+        )
+        verdict = evaluator.evaluate(
+            validCompactEdge.said,
+            nodes={
+                validCompactEdge.said: {"serder": validCompactEdge},
+                rootFar.said: {"serder": rootFar},
+            },
+        )
+        assert verdict.verdict == Verdicts.valid
+        assert schemaEvaluator.edgeKind(
+            validCompactEdge, ("compact",)) == "compact"
+
+        # A valid sibling satisfies OR when a simple far-node Edge is undisclosed.
+        simpleOrEdge = acdcmap(
+            israid=root.pre,
+            schema=edgeSchema({
+                "o": {"type": "string"},
+                "source": deepcopy(compactBlock["oneOf"][1]),
+                "missing": {"type": "string"},
+            }, ["o", "source", "missing"]).sed,
+            attribute=dict(d="", role="simple-or-edge"),
+            edge=dict(
+                d="",
+                o="OR",
+                source=dict(d="", n=rootFar.said),
+                missing=unrelatedFar.said,
+            ),
+        )
+        verdict = evaluator.evaluate(
+            simpleOrEdge.said,
+            nodes={
+                simpleOrEdge.said: {"serder": simpleOrEdge},
+                rootFar.said: {"serder": rootFar},
+            },
+        )
+        assert verdict.verdict == Verdicts.valid
+
+        # A compact Edge value must be a valid SAID.
+        invalidCompactEdge = acdcmap(
+            israid=root.pre,
+            attribute=dict(d="", role="invalid-compact-edge"),
+            edge=dict(
+                d="",
+                o="OR",
+                source=dict(d="", n=rootFar.said, o="I1I"),
+                compact="garbage",
+            ),
+        )
+        assert evaluator.evaluate(
+            invalidCompactEdge.said,
+            nodes={
+                invalidCompactEdge.said: {"serder": invalidCompactEdge},
+                rootFar.said: {"serder": rootFar},
+            },
+        ) is None
+
+        # I1I requires equal near and far issuers.
+        verdict = evaluate(root.pre, rootFar, "I1I")
+        assert verdict.verdict == Verdicts.valid
+        verdict = evaluate(unrelated.pre, rootFar, "I1I")
+        assert verdict.verdict == Verdicts.invalid
+
+        # DI1I accepts equality but waits for missing delegation evidence.
+        verdict = evaluate(root.pre, rootFar, "DI1I")
+        assert verdict.verdict == Verdicts.valid
+        verdict = evaluate(delegate.pre, rootFar, "DI1I")
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is True
+
+        # Anchor the delegate, then accept only its actual ancestry.
+        root.interact(data=[SealEvent(i=delegate.pre,
+                                      s=delegate.kever.serder.snh,
+                                      d=delegate.kever.serder.said)._asdict()],
+                      kind=Kinds.cesr)
+        verdict = evaluate(delegate.pre, rootFar, "DI1I")
+        assert verdict.verdict == Verdicts.valid
+        verdict = evaluate(delegate.pre, unrelatedFar, "DI1I")
+        assert verdict.verdict == Verdicts.invalid
+
+        # The latest issuer-identity operator wins.
+        verdict = evaluate(delegate.pre, rootFar, ["DI1I", "I1I"])
+        assert verdict.verdict == Verdicts.invalid
+        verdict = evaluate(delegate.pre, rootFar, ["I1I", "DI1I"])
+        assert verdict.verdict == Verdicts.valid
+
+        # Explicit I1I suppresses the targeted far node's I2I default.
+        targetedFar = acdcmap(israid=root.pre,
+                              attribute=dict(d="", role="targeted-far"),
+                              iseaid=issuee.pre)
+        verdict = evaluate(root.pre, targetedFar, "I1I")
+        assert verdict.verdict == Verdicts.valid
+
+        # Independent operator groups compose with I1I.
+        verdict = evaluate(root.pre, targetedFar, ["NI2I", "I1I"])
+        assert verdict.verdict == Verdicts.valid
+        verdict = evaluate(root.pre, targetedFar, ["E1E", "I1I"],
+                           nearIssuee=issuee.pre)
+        assert verdict.verdict == Verdicts.valid
+        verdict = evaluate(root.pre, targetedFar, ["E1E", "I1I"],
+                           nearIssuee=otherIssuee.pre)
+        assert verdict.verdict == Verdicts.invalid
+
+        # Unrecognized operators never weaken a proven failure.
+        verdict = evaluate(unrelated.pre, rootFar, ["BOGUS", "I1I"])
+        assert verdict.verdict == Verdicts.invalid
+        verdict = evaluate(root.pre, targetedFar, "BOGUS")
+        assert verdict.verdict == Verdicts.invalid
+
+        # A matching far-node schema pin is valid.
+        verdict = evaluate(root.pre, rootFar, "I1I",
+                           schema=rootFar.schema["$id"])
+        assert verdict.verdict == Verdicts.valid
+
+        # A proven E1E failure overrides retryable DI1I evidence.
+        missingAnchor = hby.makeHab(name="missing-anchor", delpre=root.pre,
+                                    kind=Kinds.cesr)
+        verdict = evaluate(missingAnchor.pre, targetedFar,
+                           ["E1E", "DI1I"], nearIssuee=otherIssuee.pre)
+        assert verdict.verdict == Verdicts.invalid
+
+        # Every operator in a list must be a string.
+        malformed = evaluate(root.pre, rootFar, ["I1I", 1])
+        assert malformed is None
+
+        # Reject malformed, missing, and unreachable graph nodes.
+        assert evaluator.evaluate(rootFar.said, nodes={}) is None
+        assert evaluator.evaluate(
+            [], nodes={rootFar.said: {"serder": rootFar}}) is None
+        assert evaluator.evaluate(rootFar.said,
+                                  nodes={rootFar.said: {}}) is None
+        assert evaluator.evaluate(
+            rootFar.said,
+            nodes={
+                rootFar.said: {"serder": rootFar},
+                unrelatedFar.said: {"serder": unrelatedFar},
+            }) is None
+
+        # A required missing far node is retryable evidence, not malformed input.
+        dangling = acdcmap(
+            israid=root.pre,
+            attribute=dict(d="", role="near"),
+            edge=makeEdge("source", rootFar, "I1I"),
+        )
+        verdict = evaluator.evaluate(
+            dangling.said, nodes={dangling.said: {"serder": dangling}})
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is True
+
+        # An Edge node reference must be a SAID string.
+        malformedReference = acdcmap(
+            israid=root.pre,
+            attribute=dict(d="", role="near"),
+            edge=makeEdge("source", rootFar, "I1I"),
+        )
+        malformedReference.sad["e"]["source"]["n"] = []
+        assert evaluator.evaluate(
+            malformedReference.said,
+            nodes={
+                malformedReference.said: {"serder": malformedReference},
+                rootFar.said: {"serder": rootFar},
+            }) is None
+
+        # Reject a malformed inline schema pin.
+        malformedSchema = acdcmap(
+            israid=root.pre,
+            attribute=dict(d="", role="near"),
+            edge=makeEdge("source", rootFar, "I1I"),
+        )
+        malformedSchema.sad["e"]["source"]["s"] = {
+            "$id": rootFar.schema["$id"],
+            "type": object(),
+        }
+        assert evaluator.evaluate(
+            malformedSchema.said,
+            nodes={
+                malformedSchema.said: {"serder": malformedSchema},
+                rootFar.said: {"serder": rootFar},
+            }) is None
+
+        # Schema collection validation rejects malformed caller input.
+        verdict = schemaEvaluator.validateSchemas(nodes=None, order=[])
+        assert verdict.verdict == Verdicts.invalid
+
+
 def test_node_schema_verdicts_follow_edge_group_reduction():
     """Treat a far node's own schema as part of its Edge-group member verdict."""
     with openHby(name="edge-node-schema-reduction", base="test",
@@ -120,8 +644,8 @@ def test_node_schema_verdicts_follow_edge_group_reduction():
                     alternatives=dict(
                         d="",
                         o=operator,
-                        valid=dict(d="", n=validFar.said, o="NI2I"),
-                        optional=dict(d="", n=optionalFar.said, o="NI2I"),
+                        valid=dict(d="", n=validFar.said, o="I1I"),
+                        optional=dict(d="", n=optionalFar.said, o="I1I"),
                     ),
                 ),
             )
@@ -182,3 +706,81 @@ def test_delegation_refusal_cycle_is_decided():
 
     refusal = delegationRefusal(kevers, Store(), "A", "C")
     assert refusal and "cycles" in refusal
+
+
+def test_edge_relations_compose_without_short_circuit():
+    """Every relation, pin and member enters one Kleene AND."""
+    with openHby(name="edge-kleene", base="test", version=Vrsn_2_0) as hby:
+        root = hby.makeHab(name="root")
+        issuee = hby.makeHab(name="issuee")
+        delegate = hby.makeHab(name="delegate", delpre=root.pre)
+
+        def verifyNode(serder, nest, *, records=None):
+            return valid(f"node {serder.said} authenticated for edge test")
+
+        schemaEvaluator = SchemaEvaluator(hby.db)
+        evaluator = EdgeEvaluator(schemaEvaluator=schemaEvaluator,
+                                  verifyNode=verifyNode,
+                                  isDelegated=hby.kvy.isDelegated)
+
+        far = acdcmap(israid=root.pre, attribute=dict(d="", role="far"),
+                      iseaid=issuee.pre)
+
+        def leaf(nearIssuer, edge, *, nearIssuee=None):
+            near = acdcmap(israid=nearIssuer, attribute=dict(d="", role="near"),
+                           edge=dict(d="", source=dict(d="", n=far.said, **edge)),
+                           iseaid=nearIssuee)
+            return evaluator._evaluateLeafEdge(
+                near.sad["e"]["source"], nodes={far.said: {"serder": far}},
+                nserder=near, memo={far.said: valid("far node vetted elsewhere")})
+
+        # Unrecognized and NOT are non-retryable unknowns ANDed beside a pending
+        # DI1I, so the Edge is unknown and nothing that arrives can settle it.
+        verdict = leaf(delegate.pre, dict(o=["XYZ", "NOT", "DI1I"]))
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is False
+
+        # The pending DI1I alone is retryable.
+        verdict = leaf(delegate.pre, dict(o="DI1I"))
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is True
+
+        # An unrecognized token beside a refused I1I is still a refusal.
+        assert leaf(delegate.pre, dict(o=["XYZ", "I1I"])).verdict == Verdicts.invalid
+
+        # I1I suppresses the targeted far node's I2I default; listing I2I with it
+        # composes the two groups, and I2I then refuses (near issuer != far issuee).
+        assert leaf(root.pre, dict(o="I1I")).verdict == Verdicts.valid
+        assert leaf(root.pre, dict(o=["I1I", "I2I"])).verdict == Verdicts.invalid
+
+        # Every schema pin is evaluated, not only the first failure: two uncached
+        # pins leave the Edge retryable and carry both missing-schema causes.
+        uncached = [Schemer(sed={"$id": "", "type": "object", "title": title}).said
+                    for title in ("one", "two")]
+        verdict = evaluator._evaluateLeafEdge(
+            dict(d="", n=far.said, o="I1I", s=uncached[1]),
+            nodes={far.said: {"serder": far}}, nserder=far,
+            memo={far.said: valid("far node vetted elsewhere")},
+            inheritedPins=(uncached[0],))
+        assert verdict.verdict == Verdicts.unknown
+        assert verdict.retryable is True
+        assert {str(cause) for cause in verdict.causes} == set(uncached)
+
+        # A refused relation skips pin evaluation, but a refused pin still decides
+        # an Edge whose other pin is merely uncached.
+        failing = dict(far.sad["s"])
+        failing["required"] = [*failing["required"], "z"]
+        failing = Schemer(sed=failing)
+        hby.db.schema.pin(failing.said, failing)
+        verdict = evaluator._evaluateLeafEdge(
+            dict(d="", n=far.said, o="I1I", s=failing.said),
+            nodes={far.said: {"serder": far}}, nserder=far,
+            memo={far.said: valid("far node vetted elsewhere")},
+            inheritedPins=(uncached[0],))
+        assert verdict.verdict == Verdicts.invalid
+
+        # Shape rules hold even when the walk is bypassed.
+        for edges in (dict(d="", n=far.said), dict(d="", w=1, a=dict(d="", n=far.said))):
+            assert evaluator._evaluateGroupEdge(
+                edges, nodes={far.said: {"serder": far}}, nserder=far,
+                nested=False, memo={}) is None
