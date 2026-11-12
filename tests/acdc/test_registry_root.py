@@ -13,11 +13,12 @@ from keri import Vrsn_2_0 as V2
 from keri.acdc import Regery, Registrar, acdcmap, ipexing, salting
 from keri.acdc.salting import RegistryRoot, RootDeferred, RootRefused, RootUnverified, rootExn
 from keri.app import Notifier, openCF, openHby
-from keri.core import (Codens, Counter, Dater, Diger, Kevery, Kramer, MtrDex, Parser, Salter,
-                       SealSource, SerderKERI, Signer, Texter, exchange, messagize)
+from keri.core import (Blinder, Codens, Counter, Dater, Diger, Kevery, Kramer, MtrDex, Parser, Salter,
+                       Number, SealSource, SerderKERI, Signer, Texter, exchange, messagize)
 from keri.help import helping
 from keri.kering import Ilks, Kinds, ValidationError
 from keri.peer import Exchanger, RouteRefuser
+from keri.peer.exchanging import loadParsedNestedSubstreams
 
 Fixture = Path(__file__).parent / "fixtures" / "registry_root_essr.json"
 
@@ -595,6 +596,72 @@ def test_every_member_holds_every_root_after_group_dh():
                 roots = {side.hby.mgr.getRegistryRoot(side.hab.pre, registry.regk).qb64
                          for side in members}
                 assert len(roots) == 1
+
+
+@contextmanager
+def issued(count=2):
+    """Group DH over ``count`` registries, each Grant ACDC issued and finished by both custodians.
+
+    Each custodian's only verification evidence is its stored Grant: no
+    opening is held, so every hint must be derived per registry.
+    """
+    from tests.acdc.test_group_dh import exchange as dh, groups
+
+    with groups(count=count) as h:
+        for side in h.members:
+            side.root = salting.loadHandlers(side.hby, side.exc, None, side.rgy)
+        dh(h)
+        issuer = h.issuers[h.lead]
+        h.acdcs = {}
+        for nest in loadParsedNestedSubstreams(issuer.hby, h.grant.said):
+            registry = next(reg for reg in h.registries if reg.regk == nest.serder.sad['rd'])
+            _, event = h.registrar.issue(registry, nest.serder,
+                salt=issuer.hab.mgr.getRegistryRoot(issuer.hab.pre, registry.regk).qb64)
+            h.anchor(event)
+            h.acdcs[registry.regk] = nest.serder.said
+        for members in (h.issuers, h.issuees):
+            members[h.lead].dh.finish(h.xid)
+            assert members[h.lead].hby.db.exns.get((h.grant.said,)) is not None
+        yield h
+
+
+def test_multi_registry_copies_derive_their_own_hint_and_verify_on_arrival():
+    from tests.acdc.test_group_dh import receive as deliver
+
+    with issued(count=2) as h:
+        regks = sorted(h.acdcs)
+        assert len(set(h.acdcs.values())) == 2
+        for members in (h.issuers, h.issuees):
+            custodian, other = members[h.lead], members[h.lead + 1]
+            gid = custodian.hab.pre
+            for regk in regks:
+                bup = custodian.rgy.store.headEvent(regk)
+                root = custodian.hby.mgr.getRegistryRoot(gid, regk)
+                uuid = Blinder.makeUUID(salt=root.qb64, sn=Number(numh=bup.sad['n']).num)
+                assert custodian.root.hint(gid, regk, uuid, bup) == h.acdcs[regk]
+                # One hint for every registry, the old newcomers bug, fails the self-check.
+                wrong = next(said for key, said in h.acdcs.items() if key != regk)
+                with pytest.raises(ValidationError, match='does not reproduce'):
+                    custodian.root.prepare(custodian.member, other.member.pre, gid, regk, td=wrong)
+                deliver(other, custodian.root.prepare(custodian.member, other.member.pre, gid, regk,
+                                                      hinted=True))
+            # Each copy verified by its own derived hint: retained on arrival, nothing pending.
+            assert other.root.pending() == [] and other.root.held(other.hab.pre) == regks
+
+
+def test_automatic_copy_without_local_hint_evidence_is_not_sent():
+    with world() as w:
+        seed(w)
+        # Alice holds the root but no opening and no Grant for this registry.
+        with pytest.raises(RootUnverified, match='no held opening or stored Grant'):
+            w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry, hinted=True)
+        # A manual send without a hint still seals an unverifiable copy, as before.
+        pending = said(w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry))
+        assert pending
+        # An override that does not reproduce the commitment is never sealed.
+        with pytest.raises(ValidationError, match='does not reproduce'):
+            w.alice.root.prepare(w.alice.hab, w.bob.hab.pre, w.gid, w.registry,
+                                 td=w.registry)
 
 
 def test_ipex_loader_registers_the_root_handler_once():

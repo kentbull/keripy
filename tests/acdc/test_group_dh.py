@@ -215,9 +215,10 @@ def test_two_groups_issue_same_grant_then_explicitly_copy_root(fakeHelpingClock)
         recipient = h.issuees[1]
         receiver = salting.loadHandlers(recipient.hby, recipient.exc, None, recipient.rgy)
         wire = RegistryRoot(issuee.hby, issuee.rgy).prepare(
-            issuee.member, recipient.member.pre, issuee.hab.pre, h.registry.regk, event=event.said)
+            issuee.member, recipient.member.pre, issuee.hab.pre, h.registry.regk, event=event.said,
+            td='')
         receive(recipient, wire)
-        # Stored pending: nothing is decrypted or retained before explicit approval.
+        # Without a hint the copy stays pending until a manual retry supplies the opening.
         assert root(recipient, h) is None
         assert not recipient.dh._operations[h.xid]['private']
         (pending,) = receiver.pending()

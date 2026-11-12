@@ -294,11 +294,18 @@ class RegistryRoot:
 
     # sending
 
-    def prepare(self, hab, recipient, gid, registry, *, event=None, td=None):
+    def prepare(self, hab, recipient, gid, registry, *, event=None, td=None, hinted=False):
         """Return one authorized copy of a root held locally for ``gid`` or the issuer.
 
         ``hab`` is the local individual sender. ``event`` defaults to the
-        registry's accepted BUP head.
+        registry's accepted BUP head. ``td`` is the recipient's verification
+        hint: None derives it for this registry (``hint``), ``''`` sends none,
+        and any other value is an override. Before sealing, a derived or
+        override hint must let this sender's own root reproduce the BUP ``b``
+        commitment, so a copy never carries a hint that cannot verify it.
+        ``hinted`` refuses with RootUnverified, instead of sending a copy
+        without a hint, when no local evidence yields one; automatic sends
+        set it.
         """
         rip = self.authorize(hab.pre, recipient, gid, registry)
         root = None
@@ -311,7 +318,45 @@ class RegistryRoot:
             raise ValidationError("no local root is held for this registry")
         bup = self._event(registry, event if event is not None
                           else self.rgy.store.headEvent(registry).said, rip)
+        uuid = Blinder.makeUUID(salt=root.qb64, sn=Number(numh=bup.sad['n']).num)
+        if td is None:
+            td = self.hint(gid, registry, uuid, bup)
+            if td is None and hinted:
+                raise RootUnverified(f"no held opening or stored Grant ACDC lets this root reproduce "
+                                     f"registry {registry} update {bup.said}; send it with an ACDC hint")
+        elif td and not self._reproduces(bup.sad['b'], uuid, td, gid):
+            raise ValidationError(f"the local root does not reproduce registry {registry} "
+                                  f"update {bup.said} with ACDC hint {td}")
         return rootExn(hab, recipient, gid, registry, root, event=bup.said, td=td)
+
+    def hint(self, gid, registry, uuid, bup):
+        """Return the ACDC SAID by which ``uuid`` reproduces ``bup``'s commitment, or None.
+
+        Derived per registry, never shared across registries: the ACDC of the
+        BUP's locally held opening first, then each ACDC of ``registry``
+        disclosed by a locally stored IPEX Grant. A candidate counts only
+        when it reproduces the commitment, which is the sender self-check.
+        """
+        held = self.rgy.store.opening(bup.said)
+        candidates = [held.acdc] if held is not None and held.acdc else []
+        for td in [*candidates, *self._acdcs(registry)]:
+            if self._reproduces(bup.sad['b'], uuid, td, gid):
+                return td
+        return None
+
+    def _acdcs(self, registry):
+        """Yield SAIDs of ACDCs in ``registry`` disclosed by locally stored IPEX Grants."""
+        from ..peer.exchanging import loadParsedNestedSubstreams
+        for (said,), serder in self.hby.db.exns.getTopItemIter():
+            if serder.ked.get('r') != '/ipex/grant':
+                continue
+            try:
+                nests = loadParsedNestedSubstreams(self.hby, said)
+            except (KeriError, ValueError, KeyError):
+                continue
+            for nest in nests:
+                if nest.serder.sad.get('rd') == registry:
+                    yield nest.serder.said
 
     # receiving
 
