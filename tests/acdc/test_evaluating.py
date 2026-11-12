@@ -3,9 +3,11 @@
 
 from copy import deepcopy
 
+import pytest
+
 from keri import Kinds, Vrsn_2_0
-from keri.acdc import (EdgeEvaluator, SchemaEvaluator, Verdicts, acdcmap,
-                       valid)
+from keri.acdc import (EdgeEvaluator, SchemaEvaluator, Verdicts, WalkPolicies,
+                       acdcmap, valid)
 from keri.app.habbing import openHby
 from keri.core import Compactor, Schemer, SealEvent
 
@@ -182,7 +184,7 @@ def test_issuer_identity_operators():
         }
 
         assert evaluator.walk(
-            compactSection.said, nodes=compactSectionNodes, closed=True,
+            compactSection.said, nodes=compactSectionNodes, walkPolicy=WalkPolicies.closed,
         ) == [compactSection.said]
 
         verdict = evaluator.evaluate(
@@ -296,7 +298,7 @@ def test_issuer_identity_operators():
             rootFar.said: {"serder": rootFar},
         }
         assert evaluator.walk(
-            simpleCompactEdge.said, nodes=simpleCompactNodes, closed=True,
+            simpleCompactEdge.said, nodes=simpleCompactNodes, walkPolicy=WalkPolicies.closed,
         ) == [simpleCompactEdge.said, rootFar.said]
         assert schemaEvaluator.edgeKind(
             simpleCompactEdge, ("source",)) == "simple"
@@ -307,14 +309,14 @@ def test_issuer_identity_operators():
         assert evaluator.walk(
             simpleCompactEdge.said,
             nodes={simpleCompactEdge.said: {"serder": simpleCompactEdge}},
-            closed=True,
+            walkPolicy=WalkPolicies.closed,
         ) is None
         verdict = evaluator.evaluate(
             simpleCompactEdge.said,
             nodes={simpleCompactEdge.said: {"serder": simpleCompactEdge}},
         )
         assert verdict.verdict == Verdicts.unknown
-        assert verdict.retryable is True
+        assert verdict.retryable is False
 
         # Refuse a string Edge when its schema does not define its meaning.
         ambiguousSchema = deepcopy(
@@ -438,6 +440,14 @@ def test_issuer_identity_operators():
             },
         )
         assert verdict.verdict == Verdicts.valid
+        # A closed walk refuses the same undisclosed simple far node.
+        assert evaluator.evaluate(
+            simpleOrEdge.said,
+            nodes={
+                simpleOrEdge.said: {"serder": simpleOrEdge},
+                rootFar.said: {"serder": rootFar},
+            },
+            walkPolicy=WalkPolicies.closed) is None
 
         # A compact Edge value must be a valid SAID.
         invalidCompactEdge = acdcmap(
@@ -539,7 +549,8 @@ def test_issuer_identity_operators():
                 unrelatedFar.said: {"serder": unrelatedFar},
             }) is None
 
-        # A required missing far node is retryable evidence, not malformed input.
+        # A required missing far node is undecided, not malformed input, and not
+        # retryable: the disclosure's bytes are fixed and cannot gain it later.
         dangling = acdcmap(
             israid=root.pre,
             attribute=dict(d="", role="near"),
@@ -548,7 +559,14 @@ def test_issuer_identity_operators():
         verdict = evaluator.evaluate(
             dangling.said, nodes={dangling.said: {"serder": dangling}})
         assert verdict.verdict == Verdicts.unknown
-        assert verdict.retryable is True
+        assert verdict.retryable is False
+        assert verdict.causes == ()
+        assert evaluator.evaluate(
+            dangling.said, nodes={dangling.said: {"serder": dangling}},
+            walkPolicy=WalkPolicies.closed) is None
+        with pytest.raises(ValueError, match="walk policy"):
+            evaluator.walk(dangling.said, nodes={dangling.said: {"serder": dangling}},
+                           walkPolicy="ajar")
 
         # An Edge node reference must be a SAID string.
         malformedReference = acdcmap(
@@ -674,12 +692,13 @@ def test_node_schema_verdicts_follow_edge_group_reduction():
         assert verdict.verdict == Verdicts.unknown
         assert verdict.retryable is True
 
-        # Missing far nodes participate in the same OR/AND reduction.
+        # Missing far nodes participate in the same OR/AND reduction, as a
+        # non-retryable unknown member.
         verdict = evaluateGroup("OR", undisclosedFar, discloseOptional=False)
         assert verdict.verdict == Verdicts.valid
         verdict = evaluateGroup("AND", undisclosedFar, discloseOptional=False)
         assert verdict.verdict == Verdicts.unknown
-        assert verdict.retryable is True
+        assert verdict.retryable is False
 
 
 def test_delegation_refusal_cycle_is_decided():
