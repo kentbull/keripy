@@ -97,13 +97,13 @@ class OobiDoer(doing.DoDoer):
         self.extend(self.authn.doers)
 
         while not self.obi.hby.db.roobi.get(keys=(self.oobi,)):
-            yield 0.25
+            yield self.hby.tocks["commandPoll"]
 
         obr = self.obi.hby.db.roobi.get(keys=(self.oobi,))
         if self.force:
             while obr.cid not in self.hby.kevers:
                 self.hby.kvy.processEscrows()
-                yield 0.25
+                yield self.hby.tocks["commandPoll"]
 
         print(self.oobi, obr.state)
 

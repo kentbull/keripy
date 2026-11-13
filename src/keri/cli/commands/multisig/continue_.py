@@ -81,7 +81,7 @@ class ContinueDoer(doing.DoDoer):
 
         print(f"Checking mailboxes for any events to process")
         while self.hby.db.cgms.get(keys=(hab.pre, number.qb64)) is None:
-            yield 1.0
+            yield self.hby.tocks["commandPoll"]
 
         print()
         printIdentifier(self.hby, hab.pre)

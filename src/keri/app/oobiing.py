@@ -297,8 +297,6 @@ def oobiRequestExn(hab, dest, oobi, version=Version, pvrsn=None, gvrsn=Version,
 class Oobiery:
     """ Resolver for OOBIs"""
 
-    RetryDelay = 30
-
     def __init__(self, hby, rvy=None, clienter=None, cues=None, version=None):
         """  DoDoer to handle the request and parsing of OOBIs
 
@@ -325,7 +323,9 @@ class Oobiery:
 
         self.cues = cues if cues is not None else decking.Deck()
         self.clients = dict()
-        self.doers = [self.clienter, doing.doify(self.scoobiDo)]
+        self.retryDelay = hby.tocks["oobiRetry"]  # seconds before a failed OOBI is retried
+        self.doers = [self.clienter,
+                      doing.doify(self.scoobiDo, tock=hby.tocks["oobi"])]
 
     def registerReplyRoutes(self, router):
         """ Register the routes for processing messages embedded in `rpy` event messages
@@ -613,7 +613,7 @@ class Oobiery:
         for (url,), obr in self.hby.db.eoobi.getTopItemIter():
             last = fromIso8601(obr.date)
             now = nowUTC()
-            if (now - last) > datetime.timedelta(seconds=self.RetryDelay):
+            if (now - last) > datetime.timedelta(seconds=self.retryDelay):
                 obr.date = toIso8601(now)
                 self.hby.db.eoobi.rem(keys=(url,))
                 self.hby.db.oobis.pin(keys=(url,), val=obr)
@@ -660,7 +660,8 @@ class Authenticator:
         self.hby = hby
         self.clienter = clienter if clienter is not None else Clienter()
         self.clients = dict()
-        self.doers = [self.clienter, doing.doify(self.authzDo)]
+        self.doers = [self.clienter,
+                      doing.doify(self.authzDo, tock=hby.tocks["oobi"])]
 
     def request(self, wurl, obr):
         client = self.clienter.request("GET", wurl)

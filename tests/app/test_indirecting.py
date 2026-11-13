@@ -22,6 +22,7 @@ from keri.app import (MailboxIterable, QryRpyMailboxIterable,
                       QueryEnd, Mailboxer, Receiptor,
                       setupWitness, createHttpServer, openHab, openHby,
                       ReceiptEnd, CESR_CONTENT_TYPE, CESR_DESTINATION_HEADER)
+from keri.app import indirecting
 from keri.app.httping import CESR_ATTACHMENT_HEADER
 
 

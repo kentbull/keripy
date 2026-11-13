@@ -127,7 +127,7 @@ class InitDoer(doing.DoDoer):
             self.extend(obi.doers)
 
             while oc > hby.db.roobi.cnt():
-                yield 0.25
+                yield hby.tocks["commandPoll"]
 
             for (oobi,), obr in hby.db.roobi.getTopItemIter():
                 if obr.state in (Result.resolved,):
@@ -151,7 +151,7 @@ class InitDoer(doing.DoDoer):
                 if set(wc) & set(cap) == set(wc):
                     break
 
-                yield 0.5
+                yield hby.tocks["commandPoll"]
 
             self.remove(authn.doers)
 

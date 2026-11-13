@@ -44,8 +44,10 @@ class Receiptor(doing.DoDoer):
         self.cues = cues if cues is not None else decking.Deck()
         self.clienter = Clienter()
 
-        doers = [self.clienter, doing.doify(self.witDo), doing.doify(self.gitDo)]
         self.hby = hby
+        doers = [self.clienter,
+                 doing.doify(self.witDo, tock=hby.tocks["receiptor"]),
+                 doing.doify(self.gitDo, tock=hby.tocks["receiptor"])]
 
         super(Receiptor, self).__init__(doers=doers)
 
@@ -334,7 +336,11 @@ class WitnessReceiptor(doing.DoDoer):
         self.cues = cues if cues is not None else decking.Deck()
         self.auths = auths if auths is not None else dict()
 
-        super(WitnessReceiptor, self).__init__(doers=[doing.doify(self.receiptDo)], **kwa)
+        self.idleTock = hby.tocks["witnessReceiptorIdle"]
+
+        super(WitnessReceiptor, self).__init__(
+            doers=[doing.doify(self.receiptDo,
+                               tock=hby.tocks["witnessReceiptor"])], **kwa)
 
     def receiptDo(self, tymth=None, tock=0.0, **kwa):
         """
@@ -450,7 +456,7 @@ class WitnessReceiptor(doing.DoDoer):
                     done = True
                     for witer in witers:
                         if not witer.idle:
-                            yield 1.0
+                            yield self.idleTock
                             done = False
                             break
                     if done:
@@ -493,7 +499,9 @@ class WitnessInquisitor(doing.DoDoer):
         self.msgs = msgs if msgs is not None else decking.Deck()
         self.sent = decking.Deck()
 
-        super(WitnessInquisitor, self).__init__(doers=[doing.doify(self.msgDo)], **kwa)
+        super(WitnessInquisitor, self).__init__(
+            doers=[doing.doify(self.msgDo,
+                               tock=hby.tocks["witnessInquisitor"])], **kwa)
 
     def msgDo(self, tymth=None, tock=1.0, **opts):
         """
@@ -641,7 +649,9 @@ class WitnessPublisher(doing.DoDoer):
         self.posted = 0
         self.msgs = msgs if msgs is not None else decking.Deck()
         self.cues = cues if cues is not None else decking.Deck()
-        super(WitnessPublisher, self).__init__(doers=[doing.doify(self.sendDo)], **kwa)
+        super(WitnessPublisher, self).__init__(
+            doers=[doing.doify(self.sendDo,
+                               tock=hby.tocks["witnessPublisher"])], **kwa)
 
     def sendDo(self, tymth=None, tock=0.0, **opts):
         """Doer loop that sends queued messages to each witness.

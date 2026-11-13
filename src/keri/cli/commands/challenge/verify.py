@@ -120,9 +120,13 @@ class VerifyDoer(doing.DoDoer):
         sys.stdout.write(f"Checking mailboxes for any challenge responses")
         sys.stdout.flush()
         found = False
+        dotted = None  # progress dots stay at one per second however often the check runs
         while helping.nowUTC() < end:
-            sys.stdout.write(".")
-            sys.stdout.flush()
+            now = helping.nowUTC()
+            if dotted is None or now - dotted >= datetime.timedelta(seconds=1):
+                dotted = now
+                sys.stdout.write(".")
+                sys.stdout.flush()
 
             digers = self.hby.db.reps.get(keys=(sig,))
             for diger in digers:
@@ -135,7 +139,7 @@ class VerifyDoer(doing.DoDoer):
             if found:
                 break
 
-            yield 2.0
+            yield self.hby.tocks["commandPoll"]
         print("\n")
 
         if found:

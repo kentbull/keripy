@@ -172,7 +172,10 @@ class WitnessStart(doing.DoDoer):
         self.responses = responses if responses is not None else decking.Deck()
         self.cues = cues if cues is not None else decking.Deck()
 
-        doers = [doing.doify(self.start), doing.doify(self.msgDo), doing.doify(self.escrowDo), doing.doify(self.cueDo)]
+        doers = [doing.doify(self.start, tock=0.0),
+                 doing.doify(self.msgDo, tock=hab.tocks["witnessMsg"]),
+                 doing.doify(self.escrowDo, tock=hab.tocks["witnessEscrow"]),
+                 doing.doify(self.cueDo, tock=hab.tocks["witnessCue"])]
         super().__init__(doers=doers, **opts)
 
     def start(self, tymth=None, tock=0.0, **kwa):
@@ -355,10 +358,10 @@ class Indirector(doing.DoDoer):
                                      kvy=self.kevery,
                                      version=self.hab.psr.version)
         doers = doers if doers is not None else []
-        doers.extend([doing.doify(self.msgDo),
-                      doing.doify(self.escrowDo)])
+        doers.extend([doing.doify(self.msgDo, tock=hab.tocks["indirectorMsg"]),
+                      doing.doify(self.escrowDo, tock=hab.tocks["indirectorEscrow"])])
         if self.direct:
-            doers.extend([doing.doify(self.cueDo)])
+            doers.extend([doing.doify(self.cueDo, tock=hab.tocks["indirectorCue"])])
 
         super(Indirector, self).__init__(doers=doers, **kwa)
         if self.tymth:
@@ -547,9 +550,9 @@ class MailboxDirector(doing.DoDoer):
         self.ims = ims if ims is not None else bytearray()
 
         doers = []
-        doers.extend([doing.doify(self.pollDo),
-                      doing.doify(self.msgDo),
-                      doing.doify(self.escrowDo)])
+        doers.extend([doing.doify(self.pollDo, tock=hby.tocks["mailboxPoll"]),
+                      doing.doify(self.msgDo, tock=hby.tocks["mailboxMsg"]),
+                      doing.doify(self.escrowDo, tock=hby.tocks["mailboxEscrow"])])
 
         self.rtr = rvy.rtr if rvy is not None else routing.Router()
         self.rvy = rvy if rvy is not None else routing.Revery(db=self.hby.db, rtr=self.rtr, cues=cues,
@@ -765,7 +768,14 @@ class Poller(doing.DoDoer):
         self.msgs = None if msgs is not None else decking.Deck()
         self.times = dict()
 
-        doers = [doing.doify(self.eventDo)]
+        # pollerConnect: failure backoff when wit end unavailable, stops rapid retries and logging
+        self.connectTock = hab.tocks["pollerConnect"]
+        # pollerRetry: reconnect wait after a long-poll window closes; the window close is
+        # this client's own choice, not a dropped stream, so the server's SSE retry hint
+        # (kept in .retry, where 0 still stops polling) does not set this wait
+        self.retryTock = hab.tocks["pollerRetry"]
+
+        doers = [doing.doify(self.eventDo, tock=hab.tocks["pollerEvent"])]
 
         super(Poller, self).__init__(doers=doers, **kwa)
 
@@ -788,7 +798,7 @@ class Poller(doing.DoDoer):
                 client, clientDoer = httpClient(self.hab, self.witness)
             except MissingEntryError as e:
                 traceback.print_exception(e, file=sys.stderr)  # logging
-                yield tock
+                yield self.connectTock
                 continue
 
             self.extend([clientDoer])
@@ -849,8 +859,8 @@ class Poller(doing.DoDoer):
                     self.times[tpc] = nowUTC()
                     self.hab.db.tops.pin((self.pre, self.witness), witrec)
 
-                yield 0.25
-            yield self.retry / 1000
+                yield tock
+            yield self.retryTock
 
 
 class HttpEnd:
@@ -1064,7 +1074,10 @@ class ReceiptEnd(doing.DoDoer):
                                   kvy=self.hab.kvy,
                                   version=self.version)
 
-        super(ReceiptEnd, self).__init__(doers=[doing.doify(self.interceptDo)])
+        super(ReceiptEnd, self).__init__(
+            doers=[doing.doify(self.interceptDo,
+                               tock=hab.tocks["receiptIntercept"])]
+        )
 
     def on_post(self, req, rep):
         """  Receipt POST endpoint handler

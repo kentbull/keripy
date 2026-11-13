@@ -48,7 +48,13 @@ class Anchorer(doing.DoDoer):
         self.proxy = proxy
         self.auths = auths
 
-        super(Anchorer, self).__init__(doers=[self.witq, self.witDoer, self.postman, doing.doify(self.escrowDo)], **kwa)
+        super(Anchorer, self).__init__(
+            doers=[self.witq,
+                   self.witDoer,
+                   self.postman,
+                   doing.doify(self.escrowDo,
+                               tock=hby.tocks["anchorerEscrow"])],
+            **kwa)
 
     def delegation(self, pre, sn=None, proxy=None, auths=None, version=None):
         """
@@ -106,7 +112,7 @@ class Anchorer(doing.DoDoer):
 
         return True
 
-    def escrowDo(self, tymth, tock=1.0, **kwa):
+    def escrowDo(self, tymth, tock=0.0, **kwa):
         """ Process escrows of delegation events waiting to be completed.
 
         Steps involve:
@@ -120,16 +126,15 @@ class Anchorer(doing.DoDoer):
         Parameters:
             tymth (function): injected function wrapper closure returned by .tymen() of
                 Tymist instance. Calling tymth() returns associated Tymist .tyme.
-            tock (float): injected initial tock value.  Default to 1.0 to slow down processing
+            tock (float): injected scheduler cadence
         """
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.processEscrows()
-            yield 0.5
+            yield tock
 
     def processEscrows(self):
         """Process delegation escrows"""
