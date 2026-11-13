@@ -21,6 +21,37 @@ from keri.app import agenting, indirecting
 from keri.help import nowIso8601
 
 
+def test_receiptor_tocks_are_generator_local():
+    with openHby(name="receiptor-generator-tocks", temp=True) as hby:
+        receiptor = agenting.Receiptor(hby=hby)
+        seen = []
+
+        def receipt(pre, sn=None, auths=None, tock=0.0):
+            seen.append(("receipt", tock))
+            yield tock
+
+        def get(pre, sn=None, tock=0.0):
+            seen.append(("get", tock))
+            yield tock
+
+        receiptor.receipt = receipt
+        receiptor.get = get
+        receiptor.msgs.append({"pre": "witness"})
+        receiptor.gets.append({"pre": "query"})
+
+        witness = receiptor.witDo(tymth=lambda: 0.0, tock=0.011)
+        query = receiptor.gitDo(tymth=lambda: 0.0, tock=0.013)
+
+        assert next(witness) == 0.011
+        assert next(query) == 0.013
+        assert next(witness) == 0.011
+        assert next(query) == 0.013
+        assert seen == [("receipt", 0.011), ("get", 0.013)]
+
+        witness.close()
+        query.close()
+
+
 @pytest.mark.parametrize("version,kind,binary", [
     (Vrsn_2_0, Kinds.cesr, False),
     (Vrsn_2_0, Kinds.cesr, True),

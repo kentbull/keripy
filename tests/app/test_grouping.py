@@ -17,6 +17,7 @@ from keri.app import (Notifier, Counselor, Multiplexor,
 from keri.app import grouping
 
 from keri.app.grouping import loadHandlers
+from keri.app.tocking import resolveTocks
 
 from keri.core import (Prefixer, Number, Diger, Kevery,
                        Parser, SerderKERI, Counter,
@@ -118,7 +119,7 @@ def test_counselor_explicit_version_propagates_to_default_anchorer_and_delegator
         mhab=SimpleNamespace(pre="ELocalMember",
                              kever=SimpleNamespace(verfers=[SimpleNamespace(qb64="DFirst")])),
     )
-    fake_hby = SimpleNamespace(db=fake_db, habs={pre: fake_ghab})
+    fake_hby = SimpleNamespace(db=fake_db, habs={pre: fake_ghab}, tocks=resolveTocks(environ={}))
 
     counselor = Counselor(hby=fake_hby, version=Vrsn_1_0, kind=Kinds.json)
     counselor.processPartialSignedEscrow()

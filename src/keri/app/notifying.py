@@ -340,7 +340,10 @@ class Noter(LMDBer):
 class Notifier:
     """ Class for sending notifications to the controller of an agent.
 
-    The notifications are not just signals to reload data and not persistent messages that can be reread"""
+    The notifications are not just signals to reload data and not persistent messages that can be reread
+
+    Notifier exposes its Signaler for the process-level scheduler to own. It
+    does not schedule the Signaler itself."""
 
     def __init__(self, hby, signaler=None, noter=None):
         """
@@ -348,7 +351,8 @@ class Notifier:
         Parameters:
             hby (Habery): habery database environment with Signator
             noter (Noter): database
-            signaler (Signaler): signaler for sending signals to controller that new data is available"""
+            signaler (Signaler): caller-owned shared signaler; when omitted,
+                create one for the caller to schedule"""
         self.hby = hby
         self.signaler = signaler if signaler is not None else Signaler()
         self.noter = noter if noter is not None else Noter(name=hby.name, temp=hby.temp)

@@ -92,7 +92,7 @@ class LaunchDoer(doing.DoDoer):
         while helping.nowUTC() < end:
             if doer.done:
                 break
-            yield 1.0
+            yield self.hby.tocks["commandPoll"]
 
         self.remove([doer])
         print("\n")

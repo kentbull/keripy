@@ -144,7 +144,7 @@ def runWitness(name="witness", base="", alias="witness", bran="", tcp=5631, http
                                   certpath=certpath,
                                   cafilepath=cafilepath))
 
-        runController(doers=doers, expire=expire)
+        runController(doers=doers, expire=expire, tock=hby.tocks["doist"])
     except Exception:
         # Log startup failures at CRITICAL with traceback.
         logger.critical("Witness %r failed to start", name, exc_info=True)

@@ -10,7 +10,7 @@ import time
 import pytest
 import os
 
-from keri.app import (Notice, DicterSuber, Noter, Notifier,
+from keri.app import (Notice, DicterSuber, Noter, Notifier, Signaler,
                       notice, openHby)
 
 from keri.core import Cigar, Saider
@@ -231,3 +231,13 @@ def test_notifier(mockHelpingNowUTC):
 
     assert notifier.mar(note.rid) is False
     assert notifier.rem(note.rid) is True
+
+
+def test_notifier_exposes_caller_owned_signaler():
+    with openHby(name="notifier-signaler", temp=True) as hby:
+        signaler = Signaler()
+        notifier = Notifier(hby=hby, signaler=signaler)
+        try:
+            assert notifier.signaler is signaler
+        finally:
+            notifier.noter.close(clear=True)

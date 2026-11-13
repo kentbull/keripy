@@ -44,8 +44,9 @@ class Poster(doing.DoDoer):
         self.cues = cues if cues is not None else decking.Deck()
         self.version = version if version is not None else getattr(hby, "version", Version)
         self.kind = kind if kind is not None else Kinds.json
+        self.deliverTock = 0.0
 
-        doers = [doing.doify(self.deliverDo)]
+        doers = [doing.doify(self.deliverDo, tock=self.deliverTock)]
         super(Poster, self).__init__(doers=doers, **kwa)
 
     def deliverDo(self, tymth=None, tock=0.0, **kwa):
@@ -62,8 +63,7 @@ class Poster(doing.DoDoer):
 
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while self.evts:
@@ -93,14 +93,14 @@ class Poster(doing.DoDoer):
                     self.extend([transport])
                     try:
                         while not transport.done:
-                            yield self.tock
+                            yield tock
                         for child in children:
                             if isinstance(child, HTTPStreamMessenger) and not 200 <= child.rep.status < 300:
                                 raise ConfigurationError(f'HTTP submission failed with status {child.rep.status}')
                     finally:
                         self.remove([transport])
                     self.cues.append(dict(dest=recp, topic=tpc, said=srdr.said))
-                    yield self.tock
+                    yield tock
                     continue
 
                 ends = hab.endsFor(recp)
@@ -116,9 +116,11 @@ class Poster(doing.DoDoer):
                                                             serder=srdr,
                                                             atc=atc,
                                                             topic=tpc,
-                                                            gvrsn=evt.get('gvrsn'))
+                                                            gvrsn=evt.get('gvrsn'),
+                                                            tock=tock)
                                 else:
-                                    yield from self.sendDirect(hab, ends[role], serder=srdr, atc=atc)
+                                    yield from self.sendDirect(hab, ends[role], serder=srdr,
+                                                               atc=atc, tock=tock)
 
                     # otherwise send to one witness
                     elif Roles.witness in ends:
@@ -128,7 +130,8 @@ class Poster(doing.DoDoer):
                                                          serder=srdr,
                                                          atc=atc,
                                                          topic=tpc,
-                                                         gvrsn=evt.get('gvrsn'))
+                                                         gvrsn=evt.get('gvrsn'),
+                                                         tock=tock)
                     else:
                         logger.info(f"No end roles for {recp} to send evt={srdr.said}")
                         continue
@@ -139,9 +142,9 @@ class Poster(doing.DoDoer):
 
                 self.cues.append(dict(dest=recp, topic=tpc, said=srdr.said))
 
-                yield self.tock
+                yield tock
 
-            yield self.tock
+            yield tock
 
     def send(self, dest, topic, serder, src=None, hab=None, attachment=None, *, stream=False,
              gvrsn=None):
@@ -193,8 +196,9 @@ class Poster(doing.DoDoer):
 
         return False
 
-    def sendEventToDelegator(self, sender, hab, fn=0):
+    def sendEventToDelegator(self, sender, hab, fn=0, tock=None):
         """ Returns generator for sending event and waiting until send is complete """
+        tock = self.deliverTock if tock is None else tock
         # Send KEL event for processing
         icp = self.hby.db.cloneEvtMsg(pre=hab.pre, fn=fn, dig=hab.kever.serder.saidb,
                                       version=hab.kever.serder.pvrsn)
@@ -210,9 +214,10 @@ class Poster(doing.DoDoer):
                     break
                 else:
                     self.cues.append(cue)
-            yield self.tock
+            yield tock
 
-    def sendDirect(self, hab, ends, serder, atc):
+    def sendDirect(self, hab, ends, serder, atc, tock=None):
+        tock = self.deliverTock if tock is None else tock
         for ctrl, locs in ends.items():
             witer = messengerFrom(hab=hab, pre=ctrl, urls=locs)
 
@@ -224,11 +229,12 @@ class Poster(doing.DoDoer):
             self.extend([witer])
 
             while not witer.idle:
-                _ = (yield self.tock)
+                _ = (yield tock)
 
             self.remove([witer])
 
-    def forward(self, hab, ends, recp, serder, atc, topic, gvrsn=None):
+    def forward(self, hab, ends, recp, serder, atc, topic, gvrsn=None, tock=None):
+        tock = self.deliverTock if tock is None else tock
         # If we are one of the mailboxes, just store locally in mailbox
         owits = oset(ends.keys())
         if self.mbx and owits.intersection(hab.prefixes):
@@ -258,9 +264,10 @@ class Poster(doing.DoDoer):
         self.extend([witer])
 
         while not witer.idle:
-            _ = (yield self.tock)
+            _ = (yield tock)
 
-    def forwardToWitness(self, hab, ends, recp, serder, atc, topic, gvrsn=None):
+    def forwardToWitness(self, hab, ends, recp, serder, atc, topic, gvrsn=None, tock=None):
+        tock = self.deliverTock if tock is None else tock
         # If we are one of the mailboxes, just store locally in mailbox
         owits = oset(ends.keys())
         if self.mbx and owits.intersection(hab.prefixes):
@@ -290,7 +297,7 @@ class Poster(doing.DoDoer):
         self.extend([witer])
 
         while not witer.idle:
-            _ = (yield self.tock)
+            _ = (yield tock)
 
 
 class StreamPoster:

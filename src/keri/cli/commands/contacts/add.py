@@ -91,7 +91,7 @@ class ContactAddDoer(doing.DoDoer):
 
         # Wait for resolution
         while not self.hby.db.roobi.get(keys=(self.oobi,)):
-            yield 0.25
+            yield self.hby.tocks["commandPoll"]
 
         resolved = self.hby.db.roobi.get(keys=(self.oobi,))
         cid = resolved.cid

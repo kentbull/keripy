@@ -11,6 +11,7 @@ from hio.base import doing
 from hio.help import hicting, ogler
 
 from .configing import Configer
+from .tocking import resolveTocks
 from .keeping import Keeper, Manager
 
 from ..peer import Exchanger,  specialExchange
@@ -133,8 +134,8 @@ class Habery:
         inited (bool): ``True`` once ``setup`` has completed successfully."""
 
     def __init__(self, *, name='test', base="", temp=False,
-                 ks=None, db=None, cf=None, clear=False, headDirPath=None,
-                 version=Version, **kwa):
+                 ks=None, db=None, cf=None, tocks=None, clear=False,
+                 headDirPath=None, version=Version, **kwa):
         """Initialise a ``Habery`` instance.
 
         Opens (or reuses) the keystore, event database, and config file, then
@@ -155,6 +156,9 @@ class Habery:
                 ``Baser`` is created when ``None``.
             cf (Configer | None): Existing config file instance to reuse.  A
                 new ``Configer`` is created when ``None``.
+            tocks (dict | None): Scheduler cadences that take the place of the
+                config file's ``tocks`` object; environment overrides still
+                apply.  Resolved by ``reconfigure`` into ``.tocks``.
             clear (bool): When ``True``, removes the resource directory on
                 ``close``.
             headDirPath (str | None): Override for the top-level directory path
@@ -187,6 +191,7 @@ class Habery:
                                                                reopen=True,
                                                                clear=clear)
 
+        self.tocks = tocks  # preconfigured tocks, resolved with config in reconfigure
         self.mgr = None  # wait to setup until after ks is known to be opened
         self.rtr = Router()
         self.rvy = Revery(db=self.db, rtr=self.rtr)
@@ -325,13 +330,13 @@ class Habery:
 
             # create Hab instance and inject dependencies
             if habord.mid and not habord.sid:
-                hab = GroupHab(ks=self.ks, db=self.db, cf=self.cf, mgr=self.mgr,
+                hab = GroupHab(ks=self.ks, db=self.db, cf=self.cf, tocks=self.tocks, mgr=self.mgr,
                                rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                                name=habord.name, pre=pre, temp=self.temp, smids=habord.smids,
                                rmids=habord.rmids)
                 groups.append(habord)
             elif habord.sid and not habord.mid:
-                hab = SignifyHab(ks=self.ks, db=self.db, cf=self.cf, mgr=self.mgr,
+                hab = SignifyHab(ks=self.ks, db=self.db, cf=self.cf, tocks=self.tocks, mgr=self.mgr,
                                  rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                                  name=habord.name, pre=habord.sid)
             elif habord.sid and habord.mid:
@@ -341,7 +346,7 @@ class Habery:
                                       name=habord.name, pre=pre)
                 groups.append(habord)
             else:
-                hab = Hab(ks=self.ks, db=self.db, cf=self.cf, mgr=self.mgr,
+                hab = Hab(ks=self.ks, db=self.db, cf=self.cf, tocks=self.tocks, mgr=self.mgr,
                           rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                           name=habord.name, pre=pre, temp=self.temp)
 
@@ -407,7 +412,7 @@ class Habery:
             raise ConfigurationError("Hab namespace names are not allowed to contain the '.' character")
 
         cf = cf if cf is not None else self.cf
-        hab = Hab(ks=self.ks, db=self.db, cf=cf, mgr=self.mgr,
+        hab = Hab(ks=self.ks, db=self.db, cf=cf, tocks=self.tocks, mgr=self.mgr,
                   rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                   name=name, ns=ns, temp=self.temp)
 
@@ -479,7 +484,7 @@ class Habery:
         kwa["migers"] = migers
 
         # create group Hab in this Habery
-        hab = GroupHab(ks=self.ks, db=self.db, cf=self.cf, mgr=self.mgr,
+        hab = GroupHab(ks=self.ks, db=self.db, cf=self.cf, tocks=self.tocks, mgr=self.mgr,
                        rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                        name=group, ns=ns, mhab=mhab, smids=smids, rmids=rmids, temp=self.temp)
 
@@ -536,7 +541,7 @@ class Habery:
                                                     f" next members ={rmids}")
 
         # create group Hab in this Habery
-        hab = GroupHab(ks=self.ks, db=self.db, cf=self.cf, mgr=self.mgr,
+        hab = GroupHab(ks=self.ks, db=self.db, cf=self.cf, tocks=self.tocks, mgr=self.mgr,
                        rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                        name=group, ns=ns, mhab=mhab, smids=smids, rmids=rmids, temp=self.temp)
 
@@ -567,7 +572,7 @@ class Habery:
         Returns:
             SignifyHab: The newly created and persisted ``SignifyHab`` instance."""
         # create group Hab in this Habery
-        hab = SignifyHab(ks=self.ks, db=self.db, cf=self.cf, mgr=self.mgr,
+        hab = SignifyHab(ks=self.ks, db=self.db, cf=self.cf, tocks=self.tocks, mgr=self.mgr,
                          rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                          name=name, ns=ns, temp=self.temp)
 
@@ -593,7 +598,7 @@ class Habery:
             SignifyGroupHab: The newly created and persisted
                 ``SignifyGroupHab`` instance."""
         # create group Hab in this Habery
-        hab = SignifyGroupHab(ks=self.ks, db=self.db, cf=self.cf, mgr=self.mgr,
+        hab = SignifyGroupHab(ks=self.ks, db=self.db, cf=self.cf, tocks=self.tocks, mgr=self.mgr,
                               rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                               name=name, mhab=mhab, smids=smids, rmids=rmids, ns=ns, temp=self.temp)
 
@@ -649,7 +654,7 @@ class Habery:
                                                     f" next members ={rmids}")
 
         # create group Hab in this Habery
-        hab = SignifyGroupHab(ks=self.ks, db=self.db, cf=self.cf, mgr=self.mgr,
+        hab = SignifyGroupHab(ks=self.ks, db=self.db, cf=self.cf, tocks=self.tocks, mgr=self.mgr,
                               rtr=self.rtr, rvy=self.rvy, kvy=self.kvy, psr=self.psr,
                               name=name, mhab=mhab, smids=smids, rmids=rmids, ns=ns, temp=self.temp)
 
@@ -855,8 +860,18 @@ class Habery:
                 "wurls": [
                     "http://127.0.0.1:5644/.well-known/keri/oobi/EBNaNu-M9P5cgrnfl2Fvymy4E_jvxxyjb70PRtiANlJy?name=Root"
                 ]
-            }"""
+            }
+
+        A top-level ``tocks`` object sets scheduler cadences; see
+        ``keri.app.tocking`` for keys, environment overrides and precedence."""
         conf = self.cf.get()
+        cfTocks = None
+        if self.tocks is not None:
+            cfTocks = self.tocks  # allow preconfigured tocks; for testing
+        elif "tocks" in conf:
+            cfTocks = conf["tocks"]
+        self.tocks = resolveTocks(cfTocks=cfTocks)
+
         if "dt" in conf:  # datetime of config file
             dt = fromIso8601(conf["dt"])  # raises error if not convert
             if "iurls" in conf:  # process OOBI URLs
@@ -1029,7 +1044,7 @@ class BaseHab:
         delpre (str or None): Delegator prefix if any, else None."""
 
     def __init__(self, ks, db, cf, mgr, rtr, rvy, kvy, psr, *,
-                 name='test', ns=None, pre=None, temp=False):
+                 name='test', ns=None, pre=None, temp=False, tocks=None):
         """Initialize instance.
 
         Parameters:
@@ -1060,6 +1075,7 @@ class BaseHab:
         self.ns = ns  # what is this?
         self.pre = pre  # wait to setup until after db is known to be opened
         self.temp = True if temp else False
+        self.tocks = tocks  # injected scheduler cadences shared with the Habery
 
         self.inited = False
         self.delpre = None  # assigned laster if delegated

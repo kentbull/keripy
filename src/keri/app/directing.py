@@ -11,6 +11,8 @@ from hio.help import ogler
 
 from ..core import Kevery, Revery, Parser
 from ..vdr import Tevery
+from .tocking import resolveTocks
+from ..kering import ConfigurationError
 
 logger = ogler.getLogger()
 
@@ -156,9 +158,9 @@ class Reactor(doing.DoDoer):
         self.exc = exchanger
         self.direct = True if direct else False
         doers = doers if doers is not None else []
-        doers.extend([doing.doify(self.msgDo),
-                      doing.doify(self.escrowDo),
-                      doing.doify(self.cueDo)])
+        doers.extend([doing.doify(self.msgDo, tock=hab.tocks["reactorMsg"]),
+                      doing.doify(self.escrowDo, tock=hab.tocks["reactorEscrow"]),
+                      doing.doify(self.cueDo, tock=hab.tocks["reactorCue"])])
 
         self.kevery = Kevery(db=self.hab.db,
                                       lax=False,
@@ -215,11 +217,16 @@ class Reactor(doing.DoDoer):
 
         Returns:
             bool: Done state from Parser.parsator. Only reached on forced close."""
-        yield  # enter context
+        yield tock  # enter context
         if self.parser.ims:
             logger.info("Client %s received:\n%s\n...\n", self.hab.name, self.parser.ims[:1024])
-        done = yield from self.parser.parsator(local=True)  # process messages continuously
-        return done  # should nover get here except forced close
+        parser = self.parser.parsator(local=True)
+        while True:
+            try:
+                next(parser)
+            except StopIteration as ex:
+                return ex.value  # should never get here except forced close
+            yield tock
 
 
     def cueDo(self, tymth=None, tock=0.0, **opts):
@@ -241,12 +248,12 @@ class Reactor(doing.DoDoer):
 
         Returns:
             bool: Always False. Only reached on forced close."""
-        yield  # enter context
+        yield tock  # enter context
         while True:
             for msg in self.hab.processCuesIter(self.kevery.cues):
                 self.sendMessage(msg, label="chit or receipt")
-                yield  # throttle just do one cue at a time
-            yield
+                yield tock  # throttle just do one cue at a time
+            yield tock
         return False  # should never get here except forced close
 
     def escrowDo(self, tymth=None, tock=0.0, **opts):
@@ -267,12 +274,12 @@ class Reactor(doing.DoDoer):
 
         Returns:
             bool: Always False. Only reached on forced close."""
-        yield  # enter context
+        yield tock  # enter context
         while True:
             self.kevery.processEscrows()
             if self.tvy is not None:
                 self.tvy.processEscrows()
-            yield
+            yield tock
         return False  # should never get here except forced close
 
     def sendMessage(self, msg, label=""):
@@ -459,9 +466,9 @@ class Reactant(doing.DoDoer):
         self.remoter = remoter  # use remoter for both rx and tx
 
         doers = doers if doers is not None else []
-        doers.extend([doing.doify(self.msgDo),
-                      doing.doify(self.cueDo),
-                      doing.doify(self.escrowDo)])
+        doers.extend([doing.doify(self.msgDo, tock=hab.tocks["reactantMsg"]),
+                      doing.doify(self.cueDo, tock=hab.tocks["reactantCue"]),
+                      doing.doify(self.escrowDo, tock=hab.tocks["reactantEscrow"])])
 
         #  needs unique kevery with ims per remoter connnection
         rvy = Revery(db=hab.db)
@@ -525,12 +532,17 @@ class Reactant(doing.DoDoer):
 
         Returns:
             bool: Done state from Parser.parsator. Only reached on forced close."""
-        yield  # enter context
+        yield tock  # enter context
         if self.parser.ims:
             logger.info("Server %s: received:\n%s\n...\n", self.hab.name,
                         self.parser.ims[:1024])
-        done = yield from self.parser.parsator(local=True)  # process messages continuously
-        return done  # should nover get here except forced close
+        parser = self.parser.parsator(local=True)
+        while True:
+            try:
+                next(parser)
+            except StopIteration as ex:
+                return ex.value  # should never get here except forced close
+            yield tock
 
 
     def cueDo(self, tymth=None, tock=0.0, **opts):
@@ -553,15 +565,15 @@ class Reactant(doing.DoDoer):
 
         Returns:
             bool: Always False. Only reached on forced close."""
-        yield  # enter context
+        yield tock  # enter context
         while True:
             for msg in self.hab.processCuesIter(self.kevery.cues):
                 if isinstance(msg, list):
                     msg = bytearray(itertools.chain(*msg))
 
                 self.sendMessage(msg, label="chit or receipt or replay")
-                yield  # throttle just do one cue at a time
-            yield
+                yield tock  # throttle just do one cue at a time
+            yield tock
         return False  # should never get here except forced close
 
 
@@ -583,12 +595,12 @@ class Reactant(doing.DoDoer):
 
         Returns:
             bool: Always False. Only reached on forced close."""
-        yield  # enter context
+        yield tock  # enter context
         while True:
             self.kevery.processEscrows()
             if self.tevery is not None:
                 self.tevery.processEscrows()
-            yield
+            yield tock
         return False  # should never get here except forced close
 
     def sendMessage(self, msg, label=""):
@@ -603,9 +615,17 @@ class Reactant(doing.DoDoer):
                     label, len(msg))
 
 
-def runController(doers, expire=0.0):
+def runController(doers, expire=0.0, tock=None):
+    """Run doers to completion on one real-time Doist.
+
+    Parameters:
+        doers (list): doers to run
+        expire (float): run time limit in seconds, 0.0 means no limit
+        tock (float | None): Doist tick in seconds; None resolves the ``doist``
+            tock from the environment and its default (see keri.app.tocking)
     """
-    Utiitity Function to create doist to run doers"""
-    tock = 0.03125
+    tock = resolveTocks()["doist"] if tock is None else tock
+    if not tock > 0.0:  # a zero tick never advances Doist tyme, so no timed wait ends
+        raise ConfigurationError(f"Doist tock must be positive, got {tock!r}")
     doist = doing.Doist(limit=expire, tock=tock, real=True)
     doist.do(doers=doers)

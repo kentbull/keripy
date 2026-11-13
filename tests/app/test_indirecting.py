@@ -22,8 +22,33 @@ from keri.app import (MailboxIterable, QryRpyMailboxIterable,
                       QueryEnd, Mailboxer, Receiptor,
                       setupWitness, createHttpServer, openHab, openHby,
                       ReceiptEnd, CESR_CONTENT_TYPE, CESR_DESTINATION_HEADER)
+from keri.app import indirecting
 from keri.app.httping import CESR_ATTACHMENT_HEADER
 
+
+
+def test_witness_message_tock_continues_after_initial_entry():
+    class Parser:
+        ims = bytearray()
+
+        @staticmethod
+        def parsator(local=False):
+            assert local is True
+            yield
+            yield
+            return "complete"
+
+    witness = object.__new__(indirecting.WitnessStart)
+    witness.parser = Parser()
+    witness.wind = lambda tymth: None
+
+    dog = witness.msgDo(tymth=lambda: 0.0, tock=0.007)
+    assert next(dog) == 0.007
+    assert next(dog) == 0.007
+    assert next(dog) == 0.007
+    with pytest.raises(StopIteration) as ex:
+        next(dog)
+    assert ex.value.value == "complete"
 
 
 def test_mailbox_iter():

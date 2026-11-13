@@ -165,12 +165,11 @@ class RegeryDoer(doing.Doer):
             generator: doifiable Doist compatible generator method
             """
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.rgy.processEscrows()
-            yield self.tock
+            yield tock
 
 
 class BaseRegistry:
@@ -565,7 +564,9 @@ class Registrar(doing.DoDoer):
         self.receiptor = Receiptor(hby=self.hby)
         self.witPub = WitnessPublisher(hby=self.hby)
 
-        doers = [self.receiptor, self.witPub, doing.doify(self.escrowDo)]
+        doers = [self.receiptor, self.witPub,
+                 doing.doify(self.escrowDo,
+                             tock=hby.tocks["registrarEscrow"])]
 
         super(Registrar, self).__init__(doers=doers)
 
@@ -737,7 +738,7 @@ class Registrar(doing.DoDoer):
         said = self.rgy.reger.ctel.get(keys=(pre, seqner.qb64))
         return said is not None and self.witPub.sent(said=pre)
 
-    def escrowDo(self, tymth, tock=1.0, **kwa):
+    def escrowDo(self, tymth, tock=0.0, **kwa):
         """Process escrows of TEL events and their underlying KEL events waiting to be fully signed
          and witnessed.
 
@@ -752,16 +753,15 @@ class Registrar(doing.DoDoer):
         Parameters:
             tymth (function): injected function wrapper closure returned by .tymen() of
                 Tymist instance. Calling tymth() returns associated Tymist .tyme.
-            tock (float): injected initial tock value.  Default to 1.0 to slow down processing
+            tock (float): injected scheduler cadence
         """
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.processEscrows()
-            yield 0.5
+            yield tock
 
     def processEscrows(self):
         """
@@ -873,7 +873,8 @@ class Credentialer(doing.DoDoer):
         self.rgy = rgy
         self.registrar = registrar
         self.verifier = verifier
-        doers = [doing.doify(self.escrowDo)]
+        doers = [doing.doify(self.escrowDo,
+                             tock=hby.tocks["credentialerEscrow"])]
 
         super(Credentialer, self).__init__(doers=doers)
 
@@ -992,7 +993,7 @@ class Credentialer(doing.DoDoer):
         """
         return self.rgy.reger.ccrd.get(keys=(said,)) is not None
 
-    def escrowDo(self, tymth, tock=1.0, **kwa):
+    def escrowDo(self, tymth, tock=0.0, **kwa):
         """ Process escrows of credentials waiting to be completed.
 
         Steps involve:
@@ -1006,17 +1007,16 @@ class Credentialer(doing.DoDoer):
         Parameters:
             tymth (function): injected function wrapper closure returned by .tymen() of
                 Tymist instance. Calling tymth() returns associated Tymist .tyme.
-            tock (float): injected initial tock value.  Default to 1.0 to slow down processing
+            tock (float): injected scheduler cadence
 
         """
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.processEscrows()
-            yield 0.5
+            yield tock
 
     def processEscrows(self):
         """

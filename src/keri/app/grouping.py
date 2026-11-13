@@ -60,7 +60,9 @@ class Counselor(doing.DoDoer):
         self.witq = WitnessInquisitor(hby=hby)
         self._witnessAuths = {}  # Ephemeral caller authorization for exact pending events.
 
-        doers = [self.swain, self.witq, self.witDoer, doing.doify(self.escrowDo)]
+        doers = [self.swain, self.witq, self.witDoer,
+                 doing.doify(self.escrowDo,
+                             tock=hby.tocks["counselorEscrow"])]
 
         super(Counselor, self).__init__(doers=doers, **kwa)
 
@@ -185,7 +187,7 @@ class Counselor(doing.DoDoer):
         for key in [key for key in self._witnessAuths if key[0] == pre]:
             self._clearWitnessAuths(*key)
 
-    def escrowDo(self, tymth, tock=1.0, **kwa):
+    def escrowDo(self, tymth, tock=0.0, **kwa):
         """ Process escrows of group multisig identifiers waiting to be completed.
 
         Steps involve:
@@ -199,17 +201,16 @@ class Counselor(doing.DoDoer):
         Parameters:
             tymth (function): injected function wrapper closure returned by .tymen() of
                 Tymist instance. Calling tymth() returns associated Tymist .tyme.
-            tock (float): injected initial tock value.  Default to 1.0 to slow down processing
+            tock (float): injected scheduler cadence
 
         """
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.processEscrows()
-            yield 0.5
+            yield tock
 
     def processEscrows(self):
         """Process group multisig event escrows."""
