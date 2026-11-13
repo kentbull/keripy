@@ -183,11 +183,10 @@ class WitnessStart(doing.DoDoer):
                 Tymist instance. Calling tymth() returns associated Tymist .tyme.
             tock (float): injected initial tock value"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while not self.hab.inited:
-            yield self.tock
+            yield tock
 
         print("Witness", self.hab.name, ":", self.hab.pre)
 
@@ -207,8 +206,7 @@ class WitnessStart(doing.DoDoer):
         Returns:
             generator: doifiable Doist compatible generator method"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         if self.parser.ims:
             logger.debug("Client %s received:\n%s\n...\n", self.kvy, self.parser.ims[:1024])
@@ -218,7 +216,7 @@ class WitnessStart(doing.DoDoer):
                 next(parser)
             except StopIteration as ex:
                 return ex.value  # should never get here except forced close
-            yield self.tock
+            yield tock
 
     def escrowDo(self, tymth=None, tock=0.0, **kwa):
         """
@@ -233,8 +231,7 @@ class WitnessStart(doing.DoDoer):
         Usage:
             add result of doify on this method to doers list"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.kvy.processEscrows()
@@ -263,8 +260,7 @@ class WitnessStart(doing.DoDoer):
         Usage:
             add result of doify on this method to doers list"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while self.cues:
@@ -274,8 +270,8 @@ class WitnessStart(doing.DoDoer):
                     self.queries.append(cue)
                 else:
                     self.responses.append(cue)
-                yield self.tock
-            yield self.tock
+                yield tock
+            yield tock
 
 class Indirector(doing.DoDoer):
     """
@@ -396,8 +392,7 @@ class Indirector(doing.DoDoer):
         Returns:
             generator: doifiable Doist compatible generator method"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         if self.parser.ims:
             logger.debug("Client %s received:\n%s\n...\n", self.hab.pre, self.parser.ims[:1024])
@@ -407,7 +402,7 @@ class Indirector(doing.DoDoer):
                 next(parser)
             except StopIteration as ex:
                 return ex.value  # should never get here except forced close
-            yield self.tock
+            yield tock
 
     def cueDo(self, tymth=None, tock=0.0, **kwa):
         """
@@ -427,8 +422,7 @@ class Indirector(doing.DoDoer):
         Usage:
             add result of doify on this method to doers list"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             for msg in self.hab.processCuesIter(self.kevery.cues):
@@ -454,8 +448,7 @@ class Indirector(doing.DoDoer):
         Usage:
             add result of doify on this method to doers list"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.kevery.processEscrows()
@@ -609,14 +602,13 @@ class MailboxDirector(doing.DoDoer):
             add result of doify on this method to doers list"""
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         habs = list(self.hby.habs.values())
         for hab in habs:
             if hab.accepted:
                 self.addPollers(hab)
-                _ = (yield self.tock)
+                _ = (yield tock)
 
         while True:
             pres = oset(self.hby.habs.keys())
@@ -625,12 +617,12 @@ class MailboxDirector(doing.DoDoer):
                     hab = self.hby.habs[pre]
                     if hab.accepted:
                         self.addPollers(hab=hab)
-                        _ = (yield self.tock)
+                        _ = (yield tock)
 
             for msg in self.processPollIter():
                 self.ims.extend(msg)
-                _ = (yield self.tock)
-            _ = (yield self.tock)
+                _ = (yield tock)
+            _ = (yield tock)
 
     def addPollers(self, hab):
         """ add mailbox pollers for every witness for this prefix identifier
@@ -695,8 +687,7 @@ class MailboxDirector(doing.DoDoer):
         Returns:
             generator: doifiable Doist compatible generator method"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         parser = self.parser.parsator(local=True)
         while True:
@@ -704,7 +695,7 @@ class MailboxDirector(doing.DoDoer):
                 next(parser)
             except StopIteration as ex:
                 return ex.value  # should never get here except forced close
-            yield self.tock
+            yield tock
 
     def escrowDo(self, tymth=None, tock=0.0, **kwa):
         """
@@ -724,8 +715,7 @@ class MailboxDirector(doing.DoDoer):
         Usage:
             add result of doify on this method to doers list"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.kvy.processEscrows()
@@ -787,8 +777,7 @@ class Poller(doing.DoDoer):
         Usage:
             add result of doify on this method to doers list"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         witrec = self.hab.db.tops.get((self.pre, self.witness))
         if witrec is None:
@@ -799,7 +788,7 @@ class Poller(doing.DoDoer):
                 client, clientDoer = httpClient(self.hab, self.witness)
             except MissingEntryError as e:
                 traceback.print_exception(e, file=sys.stderr)  # logging
-                yield self.tock
+                yield tock
                 continue
 
             self.extend([clientDoer])
@@ -828,7 +817,7 @@ class Poller(doing.DoDoer):
             createCESRRequest(msg, client, dest=self.witness)
 
             while client.requests:
-                yield self.tock
+                yield tock
 
             created = nowUTC()
             while True:
@@ -854,7 +843,7 @@ class Poller(doing.DoDoer):
                         continue
 
                     self.msgs.append(msg.encode("utf=8"))
-                    yield self.tock
+                    yield tock
 
                     witrec.topics[tpc] = int(idx)
                     self.times[tpc] = nowUTC()
@@ -1180,8 +1169,7 @@ class ReceiptEnd(doing.DoDoer):
             add result of doify on this method to doers list"""
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while self.inbound:  # iteratively process each cue in cues
@@ -1198,9 +1186,9 @@ class ReceiptEnd(doing.DoDoer):
                 else:
                     self.outbound.append(cue)
 
-                yield self.tock
+                yield tock
 
-            yield self.tock
+            yield tock
 
 
 class QueryEnd:

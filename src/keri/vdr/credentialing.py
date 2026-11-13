@@ -165,12 +165,11 @@ class RegeryDoer(doing.Doer):
             generator: doifiable Doist compatible generator method
             """
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.rgy.processEscrows()
-            yield self.tock
+            yield tock
 
 
 class BaseRegistry:
@@ -756,8 +755,7 @@ class Registrar(doing.DoDoer):
         """
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.processEscrows()
@@ -1011,8 +1009,7 @@ class Credentialer(doing.DoDoer):
         """
         # enter context
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             self.processEscrows()

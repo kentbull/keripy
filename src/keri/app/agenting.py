@@ -49,7 +49,7 @@ class Receiptor(doing.DoDoer):
 
         super(Receiptor, self).__init__(doers=doers)
 
-    def receipt(self, pre, sn=None, auths=None):
+    def receipt(self, pre, sn=None, auths=None, tock=0.0):
         """Returns a generator performing witness receipting of KEL events.
 
         This returns a generator that will submit the designated event to witnesses for receipts using
@@ -83,7 +83,7 @@ class Receiptor(doing.DoDoer):
         if ser.ked['t'] in (coring.Ilks.rot,):
             adds = ser.ked["ba"]
             for wit in adds:
-                yield from self.catchup(ser.pre, wit)
+                yield from self.catchup(ser.pre, wit, tock=tock)
 
         clients = dict()
         doers = []
@@ -97,7 +97,7 @@ class Receiptor(doing.DoDoer):
                 except (MissingEntryError, gaierror) as e:
                     logger.error(f"unable to create http client for witness {wit}: {e}")
 
-            rcts = yield from self._collectReceipts(hab, clients, msg, auths)
+            rcts = yield from self._collectReceipts(hab, clients, msg, auths, tock=tock)
 
             wigers = hab.db.wigs.get(keys=(ser.preb, ser.saidb))
             wigerByWit = {wits[wiger.index]: wiger for wiger in wigers}
@@ -128,14 +128,14 @@ class Receiptor(doing.DoDoer):
 
                 sent = streamCESRRequests(client=client, dest=wit, ims=bytearray(msg))
                 while len(client.responses) < sent:
-                    yield self.tock
+                    yield tock
 
         finally:
             self.remove(doers)
 
         return rcts.keys()
 
-    def _collectReceipts(self, hab, clients, msg, auths):
+    def _collectReceipts(self, hab, clients, msg, auths, tock=0.0):
         """Collect and verify receipt replies using the supplied live clients.
 
         Args:
@@ -174,11 +174,11 @@ class Receiptor(doing.DoDoer):
                 else:
                     logger.error(f"invalid response {rep.status} from witness {wit}")
             if pending:
-                yield self.tock
+                yield tock
 
         return rcts
 
-    def get(self, pre, sn=None):
+    def get(self, pre, sn=None, tock=0.0):
         """
         Queries a random witness for the receipt of the event at the sequence number for a prefix.
 
@@ -208,7 +208,7 @@ class Receiptor(doing.DoDoer):
 
         client = self.clienter.request("GET", url)
         while not client.responses:
-            yield self.tock
+            yield tock
 
         rep = client.respond()
         if rep.status == 200:
@@ -218,7 +218,7 @@ class Receiptor(doing.DoDoer):
         self.clienter.remove(client)
         return rep.status == 200
 
-    def catchup(self, pre, wit):
+    def catchup(self, pre, wit, tock=0.0):
         """
         A generator that catches up a target witness with the latest KEL state of a prefix.
         When adding a new Witness use this method to catch the witness up to the current state of the KEL
@@ -240,7 +240,7 @@ class Receiptor(doing.DoDoer):
         for fmsg in hab.db.clonePreIter(pre=pre, version=hab.kever.serder.pvrsn):
             streamCESRRequests(client=client, dest=wit, ims=bytearray(fmsg))
             while not client.responses:
-                yield self.tock
+                yield tock
 
         self.remove([clientDoer])
 
@@ -262,8 +262,7 @@ class Receiptor(doing.DoDoer):
         Usage:
             add result of doify on this method to doers list"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while self.msgs:
@@ -272,10 +271,10 @@ class Receiptor(doing.DoDoer):
                 sn = msg["sn"] if "sn" in msg else None
                 auths = msg["auths"] if "auths" in msg else None
 
-                yield from self.receipt(pre, sn, auths)
+                yield from self.receipt(pre, sn, auths, tock=tock)
                 self.cues.push(msg)
 
-            yield self.tock
+            yield tock
 
     def gitDo(self, tymth=None, tock=0.0, **kwa):
         """
@@ -293,8 +292,7 @@ class Receiptor(doing.DoDoer):
         Usage:
             add result of doify on this method to doers list"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while self.gets:
@@ -302,9 +300,9 @@ class Receiptor(doing.DoDoer):
                 pre = msg["pre"]
                 sn = msg["sn"] if "sn" in msg else None
 
-                yield from self.get(pre, sn)
+                yield from self.get(pre, sn, tock=tock)
 
-            yield self.tock
+            yield tock
 
 
 class WitnessReceiptor(doing.DoDoer):
@@ -353,8 +351,7 @@ class WitnessReceiptor(doing.DoDoer):
             tymth (function): function returning cycle time for configuring this Doer's cycle time.
             tock (float): cycle time for this Doer, default is 0.0 seconds."""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while self.msgs:
@@ -400,13 +397,13 @@ class WitnessReceiptor(doing.DoDoer):
                                 witer.msgs.append(bytearray(fmsg))
 
                         witer.msgs.append(bytearray(msg))  # make a copy
-                        _ = (yield self.tock)
+                        _ = (yield tock)
 
                     while True:
                         wigers = hab.db.wigs.get(keys=(ser.preb, ser.saidb))
                         if len(wigers) == len(wits):
                             break
-                        _ = yield self.tock
+                        _ = yield tock
 
                 # If we started with all our receipts, exit unless told to force resubmit of all receipts
                 if completed and not self.force:
@@ -447,7 +444,7 @@ class WitnessReceiptor(doing.DoDoer):
                                                      framed=True, gvrsn=ser.pvrsn))
 
                     witer.msgs.append(rctMsg)
-                    _ = (yield self.tock)
+                    _ = (yield tock)
 
                 while True:
                     done = True
@@ -462,9 +459,9 @@ class WitnessReceiptor(doing.DoDoer):
                 self.remove(witers)
 
                 self.cues.push(evt)
-                yield self.tock
+                yield tock
 
-            yield self.tock
+            yield tock
 
 
 class WitnessInquisitor(doing.DoDoer):
@@ -511,12 +508,11 @@ class WitnessInquisitor(doing.DoDoer):
         from .forwarding import introduce
 
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while not self.msgs:
-                yield self.tock
+                yield tock
 
             evt = self.msgs.popleft()
             pre = evt["pre"]
@@ -573,11 +569,11 @@ class WitnessInquisitor(doing.DoDoer):
             witer.msgs.append(bytearray(msg))
 
             while not witer.sent:
-                yield self.tock
+                yield tock
 
             self.sent.append(witer.sent.popleft())
 
-            yield self.tock
+            yield tock
 
     def query(self, pre, r="logs", sn='0', fn='0', src=None, hab=None, anchor=None, wits=None, **kwa):
         """
@@ -652,8 +648,7 @@ class WitnessPublisher(doing.DoDoer):
 
         Pushes the original request to self.cues to signal completion"""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while self.msgs:
@@ -675,19 +670,19 @@ class WitnessPublisher(doing.DoDoer):
                     witer.msgs.append(bytearray(msg))  # make a copy so everyone munges their own
                     self.extend([witer])
 
-                    _ = (yield self.tock)
+                    _ = (yield tock)
 
                 while witers:
                     witer = witers.pop()
                     while not witer.idle:
-                        _ = (yield self.tock)
+                        _ = (yield tock)
 
                 self.remove(witers)
                 self.cues.push(evt)
 
-                yield self.tock
+                yield tock
 
-            yield self.tock
+            yield tock
 
     def sent(self, said):
         """ Check if message with given SAID was sent
@@ -740,8 +735,7 @@ class TCPMessenger(doing.DoDoer):
     def receiptDo(self, tymth=None, tock=0.0, **kwa):
         """Doer loop that sends queued messages over TCP."""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         up = urlparse(self.url)
         if up.scheme != Schemes.tcp:
@@ -758,7 +752,7 @@ class TCPMessenger(doing.DoDoer):
 
         while True:
             while not self.msgs:
-                yield self.tock
+                yield tock
 
             msg = self.msgs.popleft()
             self.posted += 1
@@ -766,10 +760,10 @@ class TCPMessenger(doing.DoDoer):
             client.tx(msg)  # send to connected remote
 
             while client.txbs:
-                yield self.tock
+                yield tock
 
             self.sent.append(msg)
-            yield self.tock
+            yield tock
 
     def msgDo(self, tymth=None, tock=0.0, **opts):
         """Doer loop that parses inbound TCP messages into the Kevery."""
@@ -869,12 +863,11 @@ class HTTPMessenger(doing.DoDoer):
     def msgDo(self, tymth=None, tock=0.0, **kwa):
         """Doer loop that sends queued messages over HTTP."""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while not self.msgs:
-                yield self.tock
+                yield tock
 
             msg = self.msgs.popleft()
             headers = dict()
@@ -890,15 +883,14 @@ class HTTPMessenger(doing.DoDoer):
             else:
                 self.posted += streamCESRRequests(client=self.client, dest=self.wit, ims=msg, headers=headers)
             while self.client.requests:
-                yield self.tock
+                yield tock
 
-            yield self.tock
+            yield tock
 
     def responseDo(self, tymth=None, tock=0.0, **kwa):
         """Doer loop that processes HTTP responses from the client and adds them into `sent` cues."""
         self.wind(tymth)
-        self.tock = tock
-        _ = (yield self.tock)
+        _ = (yield tock)
 
         while True:
             while self.client.responses:
