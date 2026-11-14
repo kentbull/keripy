@@ -200,19 +200,48 @@ class Regery:
         return regeventing._RegEventer(db=self.hby.db, issuer=inception.issuer,
                                        store=self.store, regk=regk)
 
-    def processEvent(self, serder, *, sscs=None, ssts=None, **kwa):
+    def processEvent(self, serder, *, sscs=None, ssts=None, bsqs=None, bsss=None, **kwa):
         """Receive v2 ACDC RIP/BUP evidence and accept only its authenticated TEL.
+
+        An opening the frame discloses (``bsqs``/``bsss``, as the Parser passes
+        a published BUP opening) is vetted before acceptance and kept with the
+        BUP: ``putOpening`` once accepted, ``escrowOpening`` while the BUP waits
+        in a dependency escrow, which ``processEscrowOpenings`` later promotes.
+        Callers that decide retention themselves, such as ``ingest``, pass none.
 
         Parameters:
             serder (SerderACDC): incoming v2 ACDC registry event.
             sscs (list | None): issuer-implied KEL source couples.
             ssts (list | None): explicit-controller KEL source triples.
+            bsqs (list | None): disclosed BlindState opening attachments.
+            bsss (list | None): disclosed BoundState opening attachments.
             **kwa: other parser attachments, which do not establish a TEL anchor.
 
         Returns:
             bool: True when accepted; False while KEL, anchor, or prior evidence
                 remains unavailable in the existing dependency escrows.
+
+        Raises:
+            ValidationError: a disclosed opening is not one BUP opening that
+                reproduces the event's BLID.
         """
+        opening = disclosedOpening(serder, bsqs=bsqs or (), bsss=bsss or ())
+        accepted = self._acceptEvent(serder, sscs=sscs, ssts=ssts)
+        if opening is not None:
+            self._keepOpening(serder, opening)
+        return accepted
+
+    def _keepOpening(self, serder, opening):
+        """Keep a vetted disclosed opening with its accepted or escrowed BUP."""
+        regk, sn = serder.sad["rd"], Number(numh=serder.sad["n"]).num
+        accepted = self.store.seqSaider(regk, sn)
+        if accepted is not None and accepted.qb64 == serder.said:
+            self.store.putOpening(serder.said, opening)
+        elif self.store.escrowed(regk, sn, serder.said):
+            self.store.escrowOpening(serder.said, opening)
+
+    def _acceptEvent(self, serder, *, sscs=None, ssts=None):
+        """Authenticate one RIP/BUP against its KEL anchor and apply it or escrow it."""
         event = _normalizeEventRecord(serder)
         if event.ilk == "rip":
             event = regeventing._validateRip(serder)
