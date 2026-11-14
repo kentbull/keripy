@@ -18,7 +18,7 @@ from pathlib import Path
 
 from hio.base import doing
 
-from . import sending, setupHby
+from . import anchorquerying, sending, setupHby
 from .credentialing import recipient
 from .presenting import opening
 from ... import Kinds, Vrsn_2_0
@@ -245,7 +245,7 @@ class RootReplication(doing.DoDoer):
             print(json.dumps(dict(registry=args.registry, phase='listening')), flush=True)
             while not self.retained(args.registry):
                 self.check()
-                yield self.tock
+                yield from anchorquerying.settle(self)
         # Drain: adopt stored copies no handler escrowed, then retry every
         # escrowed copy whose local state may now be present.
         self.root.reconcile()

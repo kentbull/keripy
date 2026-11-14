@@ -7,6 +7,7 @@ Registrar service support for managing Registries of ACDC state
 
 """
 
+from collections import deque
 from dataclasses import asdict, dataclass
 
 from hio.help import ogler
@@ -113,6 +114,9 @@ class Regery:
         self.store = RegistryStore(self.baser)
         self.regs = {}
         self.names = {}
+        # Missing-anchor cues for the owning loop to drain, like Dhke.cues:
+        # {kin: 'anchor', dest, issuer, regk, sn, said, fn, s}.
+        self.cues = deque()
         if self.store.opened:
             self.loadRegistries()
 
@@ -139,7 +143,7 @@ class Regery:
         if serder.said in self.regs:
             raise ConfigurationError(f"registry {serder.said} already exists")
 
-        reg = Registry(hab=hab, store=self.store, name=name)
+        reg = Registry(hab=hab, store=self.store, name=name, cues=self.cues)
         reg.processEvent(serder)
         self.store.records.pin(keys=name,
                                val=self.store.records.klas(registryKey=reg.regk))
@@ -170,7 +174,8 @@ class Regery:
 
             reg = self.regs.get(record.registryKey)
             if reg is None:
-                reg = Registry(hab=hab, store=self.store, name=name, regk=record.registryKey)
+                reg = Registry(hab=hab, store=self.store, name=name, regk=record.registryKey,
+                               cues=self.cues)
                 head = self.store.head(reg.regk)
                 reg.regd = head.qb64 if head is not None else reg.regk
                 self.regs[reg.regk] = reg
@@ -198,7 +203,7 @@ class Regery:
         if inception.regk != regk:
             raise ValidationError("stored registry inception does not match its key")
         return regeventing._RegEventer(db=self.hby.db, issuer=inception.issuer,
-                                       store=self.store, regk=regk)
+                                       store=self.store, regk=regk, cues=self.cues)
 
     def processEvent(self, serder, *, sscs=None, ssts=None, bsqs=None, bsss=None, **kwa):
         """Receive v2 ACDC RIP/BUP evidence and accept only its authenticated TEL.
@@ -257,7 +262,9 @@ class Regery:
             self.store.putEvent(serder)
             self.store.escrowOutOfOrder(event.regk, event.sn, event.said)
             return False
-        accepted = eventer.processEvent(serder)
+        claims = [number for number, _ in sscs or ()]
+        claims.extend(number for _, number, _ in ssts or ())
+        accepted = eventer.processEvent(serder, anchor=claims[0] if claims else None)
         if event.ilk == "rip":
             self._processEventerEscrows(eventer)
         return accepted
@@ -344,7 +351,7 @@ class Regery:
         """Give pre-inception updates ordinary anchor discovery before replay."""
         for _, sn, said in list(self.baser.ooes.getTopItemIter(keys=eventer.regk)):
             if self.store.anchor(said) is None:
-                self.store.escrowMissingAnchor(eventer.regk, sn, said)
+                eventer.escrowMissingAnchor(eventer.regk, sn, said)
         eventer.processEscrows()
 
     def processEscrows(self):
@@ -421,7 +428,7 @@ class Regery:
 class Registry:
     """Transaction-state registry backed by the ACDC registry stores."""
 
-    def __init__(self, hab, store, name="test", regk=None):
+    def __init__(self, hab, store, name="test", regk=None, cues=None):
         """Create one local registry state machine bound to a habitat.
 
         Parameters:
@@ -431,6 +438,7 @@ class Registry:
             name (str): local alias for the registry.
             regk (str | None): registry identifier when reopening or attaching to
                 an existing registry state.
+            cues (deque | None): owner's missing-anchor cue deck.
 
         Returns:
             None
@@ -443,7 +451,8 @@ class Registry:
         self._eventer = regeventing._RegEventer(db=hab.db,
                                                issuer=hab.pre,
                                                store=store,
-                                               regk=regk)
+                                               regk=regk,
+                                               cues=cues)
 
     @property
     def regk(self):

@@ -212,6 +212,7 @@ class RegistryStore:
         return bytes(stream)
 
     def escrowMissingAnchor(self, regk, sn, said):
+        """Return True when ``said`` newly entered the missing-anchor escrow."""
         return self.baser.maes.add(keys=regk, on=sn, val=said)
 
     def escrowOutOfOrder(self, regk, sn, said):

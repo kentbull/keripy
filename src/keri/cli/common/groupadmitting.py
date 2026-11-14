@@ -258,12 +258,12 @@ class GroupAdmission:
                             yield from owner.send(public, member)
                             yield from owner.send(proof, member, topic='multisig')
                     yield from self.broadcast(self.response.raw + atc)
-            yield owner.tock
+            yield from owner.settle()
         self.current()
         while self.response is None or not owner.exc.complete(self.response.said):
             self.check()
             yield from self.proposals()
-            yield owner.tock
+            yield from owner.settle()
         self.current()
         raw = serializeMessage(owner.hby, self.response.said)
         owner.record(serializeMessage(owner.hby, self.grant.said) + raw)

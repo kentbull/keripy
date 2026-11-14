@@ -866,7 +866,7 @@ class _RegEventer:
     Registry event authoring remains with ``Registry``.
     """
 
-    def __init__(self, *, db, issuer, store, regk=None, regd=None):
+    def __init__(self, *, db, issuer, store, regk=None, regd=None, cues=None):
         """Create one TEL event engine bound to its evidence owner and controller.
 
         Parameters:
@@ -877,12 +877,15 @@ class _RegEventer:
             regk (str | None): bound registry identifier when reopening or
                 attaching to an existing registry state.
             regd (str | None): accepted head-event SAID when already known.
+            cues (deque | None): owner's deck for missing-anchor cues, see
+                ``escrowMissingAnchor``. None means no consumer wants them.
         """
         self.db = db
         self.issuer = issuer
         self.store = store
         self.regk = regk
         self.regd = regd
+        self.cues = cues
     
     
     @property
@@ -917,11 +920,14 @@ class _RegEventer:
         return self.store.seqEvent(self.regk, 0) if self.regk is not None else None
 
     # Public TEL event API
-    def processEvent(self, serder):
+    def processEvent(self, serder, anchor=None):
         """Store one TEL event and commit it when anchor and order allow.
 
         Parameters:
             serder (SerderACDC): candidate local registry event to process.
+            anchor (Number | None): the sender's unverified claim of the
+                anchoring KEL event's sequence number. It is never stored; it
+                only scopes the missing-anchor cue.
 
         Returns:
             bool: True when the event commits immediately or replays
@@ -955,7 +961,7 @@ class _RegEventer:
         # event must wait in missing-anchor escrow.
         self._discoverAnchor(event)
         if self.store.anchor(event.said) is None:
-            self.store.escrowMissingAnchor(event.regk, event.sn, event.said)
+            self.escrowMissingAnchor(event.regk, event.sn, event.said, anchor=anchor)
             return False
 
         # Once an anchor exists, remove any stale maes entry for this event.
@@ -976,6 +982,43 @@ class _RegEventer:
         # Anchored and properly ordered updates can commit immediately.
         self._commit(event)
         self._processQueued()
+        return True
+
+    def escrowMissingAnchor(self, regk, sn, said, anchor=None):
+        """Hold one TEL event for its anchoring KEL event and cue the first hold.
+
+        The cue is pushed only when the event newly enters ``maes``, so
+        ``processEscrows`` replays and repeat arrivals stay silent. It tells the
+        owning loop which issuer log to ask for and is skipped when the issuer
+        is local, where the anchor is ours to make, or when the accepted issuer
+        KEL already reaches the claimed anchor sn, where the anchor is wrong
+        rather than missing.
+
+        Cue fields: ``kin='anchor'``, ``dest`` and ``issuer`` (issuer AID),
+        ``regk``, ``sn`` (TEL sn), ``said``, ``fn`` (issuer's accepted sn + 1,
+        0 when the issuer KEL is unknown) and ``s`` (claimed anchor sn, or None
+        because registry events do not carry it).
+
+        Parameters:
+            regk (str): registry SAID.
+            sn (int): TEL sequence number.
+            said (str): SAID of the held TEL event.
+            anchor (Number | None): the sender's unverified anchor sn claim.
+
+        Returns:
+            bool: True when the event newly entered missing-anchor escrow.
+        """
+        if not self.store.escrowMissingAnchor(regk, sn, said):
+            return False
+        if self.cues is None or self.issuer in self.db.prefixes:
+            return True
+        kever = self.db.kevers.get(self.issuer)
+        s = anchor.sn if anchor is not None else None
+        if s is not None and kever is not None and kever.sn >= s:
+            return True
+        self.cues.append(dict(kin='anchor', dest=self.issuer, issuer=self.issuer,
+                              regk=regk, sn=sn, said=said,
+                              fn=kever.sn + 1 if kever is not None else 0, s=s))
         return True
 
     def anchorMsg(self, said, number=None, diger=None):

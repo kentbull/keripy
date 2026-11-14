@@ -168,7 +168,7 @@ class GroupUnblind:
         try:
             while self.hab.db.erpy.get((self.grant.said,)) is None:
                 yield from self.pump()
-                yield self.owner.tock
+                yield from self.owner.settle()
             terminal = self.hab.db.erpy.get((self.grant.said,))
             response = self.hab.db.exns.get((terminal.qb64,))
             if response is None or response.route != '/ipex/admit':
@@ -189,7 +189,7 @@ class GroupUnblind:
                     unblind.start(self.grant.said)
                 while not unblind.complete(self.operation):
                     yield from self.pump()
-                    yield owner.tock
+                    yield from owner.settle()
                 if not unblind.finish(self.operation) or not owner.exc.complete(self.grant.said):
                     raise ConfigurationError('v2 IPEX verification has not accepted the selected group presentation')
             currentIssued(owner.exc, self.grant.said)
@@ -200,7 +200,7 @@ class GroupUnblind:
                 yield from self.broadcast(self.response.raw + atc)
             while self.response is None or not owner.exc.complete(self.response.said):
                 yield from self.pump()
-                yield owner.tock
+                yield from owner.settle()
             self.check()
             currentIssued(owner.exc, self.grant.said)
             raw = serializeMessage(owner.hby, self.response.said)

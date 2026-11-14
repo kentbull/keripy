@@ -7,7 +7,7 @@ from pathlib import Path
 
 from hio.base import doing
 
-from . import evidencing, registryanchoring, sending, parseVersion, setupHby
+from . import anchorquerying, evidencing, registryanchoring, sending, parseVersion, setupHby
 from .credentialing import recipient
 from .negotiating import IpexV2Negotiation
 from .witnessing import witnessAuths
@@ -92,6 +92,10 @@ class IpexV2Issuance(doing.DoDoer):
     def send(self, raw, dest, *, topic='credential'):
         """Deliver selected public bytes within this command's finite lifecycle."""
         yield from sending.send(self, raw, dest, topic=topic)
+
+    def settle(self):
+        """Wait one tock, first asking issuers for the KEL events the Regery waits on."""
+        yield from anchorquerying.settle(self)
 
     def run(self, tymth, tock=0.03125, **kwa):
         self.wind(tymth)
@@ -249,7 +253,7 @@ class IpexV2Issuance(doing.DoDoer):
                     self.check()
                     yield from self.send(query, recp)
                     retryAt = time.monotonic() + 1.0
-                yield tock
+                yield from self.settle()
             print(json.dumps(dict(grant=message.said, xid=xid, phase='dh_complete')), flush=True)
             if self.verb == 'grant':
                 _, event = Registrar(self.rgy).issue(registry, acdc=body,
@@ -263,7 +267,7 @@ class IpexV2Issuance(doing.DoDoer):
                 yield from self.send(published, recp)
                 while self.hby.db.erpy.get((message.said,)) is None:
                     self.check()
-                    yield tock
+                    yield from self.settle()
                 response = self.hby.db.exns.get((self.hby.db.erpy.get((message.said,)).qb64,))
                 if response is None or response.route != '/ipex/admit':
                     raise ConfigurationError('selected Grant terminated without Admit')
@@ -272,7 +276,7 @@ class IpexV2Issuance(doing.DoDoer):
                 # Wait within --timeout; never dereference a registry head that is not yet accepted.
                 while (head := self.rgy.store.headEvent(registry)) is None or head.ilk == 'rip':
                     self.check()
-                    yield tock
+                    yield from self.settle()
                 yield from evidencing.acquire(self, [registry], self.dh, xid, evidenceSource)
                 self.finish(xid, message.said)
                 response, atc = ipexing.admit(self.hab, message=args.message, grant=message,
