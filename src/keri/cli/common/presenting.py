@@ -261,7 +261,7 @@ class IpexV2Presentation(IpexV2Issuance):
                             # Verify the real frozen response before sending; issuer-state policy remains the receiver's.
                             self.unblind.finish(operation)
                         yield from self.send(cue['msg'], cue['dest'])
-                    yield tock
+                    yield from self.settle()
                 terminal = self.hby.db.erpy.get((message.said,))
                 response = self.hby.db.exns.get((terminal.qb64,))
                 if response is None or response.route != '/ipex/admit':
@@ -293,7 +293,7 @@ class IpexV2Presentation(IpexV2Issuance):
                     yield from self.send(self.unblind.start(message.said), message.pre)
                     while not self.unblind.complete(operation):
                         self.check()
-                        yield tock
+                        yield from self.settle()
                     if not self.unblind.finish(operation) or not self.exc.complete(message.said):
                         raise ConfigurationError('v2 IPEX verification has not accepted the selected presentation')
                     print(json.dumps(dict(grant=message.said, xid=operation, phase='unblind_verified')),

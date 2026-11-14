@@ -148,7 +148,7 @@ class GroupPresentation:
             phase='group_proposed', locally_accepted=owner.exc.complete(self.grant.said))), flush=True)
         while not owner.exc.complete(self.grant.said):
             owner.check()
-            yield owner.tock
+            yield from owner.settle()
         owner.check()
         self.freezeDeadline(required=True)
         currentIssued(owner.exc, self.grant.said)

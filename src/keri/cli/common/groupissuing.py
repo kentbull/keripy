@@ -205,7 +205,7 @@ class GroupIssuance:
         while owner.exc.pendingGrant(self.grant.said, xid=xid, sender=owner.hab.pre,
                                       recipient=self.recipient) is None:
             owner.check()
-            yield owner.tock
+            yield from owner.settle()
         self.freezeDeadline(required=True)
         self.xid = owner.dh.approve(self.grant.said, coordinator=self.coordinator, custodian=self.custodian)
         if self.lead:
@@ -261,7 +261,7 @@ class GroupIssuance:
                 owner.check()
                 yield from owner.send(query, destination)
                 retryAt = time.monotonic() + 1.0
-            yield owner.tock
+            yield from owner.settle()
         _, event = Registrar(owner.rgy).issue(self.registry, acdc=self.body,
             salt=owner.hab.mgr.getRegistryRoot(owner.hab.pre, self.registry.regk).qb64)
         yield from registryanchoring.groupAnchor(owner, self.registry, event, self.mux, background,
@@ -272,7 +272,7 @@ class GroupIssuance:
         yield from owner.send(published, self.recipient)
         while owner.hby.db.erpy.get((self.grant.said,)) is None:
             owner.check()
-            yield owner.tock
+            yield from owner.settle()
         response = owner.hby.db.exns.get((owner.hby.db.erpy.get((self.grant.said,)).qb64,))
         if response is None or response.route != '/ipex/admit' or not owner.exc.complete(response.said):
             raise ConfigurationError('selected group Grant terminated without a verified Admit')
