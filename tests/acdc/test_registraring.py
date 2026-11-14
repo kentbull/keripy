@@ -1229,6 +1229,48 @@ def test_regery_escrowed_openings_follow_sibling_arbitration():
             rgy.close()
 
 
+def test_parsed_bup_keeps_its_published_opening():
+    """A BUP the Parser delivers keeps its published opening, escrowed or accepted."""
+    from keri.core import Kevery, Parser
+    with (openHby(name="parsed-issuer", temp=True, version=Vrsn_2_0) as issuerHby,
+          openHby(name="parsed-receiver", temp=True, version=Vrsn_2_0) as receiverHby):
+        hab = issuerHby.makeHab(name="issuer")
+        source = Regery(hby=issuerHby, name="parsed-issuer", temp=True)
+        rgy = Regery(hby=receiverHby, name="parsed-receiver", temp=True)
+        try:
+            registry, rip, bup, opening, acdc = _issuedWithKel(hab, source)
+            kvy = Kevery(db=receiverHby.db, lax=False, local=False)
+            parser = Parser(version=Vrsn_2_0, kvy=kvy, rgy=rgy, local=False)
+
+            # TEL ahead of its KEL: the BUP escrows and its opening waits with it.
+            parser.parse(ims=bytearray(_framed(rip) + _framed(bup, [opening])))
+            assert rgy.store.opening(bup.said) is None
+            assert rgy.store.pendingOpening(bup.said).qb64 == opening.qb64
+
+            # The KEL arrives; escrow replay accepts the BUP and promotes its opening.
+            parser.parse(ims=bytearray(b"".join(issuerHby.db.clonePreIter(
+                pre=hab.pre, gvrsn=Vrsn_2_0))))
+            kvy.processEscrows()
+            rgy.processEscrows()
+            assert rgy.store.headEvent(registry.regk).said == bup.said
+            assert rgy.store.opening(bup.said).state == "issued"
+
+            # A revocation whose anchor is already known is accepted with its opening.
+            revoked, update = registry.blind(acdc, "revoked")
+            _anchor(hab, registry, update)
+            ixn = issuerHby.db.clonePreIter(pre=hab.pre, fn=hab.kever.sn, gvrsn=Vrsn_2_0)
+            parser.parse(ims=bytearray(b"".join(ixn) + _framed(update, [revoked])))
+            assert rgy.store.headEvent(registry.regk).said == update.said
+            assert rgy.store.opening(update.said).state == "revoked"
+
+            # An opening that does not reproduce the BUP's BLID refuses the frame.
+            with pytest.raises(ValidationError):
+                rgy.processEvent(update, bsqs=[opening.data])
+        finally:
+            source.close()
+            rgy.close()
+
+
 def test_regery_drops_dangling_escrowed_opening():
     """An opening whose body left dependency escrow unaccepted is dropped."""
     from keri.core import Kevery
